@@ -1,28 +1,21 @@
-# FleetAI Cloud MVP
+# FleetAI Cloud Investors
 
-Облачная версия FleetAI. Работает локально и готова к размещению на сервере.
+Добавлено разделение машин:
+- Мои машины
+- Машины инвесторов
 
-## Локальный запуск
+Поля:
+- owner_type
+- investor_name
+- investor_percent
 
+Запуск:
 ```bash
 pip install -r requirements.txt
 python app.py
 ```
 
-Откройте:
-
-```text
-http://127.0.0.1:8000
-```
-
-## Для облака
-
-Приложение поддерживает:
-- SQLite локально
-- PostgreSQL через переменную `DATABASE_URL`
-
-Команда запуска для сервера:
-
+Deploy:
 ```bash
 gunicorn app:app
 ```
