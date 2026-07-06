@@ -221,18 +221,32 @@ def parse_message(message):
             break
 
 
-    # Дополнительные вложения в машину: 665 вложение ГБО 58000
-    if any(w in text for w in ["вложение", "доп вложение", "допвложение", "кап вложение"]):
+    # Дополнительные вложения в машину. Поддерживает короткие форматы:
+    # 665 доп ГБО 35000р
+    # 665 доп установка ГБО 35000
+    # 665 вложение ГБО 35000
+    # 665 доп вложение ГБО 35000
+    car_investment_words = [
+        "вложение", "вложения", "доп", "допы", "доп вложение", "допвложение",
+        "дополнительное вложение", "дополнительные вложения", "кап вложение", "капиталка"
+    ]
+    if any(re.search(r"\b" + re.escape(w) + r"\b", text) for w in car_investment_words):
         data["type"] = "car_investment"
         data["category"] = "Капитальное вложение"
+
         nums = [int(x) for x in re.findall(r"\b\d{2,9}\b", text)]
         nums = [n for n in nums if str(n) != data["car_code"]]
         if nums:
             data["total"] = nums[-1]
+
         desc = text
-        for w in ["вложение", "доп вложение", "допвложение", "кап вложение"]:
-            desc = desc.replace(w, "")
+        # убираем код машины, служебные слова и суммы, оставляем смысл вложения: ГБО, капот, сигнализация и т.д.
+        if data.get("car_code"):
+            desc = re.sub(r"^" + re.escape(data["car_code"]) + r"\b", "", desc).strip()
+        for w in sorted(car_investment_words, key=len, reverse=True):
+            desc = re.sub(r"\b" + re.escape(w) + r"\b", "", desc).strip()
         desc = re.sub(r"\b\d{2,9}\b", "", desc).strip()
+        desc = desc.replace("р", "").strip()
         data["description"] = desc or "Дополнительное вложение"
         return data
 
