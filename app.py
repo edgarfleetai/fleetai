@@ -1,6 +1,6 @@
 import os
 import re
-from datetime import datetime
+from datetime import datetime, date
 from flask import Flask, request, jsonify, render_template_string
 from sqlalchemy import create_engine, Column, Integer, String, DateTime, Text, func, text as sql_text
 from sqlalchemy.orm import declarative_base, sessionmaker
@@ -29,8 +29,7 @@ class Car(Base):
     status = Column(String, default="Работает")
     driver = Column(String)
 
-    # NEW: разделение своих и инвесторских авто
-    owner_type = Column(String, default="own")  # own / investor
+    owner_type = Column(String, default="own")
     investor_name = Column(String, default="")
     investor_percent = Column(Integer, default=0)
 
@@ -79,6 +78,22 @@ class Expense(Base):
     date = Column(DateTime, default=datetime.now)
     category = Column(String)
     amount = Column(Integer, default=0)
+    share_type = Column(String, default="shared")
+
+class InvestorPeriod(Base):
+    __tablename__ = "investor_periods"
+    id = Column(Integer, primary_key=True)
+    investor_name = Column(String)
+    start_date = Column(DateTime)
+    end_date = Column(DateTime)
+    income = Column(Integer, default=0)
+    expenses = Column(Integer, default=0)
+    profit = Column(Integer, default=0)
+    investor_amount = Column(Integer, default=0)
+    owner_amount = Column(Integer, default=0)
+    status = Column(String, default="open")  # open / closed / paid
+    paid_date = Column(DateTime)
+    created_at = Column(DateTime, default=datetime.now)
 
 PARTS = {
     "стойка стаба": ("Стойка стабилизатора", "Подвеска"),
@@ -111,27 +126,39 @@ PARTS = {
 BRANDS = ["amd", "ctr", "mann", "mando", "lynx", "hi-q", "hiq", "sachs", "kyb", "gates", "bosch", "ngk", "denso", "shell", "лукойл"]
 
 def ensure_migrations():
-    # Render/Postgres create_all не добавляет новые колонки в существующую таблицу.
-    # Поэтому добавляем их вручную, если таблица уже была создана.
     with engine.begin() as conn:
-        try:
-            conn.execute(sql_text("ALTER TABLE cars ADD COLUMN owner_type VARCHAR DEFAULT 'own'"))
-        except Exception:
-            pass
-        try:
-            conn.execute(sql_text("ALTER TABLE cars ADD COLUMN investor_name VARCHAR DEFAULT ''"))
-        except Exception:
-            pass
-        try:
-            conn.execute(sql_text("ALTER TABLE cars ADD COLUMN investor_percent INTEGER DEFAULT 0"))
-        except Exception:
-            pass
+        for sql in [
+            "ALTER TABLE cars ADD COLUMN owner_type VARCHAR DEFAULT 'own'",
+            "ALTER TABLE cars ADD COLUMN investor_name VARCHAR DEFAULT ''",
+            "ALTER TABLE cars ADD COLUMN investor_percent INTEGER DEFAULT 0",
+            "ALTER TABLE expenses ADD COLUMN share_type VARCHAR DEFAULT 'shared'",
+        ]:
+            try:
+                conn.execute(sql_text(sql))
+            except Exception:
+                pass
+
+def period_15(today=None):
+    today = today or date.today()
+    if today.day >= 15:
+        start = date(today.year, today.month, 15)
+        if today.month == 12:
+            end = date(today.year + 1, 1, 15)
+        else:
+            end = date(today.year, today.month + 1, 15)
+    else:
+        end = date(today.year, today.month, 15)
+        if today.month == 1:
+            start = date(today.year - 1, 12, 15)
+        else:
+            start = date(today.year, today.month - 1, 15)
+    return datetime.combine(start, datetime.min.time()), datetime.combine(end, datetime.min.time())
 
 def parse_message(message):
     raw = message.strip()
     text = raw.lower().replace(",", " ").replace(".", " ")
     data = dict(raw=raw, car_code=None, type="unknown", category="", description="", part="",
-                brand="", position="", part_price=0, labor=0, total=0, income=0, mileage=None)
+                brand="", position="", part_price=0, labor=0, total=0, income=0, mileage=None, share_type="shared")
 
     car = re.match(r"^(\d{3})\b", text)
     if car:
@@ -140,6 +167,11 @@ def parse_message(message):
     m = re.search(r"пробег\s*(\d{4,7})", text)
     if m:
         data["mileage"] = int(m.group(1))
+
+    if "моя ответственность" in text or "не делить" in text:
+        data["share_type"] = "owner_only"
+    elif "инвестора" in text and "расход" in text:
+        data["share_type"] = "investor_only"
 
     if "справа" in text or "правая" in text:
         data["position"] = "Правая"
@@ -237,7 +269,7 @@ def save(data):
         s.add(Income(operation_id=op.id, car_code=data["car_code"], amount=data["income"], income_type=data["description"]))
 
     if data["type"] in ("repair", "service", "expense"):
-        s.add(Expense(operation_id=op.id, car_code=data["car_code"], category=data["category"], amount=data["total"]))
+        s.add(Expense(operation_id=op.id, car_code=data["car_code"], category=data["category"], amount=data["total"], share_type=data.get("share_type","shared")))
 
     if data.get("part"):
         old = s.query(Part).filter_by(car_code=data["car_code"], part_name=data["part"], position=data["position"], status="Установлена").all()
@@ -256,6 +288,43 @@ def save(data):
     op_id = op.id
     s.close()
     return {"ok": True, "message": f"Записано. Операция #{op_id}", "data": data}
+
+def investor_period_calc(investor_name, start, end):
+    s = Session()
+    cars = s.query(Car).filter(Car.owner_type=="investor", Car.investor_name==investor_name).all()
+    car_codes = [c.code for c in cars]
+    if not car_codes:
+        s.close()
+        return {"investor_name": investor_name, "cars": [], "income":0, "expenses":0, "profit":0, "investor_amount":0, "owner_amount":0, "start":start.isoformat(), "end":end.isoformat()}
+
+    income = s.query(func.coalesce(func.sum(Income.amount),0)).filter(Income.car_code.in_(car_codes), Income.date >= start, Income.date < end).scalar()
+    # Расходы делим только shared. owner_only не уменьшает расчет инвестора.
+    expenses = s.query(func.coalesce(func.sum(Expense.amount),0)).filter(Expense.car_code.in_(car_codes), Expense.date >= start, Expense.date < end, Expense.share_type!="owner_only").scalar()
+    profit = income - expenses
+
+    # Если у инвестора несколько авто с разными %, считаем по каждой машине отдельно.
+    investor_amount = 0
+    details = []
+    for c in cars:
+        ci = s.query(func.coalesce(func.sum(Income.amount),0)).filter_by(car_code=c.code).filter(Income.date >= start, Income.date < end).scalar()
+        ce = s.query(func.coalesce(func.sum(Expense.amount),0)).filter_by(car_code=c.code).filter(Expense.date >= start, Expense.date < end, Expense.share_type!="owner_only").scalar()
+        cp = ci - ce
+        ca = round(cp * (c.investor_percent or 0) / 100)
+        investor_amount += ca
+        details.append({"code": c.code, "car": f"{c.brand or ''} {c.model or ''}", "percent": c.investor_percent or 0, "income": ci, "expenses": ce, "profit": cp, "investor_amount": ca})
+    s.close()
+
+    return {
+        "investor_name": investor_name,
+        "cars": details,
+        "income": income,
+        "expenses": expenses,
+        "profit": profit,
+        "investor_amount": investor_amount,
+        "owner_amount": profit - investor_amount,
+        "start": start.strftime("%d.%m.%Y"),
+        "end": end.strftime("%d.%m.%Y")
+    }
 
 @app.route("/")
 def index():
@@ -321,6 +390,37 @@ def api_cars():
     s.close()
     return jsonify(rows)
 
+@app.route("/api/investors")
+def api_investors():
+    s = Session()
+    names = [r[0] for r in s.query(Car.investor_name).filter(Car.owner_type=="investor", Car.investor_name!="").distinct().all()]
+    s.close()
+    start, end = period_15()
+    data = [investor_period_calc(name, start, end) for name in names]
+    return jsonify({"period_start": start.strftime("%d.%m.%Y"), "period_end": end.strftime("%d.%m.%Y"), "investors": data})
+
+@app.route("/api/close-period", methods=["POST"])
+def api_close_period():
+    name = request.json.get("investor_name")
+    start, end = period_15()
+    calc = investor_period_calc(name, start, end)
+    s = Session()
+    existing = s.query(InvestorPeriod).filter_by(investor_name=name, start_date=start, end_date=end).first()
+    if existing:
+        existing.income = calc["income"]
+        existing.expenses = calc["expenses"]
+        existing.profit = calc["profit"]
+        existing.investor_amount = calc["investor_amount"]
+        existing.owner_amount = calc["owner_amount"]
+        existing.status = "closed"
+    else:
+        s.add(InvestorPeriod(investor_name=name, start_date=start, end_date=end,
+                             income=calc["income"], expenses=calc["expenses"], profit=calc["profit"],
+                             investor_amount=calc["investor_amount"], owner_amount=calc["owner_amount"], status="closed"))
+    s.commit()
+    s.close()
+    return jsonify({"ok": True, "message": "Период закрыт", "period": calc})
+
 @app.route("/api/operations")
 def api_operations():
     s = Session()
@@ -333,15 +433,21 @@ def api_operations():
 HTML = r"""
 <!doctype html><html lang="ru"><head><meta charset="utf-8"><title>FleetAI Cloud</title>
 <style>
-body{font-family:Arial;background:#f3f5f7;margin:0;color:#111827}.wrap{max-width:1200px;margin:auto;padding:24px}
+body{font-family:Arial;background:#f3f5f7;margin:0;color:#111827}.wrap{max-width:1250px;margin:auto;padding:24px}
 .card{background:white;border-radius:16px;padding:18px;margin:14px 0;box-shadow:0 2px 12px #0001}.grid{display:grid;grid-template-columns:repeat(5,1fr);gap:12px}
 .stat{background:#111827;color:white;border-radius:14px;padding:16px}.stat b{font-size:26px;display:block;margin-top:8px}
 input,select{padding:12px;font-size:16px;border:1px solid #ddd;border-radius:10px;margin:4px}input.msg{width:78%;font-size:18px}button{padding:12px 16px;font-size:16px;border:0;border-radius:10px;background:#2563eb;color:white;cursor:pointer}
 table{width:100%;border-collapse:collapse}td,th{padding:9px;border-bottom:1px solid #eee;text-align:left}.tabs button{background:#e5e7eb;color:#111}.tabs button.active{background:#2563eb;color:white}
-.badge{padding:4px 8px;border-radius:999px;background:#e0f2fe;color:#0369a1;font-size:12px}@media(max-width:700px){.grid{grid-template-columns:1fr}input.msg{width:100%;margin-bottom:8px}table{font-size:12px}}
+.badge{padding:4px 8px;border-radius:999px;background:#e0f2fe;color:#0369a1;font-size:12px}.warn{background:#fff7ed;border-left:5px solid #f97316}
+@media(max-width:700px){.grid{grid-template-columns:1fr}input.msg{width:100%;margin-bottom:8px}table{font-size:12px}}
 </style></head><body><div class="wrap"><h1>🚗 FleetAI Cloud</h1>
 <div id="summary"></div>
 <div class="card"><input class="msg" id="msg" placeholder="665 стойка стаба AMD справа пробег 243000 стоимость 1000 ремонт 1000"><button onclick="add()">Записать</button><p id="res"></p></div>
+
+<div class="card warn">
+<h2>Инвесторы: расчетный период <span id="period"></span></h2>
+<div id="investors"></div>
+</div>
 
 <div class="card">
 <h2>Добавить машину</h2>
@@ -378,6 +484,27 @@ function rub(n){return (n||0).toLocaleString('ru-RU')+' ₽'}
 async function loadSummary(){
  let s=await api('/api/summary'); summary.innerHTML=`<div class="grid"><div class="stat">Всего <b>${s.cars}</b></div><div class="stat">Мои <b>${s.own_cars}</b></div><div class="stat">Инвесторов <b>${s.investor_cars}</b></div><div class="stat">Доход <b>${rub(s.income)}</b></div><div class="stat">Прибыль <b>${rub(s.profit)}</b></div></div>`;
 }
+async function loadInvestors(){
+ let d=await api('/api/investors'); period.innerText=`${d.period_start} — ${d.period_end}`;
+ if(!d.investors.length){investors.innerHTML='Пока нет машин инвесторов'; return}
+ investors.innerHTML=d.investors.map(i=>`
+ <div class="card">
+ <h3>${i.investor_name}</h3>
+ <b>Доход:</b> ${rub(i.income)} |
+ <b>Расходы:</b> ${rub(i.expenses)} |
+ <b>Прибыль:</b> ${rub(i.profit)} |
+ <b>К выплате инвестору:</b> ${rub(i.investor_amount)} |
+ <b>Тебе:</b> ${rub(i.owner_amount)}
+ <br><br><button onclick="closePeriod('${i.investor_name}')">Закрыть период</button>
+ <table><tr><th>Машина</th><th>%</th><th>Доход</th><th>Расход</th><th>Прибыль</th><th>Инвестору</th></tr>
+ ${i.cars.map(c=>`<tr><td>${c.code} ${c.car}</td><td>${c.percent}%</td><td>${rub(c.income)}</td><td>${rub(c.expenses)}</td><td>${rub(c.profit)}</td><td>${rub(c.investor_amount)}</td></tr>`).join('')}
+ </table>
+ </div>`).join('');
+}
+async function closePeriod(name){
+ let r=await api('/api/close-period',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({investor_name:name})});
+ alert(r.message); loadInvestors();
+}
 async function loadCars(filter='all'){
  currentFilter=filter;
  ['all','own','investor'].forEach(x=>document.getElementById('tab_'+x).classList.remove('active'));
@@ -389,7 +516,7 @@ async function loadCars(filter='all'){
 async function loadOps(){
  let o=await api('/api/operations'); ops.innerHTML='<tr><th>Дата</th><th>Машина</th><th>Тип</th><th>Описание</th><th>Сумма</th><th>Сообщение</th></tr>'+o.map(x=>`<tr><td>${x.date}</td><td>${x.car_code}</td><td>${x.type}</td><td>${x.description||''}</td><td>${rub(x.amount)}</td><td>${x.raw||''}</td></tr>`).join('');
 }
-async function load(){await loadSummary(); await loadCars(currentFilter); await loadOps();}
+async function load(){await loadSummary(); await loadInvestors(); await loadCars(currentFilter); await loadOps();}
 async function add(){let m=msg.value; let r=await api('/api/add',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:m})}); res.innerText=r.message; msg.value=''; load()}
 async function addCar(){
  let payload={owner_type:owner_type.value,code:code.value,brand:brand.value,model:model.value,plate:plate.value,year:year.value,purchase_date:purchase_date.value,purchase_price:purchase_price.value,mileage:mileage.value,investor_name:investor_name.value,investor_percent:investor_percent.value};
