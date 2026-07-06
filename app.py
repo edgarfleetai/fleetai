@@ -5,9 +5,23 @@ from flask import Flask, request, jsonify, render_template_string
 from sqlalchemy import create_engine, Column, Integer, String, DateTime, Text, func, text as sql_text
 from sqlalchemy.orm import declarative_base, sessionmaker
 
-DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///fleet.db")
+# База данных.
+# Локально хранится в fleet.db рядом с проектом.
+# На Render используйте Persistent Disk с mount path /var/data — тогда база не пропадет после деплоя.
+DATABASE_URL = os.getenv("DATABASE_URL")
+if not DATABASE_URL:
+    if os.path.isdir("/var/data"):
+        DATABASE_URL = "sqlite:////var/data/fleetai.db"
+    else:
+        DATABASE_URL = "sqlite:///fleet.db"
+
 if DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+
+# Если это SQLite с абсолютным путем, заранее создаем папку под базу.
+if DATABASE_URL.startswith("sqlite:////"):
+    db_path = DATABASE_URL.replace("sqlite:///", "")
+    os.makedirs(os.path.dirname(db_path), exist_ok=True)
 
 engine = create_engine(DATABASE_URL, future=True)
 Session = sessionmaker(bind=engine)
