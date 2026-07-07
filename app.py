@@ -236,7 +236,18 @@ def parse_message(message):
         if re.search(r"\b" + re.escape(b) + r"\b", text):
             data["brand"] = b.upper()
             break
+    # Общий ремонт / замена / работа
+    if any(word in text for word in ["замена", "поменял", "поменяли", "ремонт"]):
+        data["type"] = "repair"
+        data["category"] = "Ремонт"
+        data["description"] = "Ремонт / замена"
 
+        nums = parse_amounts(text, data["car_code"])
+        if data["mileage"]:
+            nums = [n for n in nums if n != data["mileage"]]
+
+        data["total"] = sum(nums) if nums else 0
+        return data
     car_investment_words = ["доп вложение", "дополнительное вложение", "дополнительные вложения", "допы", "доп", "вложение", "вложения", "кап вложение", "капиталка"]
     if any(re.search(r"\b" + re.escape(w) + r"\b", text) for w in car_investment_words):
         data["type"] = "car_investment"
