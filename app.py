@@ -394,11 +394,33 @@ def save(data):
 
 
 def car_finance(s, code):
-    income = s.query(func.coalesce(func.sum(Income.amount), 0)).filter(func.trim(Income.car_code) == str(code)).scalar()
-    expenses = s.query(func.coalesce(func.sum(Expense.amount), 0)).filter(func.trim(Expense.car_code) == str(code)).scalar()
-    investments = s.query(func.coalesce(func.sum(CarInvestment.amount), 0)).filter(func.trim(CarInvestment.car_code) == str(code)).scalar()
-    payouts = s.query(func.coalesce(func.sum(InvestorPayout.amount), 0)).filter(func.trim(InvestorPayout.car_code) == str(code)).scalar()
-    inv_in = s.query(func.coalesce(func.sum(InvestorInvestment.amount), 0)).filter(func.trim(InvestorInvestment.car_code) == str(code)).scalar()
+    code = normalize_code(code)
+
+    income = 0
+    for row in s.query(Income).all():
+        if normalize_code(row.car_code) == code:
+            income += row.amount or 0
+
+    expenses = 0
+    for row in s.query(Expense).all():
+        if normalize_code(row.car_code) == code:
+            expenses += row.amount or 0
+
+    investments = 0
+    for row in s.query(CarInvestment).all():
+        if normalize_code(row.car_code) == code:
+            investments += row.amount or 0
+
+    payouts = 0
+    for row in s.query(InvestorPayout).all():
+        if normalize_code(row.car_code) == code:
+            payouts += row.amount or 0
+
+    inv_in = 0
+    for row in s.query(InvestorInvestment).all():
+        if normalize_code(row.car_code) == code:
+            inv_in += row.amount or 0
+
     return income, expenses, investments, payouts, inv_in
 
 
