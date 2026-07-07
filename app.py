@@ -1,14 +1,15 @@
-import os
+from pathlib import Path
+
+app_code = r'''import os
 import re
-from datetime import datetime, date
+from datetime import datetime
 from flask import Flask, request, jsonify, render_template_string
 from sqlalchemy import create_engine, Column, Integer, String, DateTime, Text, func, text as sql_text
 from sqlalchemy.orm import declarative_base, sessionmaker
 
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///fleet.db")
 
-# Render PostgreSQL often gives postgres:// or postgresql://.
-# Use SQLAlchemy + psycopg v3 driver.
+# Render PostgreSQL URL fix for psycopg v3
 if DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql+psycopg://", 1)
 elif DATABASE_URL.startswith("postgresql://") and not DATABASE_URL.startswith("postgresql+psycopg://"):
@@ -18,6 +19,7 @@ engine = create_engine(DATABASE_URL, future=True, pool_pre_ping=True)
 Session = sessionmaker(bind=engine)
 Base = declarative_base()
 app = Flask(__name__)
+
 
 class Car(Base):
     __tablename__ = "cars"
@@ -33,9 +35,10 @@ class Car(Base):
     current_mileage = Column(Integer, default=0)
     status = Column(String, default="Работает")
     driver = Column(String, default="")
-    owner_type = Column(String, default="own")  # own / investor
+    owner_type = Column(String, default="own")
     investor_name = Column(String, default="")
     investor_percent = Column(Integer, default=0)
+
 
 class Operation(Base):
     __tablename__ = "operations"
@@ -48,6 +51,7 @@ class Operation(Base):
     amount = Column(Integer, default=0)
     mileage = Column(Integer)
     raw_message = Column(Text)
+
 
 class Part(Base):
     __tablename__ = "parts"
@@ -65,6 +69,7 @@ class Part(Base):
     remove_mileage = Column(Integer)
     status = Column(String, default="Установлена")
 
+
 class Income(Base):
     __tablename__ = "income"
     id = Column(Integer, primary_key=True)
@@ -74,6 +79,7 @@ class Income(Base):
     amount = Column(Integer, default=0)
     income_type = Column(String)
 
+
 class Expense(Base):
     __tablename__ = "expenses"
     id = Column(Integer, primary_key=True)
@@ -82,7 +88,8 @@ class Expense(Base):
     date = Column(DateTime, default=datetime.now)
     category = Column(String)
     amount = Column(Integer, default=0)
-    share_type = Column(String, default="shared")  # shared / owner_only / investor_only
+    share_type = Column(String, default="shared")
+
 
 class CarInvestment(Base):
     __tablename__ = "car_investments"
@@ -96,6 +103,7 @@ class CarInvestment(Base):
     investor_name = Column(String, default="")
     raw_message = Column(Text)
 
+
 class InvestorInvestment(Base):
     __tablename__ = "investor_investments"
     id = Column(Integer, primary_key=True)
@@ -107,6 +115,7 @@ class InvestorInvestment(Base):
     percent = Column(Integer, default=0)
     comment = Column(Text)
 
+
 class InvestorPayout(Base):
     __tablename__ = "investor_payouts"
     id = Column(Integer, primary_key=True)
@@ -117,6 +126,7 @@ class InvestorPayout(Base):
     amount = Column(Integer, default=0)
     comment = Column(Text)
 
+
 class Mileage(Base):
     __tablename__ = "mileage"
     id = Column(Integer, primary_key=True)
@@ -124,6 +134,7 @@ class Mileage(Base):
     date = Column(DateTime, default=datetime.now)
     mileage = Column(Integer)
     source = Column(Text)
+
 
 PARTS = {
     "стойка стаба": ("Стойка стабилизатора", "Подвеска"),
@@ -133,20 +144,15 @@ PARTS = {
     "амортизаторы": ("Амортизатор", "Подвеска"),
     "колодки": ("Тормозные колодки", "Тормоза"),
     "накладки": ("Тормозные колодки", "Тормоза"),
-    "тормозные колодки": ("Тормозные колодки", "Тормоза"),
     "шаровая": ("Шаровая опора", "Подвеска"),
     "рулевая рейка": ("Рулевая рейка", "Рулевое"),
     "рейка": ("Рулевая рейка", "Рулевое"),
-    "пыльник рулевой рейки": ("Пыльник рулевой рейки", "Рулевое"),
-    "втулка рейки": ("Втулка рулевой рейки", "Рулевое"),
     "замена колес": ("Замена колес", "Шиномонтаж"),
     "колеса": ("Колеса", "Колеса"),
     "шины": ("Шины", "Колеса"),
-    "штампы": ("Штампованные диски", "Колеса"),
     "фара": ("Фара", "Кузов"),
     "компрессор": ("Компрессор кондиционера", "Кондиционер"),
     "компресор": ("Компрессор кондиционера", "Кондиционер"),
-    "ремень компресора": ("Ремень компрессора", "Кондиционер"),
     "помпа": ("Помпа", "Охлаждение"),
     "антифриз": ("Антифриз", "Охлаждение"),
     "фреон": ("Фреон", "Кондиционер"),
@@ -156,44 +162,52 @@ PARTS = {
     "тонер": ("Тонировка", "Кузов"),
     "тонировка": ("Тонировка", "Кузов"),
     "химчистка": ("Химчистка", "Салон"),
-    "ручки": ("Дверные ручки", "Кузов"),
-    "дверные ручки": ("Дверные ручки", "Кузов"),
-    "моторчик дворников": ("Моторчик дворников", "Электрика"),
-    "переключатель дворников": ("Подрулевой переключатель", "Электрика"),
-    "переключатель света": ("Подрулевой переключатель", "Электрика"),
-    "подрулевые переключатели": ("Подрулевые переключатели", "Электрика"),
     "сцепление": ("Сцепление", "Трансмиссия"),
-    "выжимной": ("Выжимной подшипник", "Трансмиссия"),
-    "корзина сцепления": ("Корзина сцепления", "Трансмиссия"),
-    "маховик": ("Маховик", "Трансмиссия"),
-    "масло в коробку": ("Масло КПП", "ТО"),
-    "масло двигателя": ("Масло двигателя", "ТО"),
     "масло": ("Масло двигателя", "ТО"),
+    "масло двигателя": ("Масло двигателя", "ТО"),
+    "масло в коробку": ("Масло КПП", "ТО"),
     "салонный": ("Салонный фильтр", "ТО"),
     "воздушный": ("Воздушный фильтр", "ТО"),
-    "масленый": ("Масляный фильтр", "ТО"),
     "масляный": ("Масляный фильтр", "ТО"),
+    "масленый": ("Масляный фильтр", "ТО"),
     "электрика": ("Электрика", "Электрика"),
     "дворники": ("Дворники", "Кузов"),
-    "радиатор кондиционера": ("Радиатор кондиционера", "Кондиционер"),
-    "радиатор основной": ("Основной радиатор", "Охлаждение"),
+    "радиатор": ("Радиатор", "Охлаждение"),
     "выхлоп": ("Выхлоп", "Выхлоп"),
     "краска": ("Покраска", "Кузов"),
-    "лампочки стопа": ("Лампочки стоп-сигнала", "Электрика"),
-    "лампочки фар": ("Лампочки фар", "Электрика"),
-    "поротники": ("Поворотники", "Электрика"),
-    "поворотники": ("Поворотники", "Электрика"),
 }
+
 BRANDS = ["amd", "ctr", "mann", "mando", "lynx", "hi-q", "hiq", "sachs", "kyb", "gates", "bosch", "ngk", "denso", "shell", "лукойл"]
+
 
 def rub(n):
     return f"{int(n or 0):,}".replace(",", " ") + " ₽"
+
+
+def only_int(v):
+    try:
+        return int(v or 0)
+    except Exception:
+        return 0
+
+
+def normalize_code(v):
+    return str(v or "").strip()
+
+
+def find_car(session, code):
+    code = normalize_code(code)
+    if not code:
+        return None
+    return session.query(Car).filter(func.trim(Car.code) == code).first()
+
 
 def parse_amounts(text, car_code=None):
     nums = [int(x) for x in re.findall(r"\b\d{2,9}\b", text)]
     if car_code:
         nums = [n for n in nums if str(n) != str(car_code)]
     return nums
+
 
 def clean_desc(text, car_code, words, amount):
     desc = text
@@ -203,61 +217,48 @@ def clean_desc(text, car_code, words, amount):
         desc = re.sub(r"\b" + re.escape(w) + r"\b", "", desc).strip()
     if amount:
         desc = re.sub(r"\b" + str(amount) + r"\b", "", desc).strip()
-    desc = desc.replace("р", "").replace("руб", "").strip()
-    return desc
+    return desc.replace("руб", "").replace("р", "").strip()
+
 
 def parse_message(message):
-    raw = message.strip()
+    raw = (message or "").strip()
     text = raw.lower().replace(",", " ").replace(".", " ")
     data = dict(raw=raw, car_code=None, type="unknown", category="", description="", part="",
                 brand="", position="", part_price=0, labor=0, total=0, income=0, mileage=None,
                 share_type="shared", investor_name="", investor_percent=0)
 
-    car = re.match(r"^(\d{3})\b", text)
+    car = re.match(r"^\s*(\d{3})\b", text)
     if car:
-        data["car_code"] = car.group(1)
+        data["car_code"] = car.group(1).strip()
 
     m = re.search(r"пробег\s*(\d{4,7})", text)
     if m:
         data["mileage"] = int(m.group(1))
 
-    if "моя ответственность" in text or "не делить" in text:
-        data["share_type"] = "owner_only"
-    elif "инвестора" in text and "расход" in text:
-        data["share_type"] = "investor_only"
-
     if "справа" in text or "правая" in text:
         data["position"] = "Правая"
     elif "слева" in text or "левая" in text:
         data["position"] = "Левая"
-    elif "перед" in text or "передние" in text:
-        data["position"] = "Передняя ось"
-    elif "зад" in text or "задние" in text:
-        data["position"] = "Задняя ось"
 
     for b in BRANDS:
         if re.search(r"\b" + re.escape(b) + r"\b", text):
             data["brand"] = b.upper()
             break
 
-    # Доп. вложения в машину
     car_investment_words = ["доп вложение", "дополнительное вложение", "дополнительные вложения", "допы", "доп", "вложение", "вложения", "кап вложение", "капиталка"]
     if any(re.search(r"\b" + re.escape(w) + r"\b", text) for w in car_investment_words):
         data["type"] = "car_investment"
         data["category"] = "Доп. вложение"
         nums = parse_amounts(text, data["car_code"])
-        if nums:
-            data["total"] = nums[-1]
+        data["total"] = nums[-1] if nums else 0
         data["description"] = clean_desc(text, data["car_code"], car_investment_words, data["total"]) or "Дополнительное вложение"
         return data
 
-    # Деньги инвестора: 665 инвестор Иван вложил 300000 50%
     if "инвестор" in text and any(w in text for w in ["вложил", "внес", "дал"]):
         data["type"] = "investor_investment"
         data["category"] = "Вложение инвестора"
         nums = parse_amounts(text, data["car_code"])
-        if nums:
-            data["total"] = nums[0]
+        data["total"] = nums[0] if nums else 0
         pct = re.search(r"(\d{1,3})\s*%", text)
         data["investor_percent"] = int(pct.group(1)) if pct else 0
         name = re.search(r"инвестор\s+([а-яa-zё]+)", text)
@@ -265,13 +266,11 @@ def parse_message(message):
         data["description"] = "Вложение инвестора"
         return data
 
-    # Выплата инвестору: 665 выплата Ивану 25000
     if "выплата" in text:
         data["type"] = "investor_payout"
         data["category"] = "Выплата инвестору"
         nums = parse_amounts(text, data["car_code"])
-        if nums:
-            data["total"] = nums[-1]
+        data["total"] = nums[-1] if nums else 0
         name = re.search(r"выплата\s+([а-яa-zё]+)", text)
         data["investor_name"] = name.group(1).capitalize() if name else ""
         data["description"] = "Выплата инвестору"
@@ -280,21 +279,19 @@ def parse_message(message):
     if any(w in text for w in ["получил", "расчет", "недельный", "перевел"]):
         data["type"] = "income"
         nums = parse_amounts(text, data["car_code"])
-        if nums:
-            data["income"] = nums[-1]
-            data["total"] = nums[-1]
+        data["income"] = nums[-1] if nums else 0
+        data["total"] = data["income"]
         data["description"] = "Недельный расчет"
         return data
 
-    expense_words = {"штраф":"Штраф","страховка":"Страховка","осаго":"Страховка","мойка":"Мойка","бензин":"Топливо","газ":"Топливо","дизель":"Топливо","эвакуатор":"Эвакуатор","шиномонтаж":"Шиномонтаж"}
+    expense_words = {"штраф": "Штраф", "страховка": "Страховка", "осаго": "Страховка", "мойка": "Мойка", "бензин": "Топливо", "газ": "Топливо", "эвакуатор": "Эвакуатор", "шиномонтаж": "Шиномонтаж"}
     for word, cat in expense_words.items():
         if word in text:
             data["type"] = "expense"
             data["category"] = cat
             data["description"] = cat
             nums = parse_amounts(text, data["car_code"])
-            if nums:
-                data["total"] = nums[-1]
+            data["total"] = nums[-1] if nums else 0
             return data
 
     for key, val in sorted(PARTS.items(), key=lambda x: len(x[0]), reverse=True):
@@ -305,9 +302,10 @@ def parse_message(message):
             break
 
     price = re.search(r"(стоимость|цена)\s*(\d+)", text)
+    labor = re.search(r"(работа|ремонт)\s*(\d+)", text)
+
     if price:
         data["part_price"] = int(price.group(2))
-    labor = re.search(r"(работа|ремонт)\s*(\d+)", text)
     if labor:
         data["labor"] = int(labor.group(2))
 
@@ -323,9 +321,9 @@ def parse_message(message):
     data["total"] = data["part_price"] + data["labor"]
     return data
 
+
 def ensure_schema():
     Base.metadata.create_all(engine)
-    # Safe migrations for older DBs
     migrations = [
         "ALTER TABLE cars ADD COLUMN owner_type VARCHAR DEFAULT 'own'",
         "ALTER TABLE cars ADD COLUMN investor_name VARCHAR DEFAULT ''",
@@ -339,46 +337,52 @@ def ensure_schema():
             except Exception:
                 pass
 
+
 def init_seed():
     s = Session()
     seed = [
-        ("897","Kia","Rio","К897УР716",2018,"11.2025",900000,180000),
-        ("119","Kia","Rio","В119ЕН716",2018,"21.03.2025",790000,253000),
-        ("665","Kia","Rio","С665ХК716",2020,"04.2024",1575000,240000),
-        ("404","Hyundai","Solaris","Н404ЕК716",2017,"09.04.2026",575000,410000),
-        ("218","Hyundai","Solaris","Е218РТ716",None,"22.04.2026",420000,280000),
+        ("897", "Kia", "Rio", "К897УР716", 2018, "11.2025", 900000, 180000),
+        ("119", "Kia", "Rio", "В119ЕН716", 2018, "21.03.2025", 790000, 253000),
+        ("665", "Kia", "Rio", "С665ХК716", 2020, "04.2024", 1575000, 240000),
+        ("404", "Hyundai", "Solaris", "Н404ЕК716", 2017, "09.04.2026", 575000, 410000),
+        ("218", "Hyundai", "Solaris", "Е218РТ716", None, "22.04.2026", 420000, 280000),
     ]
     for code, brand, model, plate, year, pd, pp, mil in seed:
-        if not s.query(Car).filter_by(code=code).first():
+        if not find_car(s, code):
             s.add(Car(code=code, brand=brand, model=model, plate=plate, year=year,
-                      purchase_date=pd, purchase_price=pp, purchase_mileage=mil, current_mileage=mil,
-                      owner_type="own", investor_name="", investor_percent=0))
+                      purchase_date=pd, purchase_price=pp, purchase_mileage=mil,
+                      current_mileage=mil, owner_type="own"))
     s.commit()
     s.close()
 
+
 def save(data):
     s = Session()
-    car = s.query(Car).filter_by(code=data.get("car_code")).first()
-    if not data.get("car_code") or not car:
-        s.close()
-        return {"ok": False, "message": "Машина не найдена или не указан код"}
+    car_code = normalize_code(data.get("car_code"))
+    car = find_car(s, car_code)
 
-    op = Operation(car_code=data["car_code"], type=data["type"], category=data["category"],
-                   description=data["description"], amount=data["total"], mileage=data["mileage"], raw_message=data["raw"])
+    if not car_code or not car:
+        existing = [c.code for c in s.query(Car).order_by(Car.code).all()]
+        s.close()
+        return {"ok": False, "message": f"Машина {car_code or 'без кода'} не найдена. Есть коды: {', '.join(existing)}"}
+
+    op = Operation(car_code=car.code, type=data["type"], category=data["category"],
+                   description=data["description"], amount=data["total"],
+                   mileage=data["mileage"], raw_message=data["raw"])
     s.add(op)
     s.flush()
 
     if data["type"] == "income":
-        s.add(Income(operation_id=op.id, car_code=data["car_code"], amount=data["income"], income_type=data["description"]))
+        s.add(Income(operation_id=op.id, car_code=car.code, amount=data["income"], income_type=data["description"]))
 
     elif data["type"] in ("repair", "service", "expense"):
-        s.add(Expense(operation_id=op.id, car_code=data["car_code"], category=data["category"], amount=data["total"], share_type=data.get("share_type","shared")))
+        s.add(Expense(operation_id=op.id, car_code=car.code, category=data["category"], amount=data["total"], share_type=data.get("share_type", "shared")))
 
     elif data["type"] == "car_investment":
-        s.add(CarInvestment(operation_id=op.id, car_code=data["car_code"], category=data["category"], description=data["description"], amount=data["total"], raw_message=data["raw"]))
+        s.add(CarInvestment(operation_id=op.id, car_code=car.code, category=data["category"], description=data["description"], amount=data["total"], raw_message=data["raw"]))
 
     elif data["type"] == "investor_investment":
-        s.add(InvestorInvestment(operation_id=op.id, car_code=data["car_code"], investor_name=data["investor_name"], amount=data["total"], percent=data["investor_percent"], comment=data["raw"]))
+        s.add(InvestorInvestment(operation_id=op.id, car_code=car.code, investor_name=data["investor_name"], amount=data["total"], percent=data["investor_percent"], comment=data["raw"]))
         if data["investor_name"]:
             car.owner_type = "investor"
             car.investor_name = data["investor_name"]
@@ -386,134 +390,156 @@ def save(data):
             car.investor_percent = data["investor_percent"]
 
     elif data["type"] == "investor_payout":
-        s.add(InvestorPayout(operation_id=op.id, car_code=data["car_code"], investor_name=data["investor_name"], amount=data["total"], comment=data["raw"]))
+        s.add(InvestorPayout(operation_id=op.id, car_code=car.code, investor_name=data["investor_name"], amount=data["total"], comment=data["raw"]))
 
     if data.get("part"):
-        old = s.query(Part).filter_by(car_code=data["car_code"], part_name=data["part"], position=data["position"], status="Установлена").all()
-        for p in old:
-            p.status = "Снята"
-            p.remove_date = datetime.now()
-            p.remove_mileage = data["mileage"]
-        s.add(Part(car_code=data["car_code"], operation_id=op.id, part_name=data["part"], brand=data["brand"],
+        s.add(Part(car_code=car.code, operation_id=op.id, part_name=data["part"], brand=data["brand"],
                    position=data["position"], price=data["part_price"], labor=data["labor"], install_mileage=data["mileage"]))
 
     if data.get("mileage"):
         car.current_mileage = data["mileage"]
-        s.add(Mileage(car_code=data["car_code"], mileage=data["mileage"], source=data["raw"]))
+        s.add(Mileage(car_code=car.code, mileage=data["mileage"], source=data["raw"]))
 
     s.commit()
     op_id = op.id
     s.close()
     return {"ok": True, "message": f"Записано. Операция #{op_id}", "data": data}
 
+
 def car_finance(s, code):
-    income = s.query(func.coalesce(func.sum(Income.amount),0)).filter_by(car_code=code).scalar()
-    expenses = s.query(func.coalesce(func.sum(Expense.amount),0)).filter_by(car_code=code).scalar()
-    investments = s.query(func.coalesce(func.sum(CarInvestment.amount),0)).filter_by(car_code=code).scalar()
-    payouts = s.query(func.coalesce(func.sum(InvestorPayout.amount),0)).filter_by(car_code=code).scalar()
-    inv_in = s.query(func.coalesce(func.sum(InvestorInvestment.amount),0)).filter_by(car_code=code).scalar()
+    income = s.query(func.coalesce(func.sum(Income.amount), 0)).filter(func.trim(Income.car_code) == str(code)).scalar()
+    expenses = s.query(func.coalesce(func.sum(Expense.amount), 0)).filter(func.trim(Expense.car_code) == str(code)).scalar()
+    investments = s.query(func.coalesce(func.sum(CarInvestment.amount), 0)).filter(func.trim(CarInvestment.car_code) == str(code)).scalar()
+    payouts = s.query(func.coalesce(func.sum(InvestorPayout.amount), 0)).filter(func.trim(InvestorPayout.car_code) == str(code)).scalar()
+    inv_in = s.query(func.coalesce(func.sum(InvestorInvestment.amount), 0)).filter(func.trim(InvestorInvestment.car_code) == str(code)).scalar()
     return income, expenses, investments, payouts, inv_in
+
 
 @app.route("/")
 def index():
     return render_template_string(HTML)
 
+
 @app.route("/healthz")
 def healthz():
     return "ok"
 
+
 @app.route("/api/add", methods=["POST"])
 def api_add():
-    return jsonify(save(parse_message(request.json.get("message",""))))
+    return jsonify(save(parse_message(request.json.get("message", ""))))
+
 
 @app.route("/api/add-car", methods=["POST"])
 def api_add_car():
-    p = request.json
+    p = request.json or {}
     s = Session()
-    if s.query(Car).filter_by(code=p.get("code")).first():
+
+    code_value = normalize_code(p.get("code"))
+    if not code_value:
+        s.close()
+        return jsonify({"ok": False, "message": "Укажи код машины"})
+
+    if find_car(s, code_value):
         s.close()
         return jsonify({"ok": False, "message": "Машина с таким кодом уже есть"})
+
     car = Car(
-        code=p.get("code"),
-        brand=p.get("brand"),
-        model=p.get("model"),
-        plate=p.get("plate"),
-        year=int(p.get("year") or 0) or None,
-        purchase_date=p.get("purchase_date"),
-        purchase_price=int(p.get("purchase_price") or 0),
-        purchase_mileage=int(p.get("mileage") or 0),
-        current_mileage=int(p.get("mileage") or 0),
-        owner_type=p.get("owner_type") or "own",
-        investor_name=p.get("investor_name") or "",
-        investor_percent=int(p.get("investor_percent") or 0),
+        code=code_value,
+        brand=str(p.get("brand") or "").strip(),
+        model=str(p.get("model") or "").strip(),
+        plate=str(p.get("plate") or "").strip(),
+        year=only_int(p.get("year")) or None,
+        purchase_date=str(p.get("purchase_date") or "").strip(),
+        purchase_price=only_int(p.get("purchase_price")),
+        purchase_mileage=only_int(p.get("mileage")),
+        current_mileage=only_int(p.get("mileage")),
+        owner_type=str(p.get("owner_type") or "own").strip(),
+        investor_name=str(p.get("investor_name") or "").strip(),
+        investor_percent=only_int(p.get("investor_percent")),
         status="Работает"
     )
     s.add(car)
     s.commit()
     s.close()
-    return jsonify({"ok": True, "message": "Машина добавлена"})
+    return jsonify({"ok": True, "message": f"Машина {code_value} добавлена"})
+
 
 @app.route("/api/summary")
 def api_summary():
     s = Session()
     cars = s.query(Car).count()
-    own_cars = s.query(Car).filter_by(owner_type="own").count()
+    own_cars = s.query(Car).filter(Car.owner_type != "investor").count()
     investor_cars = s.query(Car).filter_by(owner_type="investor").count()
-    income = s.query(func.coalesce(func.sum(Income.amount),0)).scalar()
-    expenses = s.query(func.coalesce(func.sum(Expense.amount),0)).scalar()
-    investments = s.query(func.coalesce(func.sum(CarInvestment.amount),0)).scalar()
+    income = s.query(func.coalesce(func.sum(Income.amount), 0)).scalar()
+    expenses = s.query(func.coalesce(func.sum(Expense.amount), 0)).scalar()
+    investments = s.query(func.coalesce(func.sum(CarInvestment.amount), 0)).scalar()
     s.close()
-    return jsonify(dict(cars=cars, own_cars=own_cars, investor_cars=investor_cars, income=income, expenses=expenses, investments=investments, profit=income-expenses))
+    return jsonify(dict(cars=cars, own_cars=own_cars, investor_cars=investor_cars,
+                        income=income, expenses=expenses, investments=investments, profit=income - expenses))
+
 
 @app.route("/api/cars")
 def api_cars():
     owner_type = request.args.get("owner_type")
     s = Session()
     q = s.query(Car).order_by(Car.code)
-    if owner_type in ("own", "investor"):
-        q = q.filter_by(owner_type=owner_type)
+    if owner_type == "own":
+        q = q.filter(Car.owner_type != "investor")
+    elif owner_type == "investor":
+        q = q.filter_by(owner_type="investor")
+
     rows = []
     for c in q.all():
         income, expenses, investments, payouts, inv_in = car_finance(s, c.code)
-        rows.append(dict(code=c.code, brand=c.brand, model=c.model, plate=c.plate, mileage=c.current_mileage,
-                         status=c.status, income=income, expenses=expenses, car_investments=investments,
-                         profit=income-expenses, full_cost=(c.purchase_price or 0)+investments,
-                         purchase_price=c.purchase_price or 0, owner_type=c.owner_type or "own",
-                         investor_name=c.investor_name or "", investor_percent=c.investor_percent or 0,
-                         investor_invested=inv_in, investor_payouts=payouts))
+        rows.append(dict(code=c.code, brand=c.brand, model=c.model, plate=c.plate,
+                         mileage=c.current_mileage, status=c.status, income=income,
+                         expenses=expenses, car_investments=investments,
+                         profit=income - expenses,
+                         full_cost=(c.purchase_price or 0) + investments,
+                         purchase_price=c.purchase_price or 0,
+                         owner_type=c.owner_type or "own",
+                         investor_name=c.investor_name or "",
+                         investor_percent=c.investor_percent or 0,
+                         investor_invested=inv_in,
+                         investor_payouts=payouts))
     s.close()
     return jsonify(rows)
+
 
 @app.route("/api/investors")
 def api_investors():
     s = Session()
-    names = [r[0] for r in s.query(Car.investor_name).filter(Car.owner_type=="investor", Car.investor_name!="").distinct().all()]
+    names = [r[0] for r in s.query(Car.investor_name).filter(Car.owner_type == "investor", Car.investor_name != "").distinct().all()]
     out = []
     for name in names:
         cars = s.query(Car).filter_by(owner_type="investor", investor_name=name).all()
-        total_invested = s.query(func.coalesce(func.sum(InvestorInvestment.amount),0)).filter_by(investor_name=name).scalar()
-        total_payouts = s.query(func.coalesce(func.sum(InvestorPayout.amount),0)).filter_by(investor_name=name).scalar()
+        total_invested = s.query(func.coalesce(func.sum(InvestorInvestment.amount), 0)).filter_by(investor_name=name).scalar()
+        total_payouts = s.query(func.coalesce(func.sum(InvestorPayout.amount), 0)).filter_by(investor_name=name).scalar()
         details = []
         for c in cars:
             income, expenses, investments, payouts, inv_in = car_finance(s, c.code)
             profit = income - expenses
             to_investor = round(profit * (c.investor_percent or 0) / 100)
             details.append(dict(code=c.code, car=f"{c.brand or ''} {c.model or ''}", percent=c.investor_percent or 0,
-                                income=income, expenses=expenses, profit=profit, to_investor=to_investor,
-                                invested=inv_in, payouts=payouts))
+                                income=income, expenses=expenses, profit=profit,
+                                to_investor=to_investor, invested=inv_in, payouts=payouts))
         out.append(dict(name=name, total_invested=total_invested, total_payouts=total_payouts,
-                        balance=total_invested-total_payouts, cars=details))
+                        balance=total_invested - total_payouts, cars=details))
     s.close()
     return jsonify(out)
+
 
 @app.route("/api/operations")
 def api_operations():
     s = Session()
     rows = [dict(id=o.id, date=o.date.strftime("%d.%m.%Y %H:%M"), car_code=o.car_code, type=o.type,
-                 category=o.category, description=o.description, amount=o.amount, mileage=o.mileage, raw=o.raw_message)
+                 category=o.category, description=o.description, amount=o.amount,
+                 mileage=o.mileage, raw=o.raw_message)
             for o in s.query(Operation).order_by(Operation.id.desc()).limit(80).all()]
     s.close()
     return jsonify(rows)
+
 
 HTML = r"""
 <!doctype html><html lang="ru"><head><meta charset="utf-8"><title>FleetAI Cloud</title>
@@ -528,7 +554,7 @@ table{width:100%;border-collapse:collapse}td,th{padding:9px;border-bottom:1px so
 @media(max-width:800px){.grid{grid-template-columns:1fr 1fr}input.msg{width:100%;margin-bottom:8px}table{font-size:12px}}
 </style></head><body><div class="wrap"><h1>🚗 FleetAI Cloud</h1>
 <div id="summary"></div>
-<div class="card"><input class="msg" id="msg" placeholder="665 доп ГБО 35000р / 665 получил 14500 / 665 стойка стаба AMD справа 1000 работа 1000"><button onclick="add()">Записать</button><p id="res"></p></div>
+<div class="card"><input class="msg" id="msg" placeholder="703 получил 13000"><button onclick="add()">Записать</button><p id="res"></p></div>
 
 <div class="card warn"><h2>Инвесторы</h2><div id="investors"></div></div>
 
@@ -564,3 +590,8 @@ init_seed()
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", 8000)))
+'''
+
+path = Path("/mnt/data/app.py")
+path.write_text(app_code, encoding="utf-8")
+print(path)
