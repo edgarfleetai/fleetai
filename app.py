@@ -1,6 +1,4 @@
-from pathlib import Path
-
-app_code = r'''import os
+import os
 import re
 from datetime import datetime
 from flask import Flask, request, jsonify, render_template_string
@@ -9,7 +7,6 @@ from sqlalchemy.orm import declarative_base, sessionmaker
 
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///fleet.db")
 
-# Render PostgreSQL URL fix for psycopg v3
 if DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql+psycopg://", 1)
 elif DATABASE_URL.startswith("postgresql://") and not DATABASE_URL.startswith("postgresql+psycopg://"):
@@ -176,12 +173,7 @@ PARTS = {
     "выхлоп": ("Выхлоп", "Выхлоп"),
     "краска": ("Покраска", "Кузов"),
 }
-
 BRANDS = ["amd", "ctr", "mann", "mando", "lynx", "hi-q", "hiq", "sachs", "kyb", "gates", "bosch", "ngk", "denso", "shell", "лукойл"]
-
-
-def rub(n):
-    return f"{int(n or 0):,}".replace(",", " ") + " ₽"
 
 
 def only_int(v):
@@ -303,7 +295,6 @@ def parse_message(message):
 
     price = re.search(r"(стоимость|цена)\s*(\d+)", text)
     labor = re.search(r"(работа|ремонт)\s*(\d+)", text)
-
     if price:
         data["part_price"] = int(price.group(2))
     if labor:
@@ -374,13 +365,10 @@ def save(data):
 
     if data["type"] == "income":
         s.add(Income(operation_id=op.id, car_code=car.code, amount=data["income"], income_type=data["description"]))
-
     elif data["type"] in ("repair", "service", "expense"):
         s.add(Expense(operation_id=op.id, car_code=car.code, category=data["category"], amount=data["total"], share_type=data.get("share_type", "shared")))
-
     elif data["type"] == "car_investment":
         s.add(CarInvestment(operation_id=op.id, car_code=car.code, category=data["category"], description=data["description"], amount=data["total"], raw_message=data["raw"]))
-
     elif data["type"] == "investor_investment":
         s.add(InvestorInvestment(operation_id=op.id, car_code=car.code, investor_name=data["investor_name"], amount=data["total"], percent=data["investor_percent"], comment=data["raw"]))
         if data["investor_name"]:
@@ -388,7 +376,6 @@ def save(data):
             car.investor_name = data["investor_name"]
         if data["investor_percent"]:
             car.investor_percent = data["investor_percent"]
-
     elif data["type"] == "investor_payout":
         s.add(InvestorPayout(operation_id=op.id, car_code=car.code, investor_name=data["investor_name"], amount=data["total"], comment=data["raw"]))
 
@@ -434,8 +421,8 @@ def api_add():
 def api_add_car():
     p = request.json or {}
     s = Session()
-
     code_value = normalize_code(p.get("code"))
+
     if not code_value:
         s.close()
         return jsonify({"ok": False, "message": "Укажи код машины"})
@@ -541,7 +528,7 @@ def api_operations():
     return jsonify(rows)
 
 
-HTML = r"""
+HTML = """
 <!doctype html><html lang="ru"><head><meta charset="utf-8"><title>FleetAI Cloud</title>
 <style>
 body{font-family:Arial;background:#f3f5f7;margin:0;color:#111827}.wrap{max-width:1280px;margin:auto;padding:24px}
@@ -590,8 +577,3 @@ init_seed()
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", 8000)))
-'''
-
-path = Path("/mnt/data/app.py")
-path.write_text(app_code, encoding="utf-8")
-print(path)
