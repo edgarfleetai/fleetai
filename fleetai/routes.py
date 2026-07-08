@@ -466,6 +466,32 @@ def api_close_period(code):
 
 
 
+
+def investor_total_invested_for_car(session, car):
+    """Возвращает все вложения инвестора по машине.
+
+    Сюда входят:
+    - InvestorInvestment: команды вида "636 инвестор вложил 25000";
+    - CarInvestment: команды вида "550 доп вложения 66900" для машин инвестора.
+
+    Так доп. вложения по инвесторской машине не теряются в карточке инвестора.
+    """
+    code = normalize_code(car.code)
+
+    investor_in = sum(
+        (row.amount or 0)
+        for row in session.query(InvestorInvestment).all()
+        if normalize_code(row.car_code) == code
+    )
+
+    car_extra_in = sum(
+        (row.amount or 0)
+        for row in session.query(CarInvestment).all()
+        if normalize_code(row.car_code) == code
+    )
+
+    return investor_in + car_extra_in
+
 @bp.route("/api/fix-investor-data", methods=["POST", "GET"])
 def api_fix_investor_data():
     session = Session()
@@ -483,10 +509,10 @@ def api_investors_summary():
     totals = dict(total_invested=0, total_payouts=0, income=0, expenses=0, profit=0, investor_share=0, owner_share=0, investor_debt_to_park=0, park_debt_to_investor=0, available_to_pay=0)
     for name in names:
         cars = session.query(Car).filter_by(owner_type="investor", investor_name=name).all()
-        total_invested = session.query(func.coalesce(func.sum(InvestorInvestment.amount), 0)).filter_by(investor_name=name).scalar()
         total_payouts = session.query(func.coalesce(func.sum(InvestorPayout.amount), 0)).filter_by(investor_name=name).scalar()
-        row = dict(name=name, cars_count=len(cars), total_invested=total_invested, total_payouts=total_payouts, income=0, expenses=0, profit=0, investor_share=0, owner_share=0, investor_debt_to_park=0, park_debt_to_investor=0, available_to_pay=0)
+        row = dict(name=name, cars_count=len(cars), total_invested=0, total_payouts=total_payouts, income=0, expenses=0, profit=0, investor_share=0, owner_share=0, investor_debt_to_park=0, park_debt_to_investor=0, available_to_pay=0)
         for car in cars:
+            row["total_invested"] += investor_total_invested_for_car(session, car)
             income, expenses, investments, payouts, investor_invested, downtime_days = car_finance(session, car.code)
             profit = income - expenses
             bal = investor_balance_for_car(session, car)
@@ -518,8 +544,10 @@ def api_investors():
     for name in names:
         cars = session.query(Car).filter_by(owner_type="investor", investor_name=name).all()
         details = []
-        totals = dict(total_invested=session.query(func.coalesce(func.sum(InvestorInvestment.amount), 0)).filter_by(investor_name=name).scalar(), total_payouts=session.query(func.coalesce(func.sum(InvestorPayout.amount), 0)).filter_by(investor_name=name).scalar(), total_profit=0, total_to_investor=0, investor_debt_to_park=0, available_to_pay=0)
+        totals = dict(total_invested=0, total_payouts=session.query(func.coalesce(func.sum(InvestorPayout.amount), 0)).filter_by(investor_name=name).scalar(), total_profit=0, total_to_investor=0, investor_debt_to_park=0, available_to_pay=0)
         for car in cars:
+            car_total_invested = investor_total_invested_for_car(session, car)
+            totals["total_invested"] += car_total_invested
             income, expenses, investments, payouts, investor_invested, downtime_days = car_finance(session, car.code)
             profit = income - expenses
             bal = investor_balance_for_car(session, car)
@@ -529,7 +557,7 @@ def api_investors():
             totals["total_to_investor"] += share
             totals["investor_debt_to_park"] += bal["investor_debt_to_park"]
             totals["available_to_pay"] += bal["available_to_pay"]
-            details.append({"code": car.code, "car": f"{car.brand or ''} {car.model or ''}", "percent": car.investor_percent or 0, "income": income, "expenses": expenses, "profit": split_profit, "to_investor": share, "available_to_pay": bal["available_to_pay"], "investor_debt_to_park": bal["investor_debt_to_park"]})
+            details.append({"code": car.code, "car": f"{car.brand or ''} {car.model or ''}", "percent": car.investor_percent or 0, "income": income, "expenses": expenses, "profit": split_profit, "to_investor": share, "available_to_pay": bal["available_to_pay"], "investor_debt_to_park": bal["investor_debt_to_park"], "invested": car_total_invested})
         result.append({"name": name, "cars": details, **totals})
     session.close()
     return jsonify(result)
