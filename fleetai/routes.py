@@ -93,6 +93,91 @@ def cleanup_legacy_investor_mess(session):
 
 
 
+def split_message_parts(message):
+    message = (message or "").strip()
+    parts = [p.strip() for p in message.split("/") if p.strip()]
+    return parts or [message]
+
+
+def create_dependencies_from_parsed(session, op, car, data):
+    """Создает связанные записи для уже существующей операции.
+
+    Нужно для полного пересчета: удалили старые Income/Expense/Investor...
+    и заново собрали их из raw_message операций.
+    """
+    if data["type"] == "income":
+        session.add(Income(operation_id=op.id, car_code=car.code, amount=data["income"], income_type=data["description"]))
+
+    elif data["type"] in ("repair", "service", "expense"):
+        session.add(Expense(operation_id=op.id, car_code=car.code, category=data["category"], amount=data["total"], share_type=data.get("share_type", "shared")))
+
+    elif data["type"] == "car_investment":
+        session.add(CarInvestment(operation_id=op.id, car_code=car.code, category=data["category"], description=data["description"], amount=data["total"], raw_message=data["raw"]))
+
+    elif data["type"] == "investor_investment":
+        investor_name = data.get("investor_name") or car.investor_name or ""
+        session.add(InvestorInvestment(
+            operation_id=op.id,
+            car_code=car.code,
+            investor_name=investor_name,
+            amount=data["total"],
+            percent=data["investor_percent"] or car.investor_percent or 0,
+            comment=data["raw"],
+        ))
+        car.owner_type = "investor"
+        if investor_name:
+            car.investor_name = investor_name
+        if data.get("investor_percent"):
+            car.investor_percent = data["investor_percent"]
+
+    elif data["type"] == "investor_payout":
+        session.add(InvestorPayout(operation_id=op.id, car_code=car.code, investor_name=data.get("investor_name") or car.investor_name or "", amount=data["total"], comment=data["raw"]))
+
+    elif data["type"] == "investor_expense_split":
+        session.add(InvestorSettlement(
+            operation_id=op.id,
+            investor_name=car.investor_name or data.get("investor_name", ""),
+            car_code=car.code,
+            total_cost=data["total_cost"],
+            investor_paid=data["investor_paid"],
+            park_paid=data["park_paid"],
+            investor_debt_to_park=data["investor_debt_to_park"],
+            park_debt_to_investor=data["park_debt_to_investor"],
+            description=data["description"],
+            comment=data["raw"],
+        ))
+        session.add(Expense(operation_id=op.id, car_code=car.code, category="Доп. расходы", amount=data["total_cost"], share_type="shared"))
+
+    elif data["type"] == "downtime":
+        session.add(Downtime(
+            operation_id=op.id,
+            car_code=car.code,
+            start_date=data.get("start_date") or datetime.now(),
+            end_date=data.get("end_date"),
+            days=data.get("days", 0),
+            reason=data["description"],
+            active=data.get("active", 0),
+            comment=data["raw"],
+        ))
+
+    if data.get("part"):
+        session.add(Part(
+            car_code=car.code,
+            operation_id=op.id,
+            part_name=data["part"],
+            brand=data["brand"],
+            position=data["position"],
+            price=data["part_price"],
+            labor=data["labor"],
+            install_mileage=data["mileage"],
+        ))
+
+    if data.get("mileage"):
+        car.current_mileage = data["mileage"]
+        session.add(Mileage(car_code=car.code, mileage=data["mileage"], source=data["raw"]))
+
+
+
 def save_operation(data):
     session = Session()
     car = find_car(session, data.get("car_code"))
@@ -523,6 +608,81 @@ def api_reset_car_investor(code):
     session.close()
     return jsonify({"ok": True, "message": f"Инвестор у машины {code} убран"})
 
+
+
+
+@bp.route("/api/reassign-car-investor", methods=["POST"])
+def api_reassign_car_investor():
+    payload = request.json or {}
+    code = normalize_code(payload.get("code"))
+    new_name = (payload.get("investor_name") or "").strip()
+    percent = only_int(payload.get("percent")) or 75
+
+    session = Session()
+    car = find_car(session, code)
+    if not car:
+        session.close()
+        return jsonify({"ok": False, "message": "Машина не найдена"})
+
+    if not new_name:
+        session.close()
+        return jsonify({"ok": False, "message": "Укажи имя инвестора"})
+
+    old_name = car.investor_name or ""
+    car.owner_type = "investor"
+    car.investor_name = new_name
+    car.investor_percent = percent
+
+    # Перекидываем все инвесторские записи этой машины на правильного инвестора.
+    for model in (InvestorInvestment, InvestorPayout, InvestorSettlement):
+        for row in session.query(model).all():
+            if normalize_code(getattr(row, "car_code", "")) == normalize_code(code):
+                row.investor_name = new_name
+
+    session.commit()
+    session.close()
+    return jsonify({"ok": True, "message": f"Машина {code}: инвестор изменен с '{old_name}' на '{new_name}', процент {percent}%"})
+
+
+@bp.route("/api/rebuild-calculations", methods=["POST", "GET"])
+def api_rebuild_calculations():
+    """Полностью пересобирает расчетные таблицы из истории операций.
+
+    Это нужно после ручного удаления ошибочных строк: удаляем старые производные
+    данные и заново строим Income/Expense/Investor... по Operation.raw_message.
+    """
+    session = Session()
+
+    # 1. Удаляем все производные расчеты. Сами Operation и Car не трогаем.
+    for model in (Income, Expense, Part, CarInvestment, InvestorInvestment, InvestorPayout, Mileage, Downtime, InvestorSettlement):
+        for row in session.query(model).all():
+            session.delete(row)
+    session.flush()
+
+    rebuilt = 0
+    skipped = 0
+
+    # 2. Заново собираем производные таблицы из операций.
+    for op in session.query(Operation).order_by(Operation.id).all():
+        first_code = normalize_code(op.car_code)
+        for part in split_message_parts(op.raw_message or ""):
+            parsed = parse_message(part)
+            if parsed.get("car_code"):
+                first_code = parsed.get("car_code")
+            elif first_code:
+                parsed["car_code"] = first_code
+
+            car = find_car(session, parsed.get("car_code"))
+            if not car or parsed.get("type") == "unknown":
+                skipped += 1
+                continue
+
+            create_dependencies_from_parsed(session, op, car, parsed)
+            rebuilt += 1
+
+    session.commit()
+    session.close()
+    return jsonify({"ok": True, "message": f"Пересчет выполнен. Восстановлено записей: {rebuilt}. Пропущено: {skipped}."})
 
 @bp.route("/api/operations")
 def api_operations():

@@ -11,7 +11,17 @@ table{width:100%;border-collapse:collapse}td,th{padding:9px;border-bottom:1px so
 </style></head><body><div class="wrap"><h1>🚗 FleetAI 3.0</h1>
 <div id="summary"></div>
 <div class="card"><input class="msg" id="msg" placeholder="703 получил 13000 / 703 доп расходы 41700 инвестор оплатил 25000"><button onclick="add()">Записать</button><p id="res"></p></div>
-<div class="card warn"><h2>Инвесторы</h2><button onclick="fixInvestorData()">Исправить старые неверные расчеты</button><div id="investorsSummary"></div><div id="investors"></div></div>
+<div class="card warn"><h2>Инвесторы</h2>
+<button onclick="fixInvestorData()">Исправить старые неверные расчеты</button>
+<button onclick="rebuildCalculations()">Пересчитать базу</button>
+<div class="card"><h3>Ручное исправление инвестора у машины</h3>
+<input id="fix_code" placeholder="Код машины, например 636">
+<input id="fix_name" placeholder="Правильный инвестор, например илья">
+<input id="fix_percent" placeholder="%, например 75">
+<button onclick="reassignInvestor()">Перекинуть машину к инвестору</button>
+<p>Используй это для ошибок типа инвестор «Вложил». Сначала перекинь машину, потом нажми «Пересчитать базу».</p>
+</div>
+<div id="investorsSummary"></div><div id="investors"></div></div>
 <div class="card"><h2>Добавить машину</h2><select id="owner_type"><option value="own">Моя машина</option><option value="investor">Машина инвестора</option></select><input id="code" placeholder="Код 777"><input id="brand" placeholder="Марка"><input id="model" placeholder="Модель"><input id="plate" placeholder="Госномер"><input id="year" placeholder="Год"><input id="purchase_date" placeholder="Дата покупки"><input id="purchase_price" placeholder="Цена покупки"><input id="mileage" placeholder="Пробег"><input id="investor_name" placeholder="Имя инвестора"><input id="investor_percent" placeholder="% инвестора"><input id="settlement_day" placeholder="Расчетный день 15"><button onclick="addCar()">Добавить авто</button><p id="carRes"></p></div>
 <div class="card"><h2>Машины</h2><table id="cars"></table></div>
 <div id="carCard"></div>
@@ -20,6 +30,8 @@ table{width:100%;border-collapse:collapse}td,th{padding:9px;border-bottom:1px so
 async function api(u,o){let r=await fetch(u,o);return await r.json()}
 function rub(n){return (n||0).toLocaleString('ru-RU')+' ₽'}
 async function fixInvestorData(){let r=await api('/api/fix-investor-data',{method:'POST'});alert(r.message);await load()}
+async function rebuildCalculations(){if(!confirm('Пересобрать расчеты из истории операций? Это исправит зависшие неверные суммы.')) return; let r=await api('/api/rebuild-calculations',{method:'POST'}); alert(r.message); await load()}
+async function reassignInvestor(){let payload={code:fix_code.value, investor_name:fix_name.value, percent:fix_percent.value||75}; let r=await api('/api/reassign-car-investor',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}); alert(r.message); await load()}
 
 async function deleteOperation(id){
   if(!confirm('Удалить операцию #' + id + '? Расчеты сразу пересчитаются.')) return;
