@@ -829,7 +829,17 @@ async function closeDowntime(code){
 }
 async function loadOps(){let o=await api('/api/operations'); ops.innerHTML='<tr><th>Дата</th><th>Машина</th><th>Тип</th><th>Описание</th><th>Сумма</th><th>Сообщение</th></tr>'+o.map(x=>`<tr><td>${x.date}</td><td>${x.car_code}</td><td>${x.type}</td><td>${x.description||''}</td><td>${rub(x.amount)}</td><td>${x.raw||''}</td></tr>`).join('')}
 async function load(){await loadSummary(); await loadInvestors(); await loadCars(currentFilter); await loadOps()}
-async function add(){let m=msg.value; let r=await api('/api/add',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:m})}); res.innerText=r.message; msg.value=''; load()}
+async function add(){
+  let m=msg.value;
+  try{
+    let r=await api('/api/add',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:m})});
+    res.innerText=r.message || JSON.stringify(r);
+    if(r.ok){msg.value='';}
+    await load();
+  }catch(e){
+    res.innerText='Ошибка записи. Открой Render Logs или проверь /api/add. ' + e;
+  }
+}
 async function addCar(){let payload={owner_type:owner_type.value,code:code.value,brand:brand.value,model:model.value,plate:plate.value,year:year.value,purchase_date:purchase_date.value,purchase_price:purchase_price.value,mileage:mileage.value,investor_name:investor_name.value,investor_percent:investor_percent.value}; let r=await api('/api/add-car',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}); carRes.innerText=r.message; load()}
 msg.addEventListener('keydown',e=>{if(e.key==='Enter')add()}); load();
 </script></body></html>
