@@ -1,39 +1,21 @@
-# FleetAI v0.3 CLEAN
+# FleetAI 2.0
 
-Чистая версия для Render + PostgreSQL.
+Структура проекта:
 
-## Важно
+- `app.py` — маршруты Flask
+- `models.py` — таблицы базы
+- `db.py` — подключение к PostgreSQL
+- `migrations.py` — безопасное создание/обновление таблиц
+- `parser.py` — разбор сообщений
+- `finance.py` — финансы, периоды, инвесторы
+- `templates.py` — интерфейс сайта
 
-В проекте больше нет `psycopg2-binary`. Используется `psycopg[binary]`.
-
-## Render Environment
-
-Нужна переменная:
-
-```text
-DATABASE_URL=<Internal Database URL из Render Postgres>
-```
-
-## Render Settings
-
+Запуск на Render:
 Build Command:
-
-```text
-pip install -r requirements.txt
-```
+`pip install -r requirements.txt`
 
 Start Command:
+`gunicorn app:app --bind 0.0.0.0:$PORT`
 
-```text
-gunicorn app:app
-```
-
-## Проверка
-
-После деплоя:
-
-```text
-665 получил 1000
-665 доп ГБО 35000р
-665 стойка стаба AMD справа пробег 243000 стоимость 1000 ремонт 1000
-```
+Environment:
+`DATABASE_URL`
