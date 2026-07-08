@@ -25,36 +25,76 @@ def car_finance(session, code):
 
 
 def investor_balance_for_car(session, car):
+    """Правильный расчет инвестора по машине.
+
+    Логика для ситуации запуска машины:
+    - машина получила доход;
+    - были доп. расходы/расходы после покупки;
+    - инвестор внес часть денег на эти расходы;
+    - остаток расходов закрывается ТОЛЬКО долей инвестора, например 75%, а не всей выручкой.
+
+    Пример:
+    доход 13 000, расходы 41 700, инвестор внес 25 000, доля 75%.
+    долг = 41 700 - 25 000 = 16 700
+    доля инвестора = 13 000 * 75% = 9 750
+    остаток долга = 16 700 - 9 750 = 6 950
+    к выплате = 0
+    """
     if car.owner_type != "investor":
         return {
-            "investor_debt_to_park": 0, "park_debt_to_investor": 0,
-            "investor_share_total": 0, "paid_to_investor": 0,
-            "debt_repaid_by_profit": 0, "available_to_pay": 0,
+            "investor_debt_to_park": 0,
+            "park_debt_to_investor": 0,
+            "investor_share_total": 0,
+            "paid_to_investor": 0,
+            "debt_repaid_by_profit": 0,
+            "available_to_pay": 0,
             "normal_profit_for_split": 0,
+            "debt_base": 0,
+            "investor_extra_paid": 0,
+            "extra_expenses": 0,
+            "park_share_total": 0,
         }
 
     income, expenses, investments, payouts, investor_invested, downtime_days = car_finance(session, car.code)
     percent = car.investor_percent or 0
 
-    debt = 0
+    # Данные из явных взаиморасчетов: "636 доп расходы 41700 инвестор оплатил 25000"
+    settlement_debt = 0
     park_debt = 0
-    split_expenses = 0
+    settlement_expenses = 0
+    settlement_investor_paid = 0
+
     for row in session.query(InvestorSettlement).all():
         if normalize_code(row.car_code) == normalize_code(car.code):
-            debt += row.investor_debt_to_park or 0
+            settlement_debt += row.investor_debt_to_park or 0
             park_debt += row.park_debt_to_investor or 0
-            split_expenses += row.total_cost or 0
+            settlement_expenses += row.total_cost or 0
+            settlement_investor_paid += row.investor_paid or 0
 
-    # ВАЖНО: расходы запуска/доп. расходы, по которым создан взаиморасчет,
-    # не должны второй раз уменьшать долю инвестора. Они уже отражены как долг.
-    # Поэтому для расчета доли берем: доход - обычные расходы, кроме split_expenses.
-    normal_expenses = max((expenses or 0) - split_expenses, 0)
+    # Если явного взаиморасчета нет, но есть расходы и инвестор внес деньги,
+    # считаем это запуском/доп. расходами: расходы - вложение инвестора = долг инвестора.
+    # Это именно твой кейс: расход 41 700, инвестор внес 25 000.
+    if settlement_expenses > 0:
+        extra_expenses = settlement_expenses
+        investor_extra_paid = settlement_investor_paid
+        debt_base = settlement_debt
+    else:
+        extra_expenses = expenses or 0
+        investor_extra_paid = investor_invested or 0
+        debt_base = max(extra_expenses - investor_extra_paid, 0)
+
+    # Расходы, которые сформировали долг/запуск, не должны второй раз уменьшать долю инвестора.
+    # Поэтому для деления 75/25 берем доход минус обычные расходы, НЕ включая extra_expenses.
+    normal_expenses = max((expenses or 0) - (extra_expenses or 0), 0)
     normal_profit_for_split = (income or 0) - normal_expenses
-    investor_share_total = round(normal_profit_for_split * percent / 100)
 
-    # Долг инвестора закрывается только его долей, например 75%, а не всей выручкой.
-    debt_repaid = min(max(investor_share_total, 0), debt)
-    remaining_debt = max(debt - debt_repaid, 0)
+    investor_share_total = round(max(normal_profit_for_split, 0) * percent / 100)
+    park_share_total = max(normal_profit_for_split, 0) - investor_share_total
+
+    # Долг инвестора закрывается только его долей.
+    debt_repaid = min(investor_share_total, debt_base)
+    remaining_debt = max(debt_base - debt_repaid, 0)
+
     available = max(investor_share_total - debt_repaid, 0) + park_debt - payouts
 
     return {
@@ -65,8 +105,11 @@ def investor_balance_for_car(session, car):
         "debt_repaid_by_profit": debt_repaid,
         "available_to_pay": available,
         "normal_profit_for_split": normal_profit_for_split,
+        "debt_base": debt_base,
+        "investor_extra_paid": investor_extra_paid,
+        "extra_expenses": extra_expenses,
+        "park_share_total": park_share_total,
     }
-
 
 def period_bounds_for_car(car, now=None):
     now = now or datetime.now()

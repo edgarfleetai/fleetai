@@ -490,12 +490,15 @@ def api_investors_summary():
             income, expenses, investments, payouts, investor_invested, downtime_days = car_finance(session, car.code)
             profit = income - expenses
             bal = investor_balance_for_car(session, car)
+            # Для инвесторского расчета показываем прибыль, которая реально делится,
+            # то есть доход минус обычные расходы. Доп. расходы запуска уходят в долг.
+            split_profit = bal.get("normal_profit_for_split", profit)
             share = bal["investor_share_total"]
             row["income"] += income
             row["expenses"] += expenses
-            row["profit"] += profit
+            row["profit"] += split_profit
             row["investor_share"] += share
-            row["owner_share"] += profit - share
+            row["owner_share"] += bal.get("park_share_total", max(split_profit - share, 0))
             row["investor_debt_to_park"] += bal["investor_debt_to_park"]
             row["park_debt_to_investor"] += bal["park_debt_to_investor"]
             row["available_to_pay"] += bal["available_to_pay"]
@@ -520,12 +523,13 @@ def api_investors():
             income, expenses, investments, payouts, investor_invested, downtime_days = car_finance(session, car.code)
             profit = income - expenses
             bal = investor_balance_for_car(session, car)
+            split_profit = bal.get("normal_profit_for_split", profit)
             share = bal["investor_share_total"]
-            totals["total_profit"] += profit
+            totals["total_profit"] += split_profit
             totals["total_to_investor"] += share
             totals["investor_debt_to_park"] += bal["investor_debt_to_park"]
             totals["available_to_pay"] += bal["available_to_pay"]
-            details.append({"code": car.code, "car": f"{car.brand or ''} {car.model or ''}", "percent": car.investor_percent or 0, "income": income, "expenses": expenses, "profit": profit, "to_investor": share, "available_to_pay": bal["available_to_pay"], "investor_debt_to_park": bal["investor_debt_to_park"]})
+            details.append({"code": car.code, "car": f"{car.brand or ''} {car.model or ''}", "percent": car.investor_percent or 0, "income": income, "expenses": expenses, "profit": split_profit, "to_investor": share, "available_to_pay": bal["available_to_pay"], "investor_debt_to_park": bal["investor_debt_to_park"]})
         result.append({"name": name, "cars": details, **totals})
     session.close()
     return jsonify(result)
