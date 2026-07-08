@@ -143,6 +143,7 @@ class Downtime(Base):
     days = Column(Integer, default=0)
     reason = Column(String)
     comment = Column(Text)
+    active = Column(Integer, default=0)
 
 
 PARTS = {
@@ -261,17 +262,18 @@ def parse_message(message):
         data["total"] = sum(nums) if nums else 0
         return data
     # Простой машины
-    if "простой" in text or "стояла" in text or "стоял" in text or "не работала" in text or "не работал" in text:
+    if "простой" in text or "стояла" in text or "стоял" in text or "стоит" in text or "в простое" in text or "не работала" in text or "не работал" in text:
         data["type"] = "downtime"
         data["category"] = "Простой"
         data["total"] = 0
 
-        start_dt, end_dt, period_days, period_reason = parse_downtime_period(text)
+        start_dt, end_dt, period_days, period_reason, active = parse_downtime_period(text)
 
         if period_days:
             data["days"] = period_days
             data["start_date"] = start_dt
             data["end_date"] = end_dt
+            data["active"] = active
             data["description"] = period_reason or "Простой"
             return data
 
@@ -378,6 +380,7 @@ def ensure_schema():
         "ALTER TABLE expenses ADD COLUMN share_type VARCHAR DEFAULT 'shared'",
         "ALTER TABLE car_investments ADD COLUMN investor_name VARCHAR DEFAULT ''",
         "ALTER TABLE downtime ADD COLUMN operation_id INTEGER",
+        "ALTER TABLE downtime ADD COLUMN active INTEGER DEFAULT 0",
     ]
     with engine.begin() as conn:
         for sql in migrations:
@@ -444,6 +447,7 @@ def save(data):
             end_date=data.get("end_date"),
             days=data.get("days", 0),
             reason=data["description"],
+            active=data.get("active", 0),
             comment=data["raw"]
         ))
 
@@ -624,7 +628,9 @@ def api_car_card(code):
     downtime = [
         {
             "date": row.start_date.strftime("%d.%m.%Y %H:%M") if row.start_date else "",
-            "days": row.days or 0,
+            "end_date": row.end_date.strftime("%d.%m.%Y %H:%M") if row.end_date else "",
+            "days": max((datetime.now().date() - row.start_date.date()).days, 1) if getattr(row, "active", 0) and row.start_date else (row.days or 0),
+            "active": row.active or 0,
             "reason": row.reason or "",
             "comment": row.comment or "",
         }
@@ -662,6 +668,45 @@ def api_car_card(code):
         "downtime": downtime,
     })
 
+
+
+@app.route("/api/close-downtime/<code>", methods=["POST"])
+def api_close_downtime(code):
+    s = Session()
+    car = find_car(s, code)
+
+    if not car:
+        s.close()
+        return jsonify({"ok": False, "message": "Машина не найдена"})
+
+    rows = s.query(Downtime).filter(
+        func.trim(Downtime.car_code) == normalize_code(car.code),
+        Downtime.active == 1
+    ).all()
+
+    if not rows:
+        s.close()
+        return jsonify({"ok": False, "message": "Активного простоя нет"})
+
+    now = datetime.now()
+    for row in rows:
+        row.end_date = now
+        row.days = max((now.date() - row.start_date.date()).days, 1) if row.start_date else (row.days or 0)
+        row.active = 0
+
+    op = Operation(
+        car_code=car.code,
+        type="downtime_closed",
+        category="Простой",
+        description="Простой закрыт",
+        amount=0,
+        raw_message=f"{car.code} вышла из простоя"
+    )
+    s.add(op)
+    s.commit()
+    s.close()
+
+    return jsonify({"ok": True, "message": "Простой закрыт"})
 
 @app.route("/api/investors")
 def api_investors():
@@ -772,7 +817,13 @@ function rub(n){return (n||0).toLocaleString('ru-RU')+' ₽'}
 async function loadSummary(){let s=await api('/api/summary'); summary.innerHTML=`<div class="grid"><div class="stat">Всего <b>${s.cars}</b></div><div class="stat">Мои <b>${s.own_cars}</b></div><div class="stat">Инвесторов <b>${s.investor_cars}</b></div><div class="stat">Доход <b>${rub(s.income)}</b></div><div class="stat">Расход <b>${rub(s.expenses)}</b></div><div class="stat">Прибыль <b>${rub(s.profit)}</b></div><div class="stat">Простой <b>${s.downtime_days||0} дн.</b></div></div>`}
 async function loadInvestors(){let d=await api('/api/investors'); if(!d.length){investors.innerHTML='Пока нет машин инвесторов';return} investors.innerHTML=d.map(i=>`<div class="card"><h3>${i.name}</h3><b>Вложил:</b> ${rub(i.total_invested)} | <b>Выплачено:</b> ${rub(i.total_payouts)} | <b>Остаток:</b> ${rub(i.balance)} | <b>Общая прибыль:</b> ${rub(i.total_profit)} | <b>Доля инвестора:</b> ${rub(i.total_to_investor)} | <b>Простой:</b> ${i.total_downtime_days||0} дн.<table><tr><th>Машина</th><th>%</th><th>Доход</th><th>Расход</th><th>Прибыль</th><th>Инвестору</th><th>Простой</th><th>Карточка</th></tr>${i.cars.map(c=>`<tr><td>${c.code} ${c.car}</td><td>${c.percent}%</td><td>${rub(c.income)}</td><td>${rub(c.expenses)}</td><td>${rub(c.profit)}</td><td>${rub(c.to_investor)}</td><td>${c.downtime_days||0} дн.</td><td><button onclick="openCar('${c.code}')">Открыть</button></td></tr>`).join('')}</table></div>`).join('')}
 async function loadCars(filter='all'){currentFilter=filter; ['all','own','investor'].forEach(x=>document.getElementById('tab_'+x).classList.remove('active')); document.getElementById('tab_'+filter).classList.add('active'); let url='/api/cars'; if(filter!=='all')url+='?owner_type='+filter; let c=await api(url); cars.innerHTML='<tr><th>Тип</th><th>Код</th><th>Авто</th><th>Госномер</th><th>Инвестор</th><th>%</th><th>Пробег</th><th>Стоимость</th><th>Доход</th><th>Расход</th><th>Прибыль</th><th>Простой</th><th>Карточка</th></tr>'+c.map(x=>`<tr><td><span class="badge">${x.owner_type==='investor'?'Инвестор':'Моя'}</span></td><td>${x.code}</td><td>${x.brand||''} ${x.model||''}</td><td>${x.plate||''}</td><td>${x.investor_name||''}</td><td>${x.investor_percent||0}</td><td>${x.mileage||0}</td><td>${rub(x.full_cost)}</td><td>${rub(x.income)}</td><td>${rub(x.expenses)}</td><td class="${x.profit>=0?'ok':'bad'}">${rub(x.profit)}</td><td>${x.downtime_days||0} дн.</td><td><button onclick="openCar('${x.code}')">Открыть</button></td></tr>`).join('')}
-async function openCar(code){let d=await api('/api/car/'+code); if(!d.ok){alert(d.message);return} let c=d.car; let html=`<div class="card"><h2>${c.code} ${c.brand||''} ${c.model||''}</h2><p><b>Госномер:</b> ${c.plate||''}</p><p><b>Год:</b> ${c.year||''}</p><p><b>Пробег:</b> ${c.mileage||0}</p><p><b>Стоимость покупки:</b> ${rub(c.purchase_price)}</p><p><b>Доп. вложения:</b> ${rub(c.investments)}</p><p><b>Полная стоимость:</b> ${rub(c.full_cost)}</p><p><b>Доход:</b> ${rub(c.income)}</p><p><b>Расход:</b> ${rub(c.expenses)}</p><p><b>Прибыль:</b> ${rub(c.profit)}</p><p><b>Дни простоя:</b> ${c.downtime_days||0} дн.</p><p><b>Инвестор:</b> ${c.investor_name||'-'} ${c.investor_percent?'('+c.investor_percent+'%)':''}</p></div><div class="card"><h3>Простои</h3><table><tr><th>Дата</th><th>Дней</th><th>Причина</th><th>Комментарий</th></tr>${d.downtime.map(o=>`<tr><td>${o.date}</td><td>${o.days}</td><td>${o.reason||''}</td><td>${o.comment||''}</td></tr>`).join('')}</table></div><div class="card"><h3>История машины</h3><table><tr><th>Дата</th><th>Тип</th><th>Описание</th><th>Сумма</th><th>Пробег</th><th>Сообщение</th></tr>${d.operations.map(o=>`<tr><td>${o.date}</td><td>${o.type}</td><td>${o.description||''}</td><td>${rub(o.amount)}</td><td>${o.mileage||''}</td><td>${o.raw||''}</td></tr>`).join('')}</table></div>`; document.getElementById('carCard').innerHTML=html; window.scrollTo(0,document.getElementById('carCard').offsetTop)}
+async function openCar(code){let d=await api('/api/car/'+code); if(!d.ok){alert(d.message);return} let c=d.car; let html=`<div class="card"><h2>${c.code} ${c.brand||''} ${c.model||''}</h2><p><b>Госномер:</b> ${c.plate||''}</p><p><b>Год:</b> ${c.year||''}</p><p><b>Пробег:</b> ${c.mileage||0}</p><p><b>Стоимость покупки:</b> ${rub(c.purchase_price)}</p><p><b>Доп. вложения:</b> ${rub(c.investments)}</p><p><b>Полная стоимость:</b> ${rub(c.full_cost)}</p><p><b>Доход:</b> ${rub(c.income)}</p><p><b>Расход:</b> ${rub(c.expenses)}</p><p><b>Прибыль:</b> ${rub(c.profit)}</p><p><b>Дни простоя:</b> ${c.downtime_days||0} дн.</p><p><button onclick="closeDowntime('${c.code}')">Закрыть активный простой</button></p><p><b>Инвестор:</b> ${c.investor_name||'-'} ${c.investor_percent?'('+c.investor_percent+'%)':''}</p></div><div class="card"><h3>Простои</h3><table><tr><th>Дата начала</th><th>Дата конца</th><th>Дней</th><th>Статус</th><th>Причина</th><th>Комментарий</th></tr>${d.downtime.map(o=>`<tr><td>${o.date}</td><td>${o.end_date||''}</td><td>${o.days}</td><td>${o.active?'Активный':'Закрыт'}</td><td>${o.reason||''}</td><td>${o.comment||''}</td></tr>`).join('')}</table></div><div class="card"><h3>История машины</h3><table><tr><th>Дата</th><th>Тип</th><th>Описание</th><th>Сумма</th><th>Пробег</th><th>Сообщение</th></tr>${d.operations.map(o=>`<tr><td>${o.date}</td><td>${o.type}</td><td>${o.description||''}</td><td>${rub(o.amount)}</td><td>${o.mileage||''}</td><td>${o.raw||''}</td></tr>`).join('')}</table></div>`; document.getElementById('carCard').innerHTML=html; window.scrollTo(0,document.getElementById('carCard').offsetTop)}
+async function closeDowntime(code){
+  let r=await api('/api/close-downtime/'+code,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({})});
+  alert(r.message);
+  await load();
+  await openCar(code);
+}
 async function loadOps(){let o=await api('/api/operations'); ops.innerHTML='<tr><th>Дата</th><th>Машина</th><th>Тип</th><th>Описание</th><th>Сумма</th><th>Сообщение</th></tr>'+o.map(x=>`<tr><td>${x.date}</td><td>${x.car_code}</td><td>${x.type}</td><td>${x.description||''}</td><td>${rub(x.amount)}</td><td>${x.raw||''}</td></tr>`).join('')}
 async function load(){await loadSummary(); await loadInvestors(); await loadCars(currentFilter); await loadOps()}
 async function add(){let m=msg.value; let r=await api('/api/add',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:m})}); res.innerText=r.message; msg.value=''; load()}
