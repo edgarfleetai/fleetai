@@ -63,6 +63,20 @@ def save_operation(data):
         ))
         session.add(Expense(operation_id=op.id, car_code=car.code, category="Доп. расходы", amount=data["total_cost"], share_type="shared"))
 
+    elif data["type"] == "investor_extra_payment":
+        session.add(InvestorSettlement(
+            operation_id=op.id,
+            investor_name=car.investor_name or data.get("investor_name", ""),
+            car_code=car.code,
+            total_cost=0,
+            investor_paid=data.get("investor_paid", data["total"]),
+            park_paid=0,
+            investor_debt_to_park=data.get("investor_debt_to_park", -data["total"]),
+            park_debt_to_investor=0,
+            description=data["description"],
+            comment=data["raw"],
+        ))
+
     elif data["type"] == "downtime":
         session.add(Downtime(
             operation_id=op.id, car_code=car.code, start_date=data.get("start_date") or datetime.now(),

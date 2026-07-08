@@ -27,33 +27,56 @@ def car_finance(session, code):
 def investor_balance_for_car(session, car):
     if car.owner_type != "investor":
         return {
-            "investor_debt_to_park": 0, "park_debt_to_investor": 0,
-            "investor_share_total": 0, "paid_to_investor": 0,
-            "debt_repaid_by_profit": 0, "available_to_pay": 0,
+            "investor_debt_to_park": 0,
+            "park_debt_to_investor": 0,
+            "investor_share_total": 0,
+            "paid_to_investor": 0,
+            "debt_repaid_by_profit": 0,
+            "available_to_pay": 0,
+            "debt_before_repayment": 0,
+            "park_share_total": 0,
         }
 
     income, expenses, investments, payouts, investor_invested, downtime_days = car_finance(session, car.code)
-    profit = income - expenses
-    investor_share_total = round(profit * (car.investor_percent or 0) / 100)
+    investor_percent = car.investor_percent or 0
+    park_percent = max(100 - investor_percent, 0)
 
-    debt = 0
-    park_debt = 0
+    # ВАЖНО:
+    # долг инвестора перед парком закрывается НЕ всей суммой дохода,
+    # а только долей инвестора. Например: доход 13 000, доля 75% = 9 750.
+    # 25% парка не списываются в долг инвестора, они остаются парку.
+    investor_share_total = round(max(income, 0) * investor_percent / 100)
+    park_share_total = round(max(income, 0) * park_percent / 100)
+
+    investor_debt_raw = 0
+    park_debt_raw = 0
     for row in session.query(InvestorSettlement).all():
         if normalize_code(row.car_code) == normalize_code(car.code):
-            debt += row.investor_debt_to_park or 0
-            park_debt += row.park_debt_to_investor or 0
+            investor_debt_raw += row.investor_debt_to_park or 0
+            park_debt_raw += row.park_debt_to_investor or 0
 
-    debt_repaid = min(max(investor_share_total, 0), debt)
-    remaining_debt = max(debt - debt_repaid, 0)
-    available = max(investor_share_total - debt_repaid, 0) + park_debt - payouts
+    # Если инвестор оплатил больше, чем должен был, отрицательный долг превращаем
+    # в долг парка перед инвестором.
+    if investor_debt_raw < 0:
+        park_debt_raw += abs(investor_debt_raw)
+        investor_debt_raw = 0
+
+    debt_repaid = min(investor_share_total, investor_debt_raw)
+    remaining_debt = max(investor_debt_raw - debt_repaid, 0)
+
+    # Инвестору можно выплатить только то, что осталось от его доли после закрытия долга.
+    available_before_payouts = max(investor_share_total - debt_repaid, 0) + park_debt_raw
+    available = available_before_payouts - payouts
 
     return {
         "investor_debt_to_park": remaining_debt,
-        "park_debt_to_investor": park_debt,
+        "park_debt_to_investor": park_debt_raw,
         "investor_share_total": investor_share_total,
         "paid_to_investor": payouts,
         "debt_repaid_by_profit": debt_repaid,
         "available_to_pay": available,
+        "debt_before_repayment": investor_debt_raw,
+        "park_share_total": park_share_total,
     }
 
 
