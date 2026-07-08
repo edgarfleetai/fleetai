@@ -225,6 +225,116 @@ def clean_desc(text, car_code, words, amount):
     return desc.replace("руб", "").replace("р", "").strip()
 
 
+
+MONTHS_RU = {
+    "января": 1, "январь": 1,
+    "февраля": 2, "февраль": 2,
+    "марта": 3, "март": 3,
+    "апреля": 4, "апрель": 4,
+    "мая": 5, "май": 5,
+    "июня": 6, "июнь": 6,
+    "июля": 7, "июль": 7,
+    "августа": 8, "август": 8,
+    "сентября": 9, "сентябрь": 9,
+    "октября": 10, "октябрь": 10,
+    "ноября": 11, "ноябрь": 11,
+    "декабря": 12, "декабрь": 12,
+}
+
+def parse_russian_date_piece(piece, default_month=None):
+    piece = (piece or "").strip().lower()
+    now = datetime.now()
+    year = now.year
+
+    m = re.search(r"(\d{1,2})[./-](\d{1,2})(?:[./-](\d{2,4}))?", piece)
+    if m:
+        day = int(m.group(1))
+        month = int(m.group(2))
+        if m.group(3):
+            year = int(m.group(3))
+            if year < 100:
+                year += 2000
+        return datetime(year, month, day)
+
+    m = re.search(r"(\d{1,2})\s+([а-яё]+)", piece)
+    if m:
+        day = int(m.group(1))
+        month = MONTHS_RU.get(m.group(2))
+        if month:
+            return datetime(year, month, day)
+
+    m = re.search(r"\b(\d{1,2})\b", piece)
+    if m and default_month:
+        return datetime(year, default_month, int(m.group(1)))
+
+    return None
+
+def parse_downtime_period(text):
+    today = datetime.now()
+
+    # Закрытый простой: 373 простой с 20 мая по 24 мая
+    m = re.search(
+        r"\bс\s+(.+?)\s+по\s+(.+?)(?=\s+(?:ремонт|коробка|двигатель|дтп|ожид|замена|из-за|из за)|$)",
+        text
+    )
+
+    if m:
+        start_piece = m.group(1).strip()
+        end_piece = m.group(2).strip()
+
+        if any(x in end_piece for x in ["настоящее", "сегодня", "сейчас"]):
+            start_dt = parse_russian_date_piece(start_piece)
+            if start_dt:
+                days = max((today.date() - start_dt.date()).days, 1)
+                reason = text
+                reason = re.sub(r"^\s*\d{3}\b", "", reason).strip()
+                reason = re.sub(r"\b(простой|стояла|стоял|стоит|не работала|не работал|в простое)\b", "", reason).strip()
+                reason = re.sub(r"\bс\s+.+?\s+по\s+(настоящее время|сегодня|сейчас)\b", "", reason).strip()
+                reason = reason.strip(" -—.,")
+                return start_dt, None, days, reason, 1
+
+        end_month_match = re.search(r"([а-яё]+)", end_piece)
+        default_month = MONTHS_RU.get(end_month_match.group(1)) if end_month_match else None
+
+        start_dt = parse_russian_date_piece(start_piece, default_month=default_month)
+        end_dt = parse_russian_date_piece(end_piece)
+
+        if start_dt and not end_dt:
+            end_dt = parse_russian_date_piece(end_piece, default_month=start_dt.month)
+
+        if not start_dt and end_dt:
+            start_dt = parse_russian_date_piece(start_piece, default_month=end_dt.month)
+
+        if start_dt and end_dt:
+            if end_dt < start_dt:
+                end_dt = end_dt.replace(year=end_dt.year + 1)
+
+            days = max((end_dt.date() - start_dt.date()).days, 1)
+
+            reason = text
+            reason = re.sub(r"^\s*\d{3}\b", "", reason).strip()
+            reason = re.sub(r"\b(простой|стояла|стоял|стоит|не работала|не работал|в простое)\b", "", reason).strip()
+            reason = re.sub(r"\bс\s+.+?\s+по\s+.+?(?=\s+(?:ремонт|коробка|двигатель|дтп|ожид|замена|из-за|из за)|$)", "", reason).strip()
+            reason = reason.strip(" -—.,")
+            return start_dt, end_dt, days, reason, 0
+
+    # Открытый простой: 373 стоит с 20 мая
+    m_open = re.search(r"\bс\s+(\d{1,2}[./-]\d{1,2}(?:[./-]\d{2,4})?|\d{1,2}\s+[а-яё]+)", text)
+    if m_open:
+        start_piece = m_open.group(1).strip()
+        start_dt = parse_russian_date_piece(start_piece)
+        if start_dt:
+            days = max((today.date() - start_dt.date()).days, 1)
+            reason = text
+            reason = re.sub(r"^\s*\d{3}\b", "", reason).strip()
+            reason = re.sub(r"\b(простой|стояла|стоял|стоит|не работала|не работал|в простое)\b", "", reason).strip()
+            reason = re.sub(r"\bс\s+(\d{1,2}[./-]\d{1,2}(?:[./-]\d{2,4})?|\d{1,2}\s+[а-яё]+)\b", "", reason).strip()
+            reason = reason.strip(" -—.,")
+            return start_dt, None, days, reason, 1
+
+    return None, None, 0, "", 0
+
+
 def parse_message(message):
     raw = (message or "").strip()
     text = raw.lower().replace(",", " ").replace(".", " ")
