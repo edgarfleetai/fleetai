@@ -484,11 +484,20 @@ def investor_total_invested_for_car(session, car):
         if normalize_code(row.car_code) == code
     )
 
-    car_extra_in = sum(
-        (row.amount or 0)
-        for row in session.query(CarInvestment).all()
-        if normalize_code(row.car_code) == code
-    )
+    car_extra_in = 0
+    car_investment_operation_ids = set()
+
+    for row in session.query(CarInvestment).all():
+        if normalize_code(row.car_code) == code:
+            car_extra_in += row.amount or 0
+            if row.operation_id:
+                car_investment_operation_ids.add(row.operation_id)
+
+    # Важно: старые операции типа car_investment могли остаться только в Operation,
+    # без строки в таблице CarInvestment. Поэтому считаем их тоже.
+    for op in session.query(Operation).all():
+        if normalize_code(op.car_code) == code and op.type == "car_investment" and op.id not in car_investment_operation_ids:
+            car_extra_in += op.amount or 0
 
     return investor_in + car_extra_in
 
@@ -705,7 +714,21 @@ def api_rebuild_calculations():
                 parsed["car_code"] = first_code
 
             car = find_car(session, parsed.get("car_code"))
-            if not car or parsed.get("type") == "unknown":
+            if not car:
+                skipped += 1
+                continue
+
+            # Если старый парсер не понял raw_message, но сама операция уже имеет тип,
+            # восстанавливаем зависимости по сохраненному op.type/op.amount.
+            if parsed.get("type") == "unknown" and op.type in ("income", "expense", "repair", "service", "car_investment", "investor_investment", "investor_payout"):
+                parsed["type"] = op.type
+                parsed["category"] = op.category or parsed.get("category") or ""
+                parsed["description"] = op.description or parsed.get("description") or ""
+                parsed["total"] = op.amount or parsed.get("total") or 0
+                if op.type == "income":
+                    parsed["income"] = op.amount or 0
+
+            if parsed.get("type") == "unknown":
                 skipped += 1
                 continue
 

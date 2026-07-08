@@ -9,7 +9,19 @@ def car_finance(session, code):
 
     income = sum((r.amount or 0) for r in session.query(Income).all() if normalize_code(r.car_code) == code)
     expenses = sum((r.amount or 0) for r in session.query(Expense).all() if normalize_code(r.car_code) == code)
-    investments = sum((r.amount or 0) for r in session.query(CarInvestment).all() if normalize_code(r.car_code) == code)
+    car_investment_operation_ids = set()
+    investments = 0
+    for r in session.query(CarInvestment).all():
+        if normalize_code(r.car_code) == code:
+            investments += r.amount or 0
+            if r.operation_id:
+                car_investment_operation_ids.add(r.operation_id)
+
+    # Старые записи могли сохраниться только в operations как car_investment,
+    # без строки в car_investments. Добавляем их как fallback, но не дублируем.
+    for op in session.query(Operation).all():
+        if normalize_code(op.car_code) == code and op.type == "car_investment" and op.id not in car_investment_operation_ids:
+            investments += op.amount or 0
     payouts = sum((r.amount or 0) for r in session.query(InvestorPayout).all() if normalize_code(r.car_code) == code)
     investor_invested = sum((r.amount or 0) for r in session.query(InvestorInvestment).all() if normalize_code(r.car_code) == code)
 
