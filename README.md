@@ -1,21 +1,49 @@
-# FleetAI 2.0
+# FleetAI 3.0
 
-Структура проекта:
+Новая структура проекта, чтобы не держать всю систему в одном app.py.
 
-- `app.py` — маршруты Flask
-- `models.py` — таблицы базы
-- `db.py` — подключение к PostgreSQL
-- `migrations.py` — безопасное создание/обновление таблиц
-- `parser.py` — разбор сообщений
-- `finance.py` — финансы, периоды, инвесторы
-- `templates.py` — интерфейс сайта
+## Render
 
-Запуск на Render:
 Build Command:
-`pip install -r requirements.txt`
+```bash
+pip install -r requirements.txt
+```
 
 Start Command:
-`gunicorn app:app --bind 0.0.0.0:$PORT`
+```bash
+gunicorn app:app --bind 0.0.0.0:$PORT
+```
 
 Environment:
-`DATABASE_URL`
+```bash
+DATABASE_URL=postgresql://...
+```
+
+## Команды для учета
+
+Доход:
+```text
+703 получил 13000
+703 прибыль 13000
+```
+
+Расход/ремонт:
+```text
+703 замена масла 2500 работа 700
+```
+
+Простой:
+```text
+703 простой с 11 июля по 14 июля коробка
+703 стоит с 11.07 коробка
+```
+
+Инвестор:
+```text
+703 инвестор Иван вложил 650000 75%
+```
+
+Взаиморасчет:
+```text
+703 доп расходы 41700 инвестор оплатил 25000
+```
