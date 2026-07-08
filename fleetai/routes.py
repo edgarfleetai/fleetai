@@ -43,23 +43,10 @@ def save_operation(data):
         session.add(CarInvestment(operation_id=op.id, car_code=car.code, category=data["category"], description=data["description"], amount=data["total"], raw_message=data["raw"]))
 
     elif data["type"] == "investor_investment":
-        # Если написано просто "636 инвестор вложил 25000",
-        # не создаем инвестора с именем "Вложил". Берем текущего
-        # инвестора из карточки машины.
-        investor_name = data.get("investor_name") or car.investor_name or ""
-
-        session.add(InvestorInvestment(
-            operation_id=op.id,
-            car_code=car.code,
-            investor_name=investor_name,
-            amount=data["total"],
-            percent=data["investor_percent"] or car.investor_percent or 0,
-            comment=data["raw"],
-        ))
-
-        car.owner_type = "investor"
-        if investor_name:
-            car.investor_name = investor_name
+        session.add(InvestorInvestment(operation_id=op.id, car_code=car.code, investor_name=data["investor_name"], amount=data["total"], percent=data["investor_percent"], comment=data["raw"]))
+        if data["investor_name"]:
+            car.owner_type = "investor"
+            car.investor_name = data["investor_name"]
         if data["investor_percent"]:
             car.investor_percent = data["investor_percent"]
 
@@ -113,37 +100,7 @@ def healthz():
 @bp.route("/api/add", methods=["POST"])
 def api_add():
     payload = request.json or {}
-    message = (payload.get("message", "") or "").strip()
-
-    # Поддержка нескольких записей в одной строке:
-    # 703 получил 13000 / 703 доп расходы 41700 инвестор оплатил 25000
-    parts = [p.strip() for p in message.split("/") if p.strip()]
-
-    if len(parts) <= 1:
-        return jsonify(save_operation(parse_message(message)))
-
-    results = []
-    ok = True
-    first_code = None
-
-    for part in parts:
-        parsed = parse_message(part)
-
-        if parsed.get("car_code"):
-            first_code = parsed.get("car_code")
-        elif first_code:
-            parsed["car_code"] = first_code
-
-        result = save_operation(parsed)
-        results.append(result.get("message", ""))
-        if not result.get("ok"):
-            ok = False
-
-    return jsonify({
-        "ok": ok,
-        "message": " | ".join(results),
-        "results": results,
-    })
+    return jsonify(save_operation(parse_message(payload.get("message", ""))))
 
 
 @bp.route("/api/add-car", methods=["POST"])

@@ -191,17 +191,8 @@ def parse_message(message):
         data["total"] = nums[0] if nums else 0
         pct = re.search(r"(\d{1,3})\s*%", text)
         data["investor_percent"] = int(pct.group(1)) if pct else 0
-
-        # Важно: фраза "636 инвестор вложил 25000" НЕ означает,
-        # что инвестора зовут "Вложил". Если имя не указано явно,
-        # имя берем из карточки машины уже в routes.py.
-        verbs = {"вложил", "вложила", "внес", "внесла", "дал", "дала", "оплатил", "оплатила"}
         name = re.search(r"инвестор\s+([а-яa-zё]+)", text)
-        if name and name.group(1) not in verbs:
-            data["investor_name"] = name.group(1).capitalize()
-        else:
-            data["investor_name"] = ""
-
+        data["investor_name"] = name.group(1).capitalize() if name else ""
         data["description"] = "Вложение инвестора"
         return data
 
