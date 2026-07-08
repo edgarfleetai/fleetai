@@ -532,20 +532,52 @@ def api_investors():
     s = Session()
     names = [r[0] for r in s.query(Car.investor_name).filter(Car.owner_type == "investor", Car.investor_name != "").distinct().all()]
     out = []
+
     for name in names:
         cars = s.query(Car).filter_by(owner_type="investor", investor_name=name).all()
         total_invested = s.query(func.coalesce(func.sum(InvestorInvestment.amount), 0)).filter_by(investor_name=name).scalar()
         total_payouts = s.query(func.coalesce(func.sum(InvestorPayout.amount), 0)).filter_by(investor_name=name).scalar()
+
         details = []
+        total_income = 0
+        total_expenses = 0
+        total_profit = 0
+        total_to_investor = 0
+
         for c in cars:
             income, expenses, investments, payouts, inv_in = car_finance(s, c.code)
             profit = income - expenses
             to_investor = round(profit * (c.investor_percent or 0) / 100)
-            details.append(dict(code=c.code, car=f"{c.brand or ''} {c.model or ''}", percent=c.investor_percent or 0,
-                                income=income, expenses=expenses, profit=profit,
-                                to_investor=to_investor, invested=inv_in, payouts=payouts))
-        out.append(dict(name=name, total_invested=total_invested, total_payouts=total_payouts,
-                        balance=total_invested - total_payouts, cars=details))
+
+            total_income += income
+            total_expenses += expenses
+            total_profit += profit
+            total_to_investor += to_investor
+
+            details.append(dict(
+                code=c.code,
+                car=f"{c.brand or ''} {c.model or ''}",
+                percent=c.investor_percent or 0,
+                income=income,
+                expenses=expenses,
+                profit=profit,
+                to_investor=to_investor,
+                invested=inv_in,
+                payouts=payouts
+            ))
+
+        out.append(dict(
+            name=name,
+            total_invested=total_invested,
+            total_payouts=total_payouts,
+            balance=total_invested - total_payouts,
+            total_income=total_income,
+            total_expenses=total_expenses,
+            total_profit=total_profit,
+            total_to_investor=total_to_investor,
+            cars=details
+        ))
+
     s.close()
     return jsonify(out)
 
