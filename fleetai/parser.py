@@ -184,24 +184,6 @@ def parse_message(message):
         data["description"] = "Дополнительное вложение"
         return data
 
-    # Инвестор отдельно оплатил часть доп. расходов.
-    # Пример: 636 инвестор оплатил 25000
-    # Это уменьшает долг инвестора перед парком, но не создает новый расход.
-    if "инвестор" in text and any(w in text for w in ["оплатил", "оплатила"]) and not any(w in text for w in ["доп расходы", "доп расход", "запуск", "расход за инвестора", "доплата"]):
-        data["type"] = "investor_extra_payment"
-        data["category"] = "Взаиморасчет"
-        nums = parse_amounts(text, data["car_code"])
-        amount = nums[-1] if nums else 0
-        data["total"] = amount
-        data["description"] = "Инвестор оплатил доп. расходы"
-        data["total_cost"] = 0
-        data["investor_paid"] = amount
-        data["park_paid"] = 0
-        # Минус уменьшает ранее созданный долг инвестора перед парком.
-        data["investor_debt_to_park"] = -amount
-        data["park_debt_to_investor"] = 0
-        return data
-
     if "инвестор" in text and any(w in text for w in ["вложил", "внес", "дал"]):
         data["type"] = "investor_investment"
         data["category"] = "Вложение инвестора"
@@ -209,8 +191,17 @@ def parse_message(message):
         data["total"] = nums[0] if nums else 0
         pct = re.search(r"(\d{1,3})\s*%", text)
         data["investor_percent"] = int(pct.group(1)) if pct else 0
+
+        # Важно: фраза "636 инвестор вложил 25000" НЕ означает,
+        # что инвестора зовут "Вложил". Если имя не указано явно,
+        # имя берем из карточки машины уже в routes.py.
+        verbs = {"вложил", "вложила", "внес", "внесла", "дал", "дала", "оплатил", "оплатила"}
         name = re.search(r"инвестор\s+([а-яa-zё]+)", text)
-        data["investor_name"] = name.group(1).capitalize() if name else ""
+        if name and name.group(1) not in verbs:
+            data["investor_name"] = name.group(1).capitalize()
+        else:
+            data["investor_name"] = ""
+
         data["description"] = "Вложение инвестора"
         return data
 
