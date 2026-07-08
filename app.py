@@ -901,6 +901,15 @@ input,select{padding:12px;font-size:16px;border:1px solid #ddd;border-radius:10p
 table{width:100%;border-collapse:collapse}td,th{padding:9px;border-bottom:1px solid #eee;text-align:left}.tabs button{background:#e5e7eb;color:#111}.tabs button.active{background:#2563eb;color:white}
 .badge{padding:4px 8px;border-radius:999px;background:#e0f2fe;color:#0369a1;font-size:12px}.warn{background:#fff7ed;border-left:5px solid #f97316}
 .ok{color:#16a34a}.bad{color:#dc2626}
+.calendar{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:12px}
+.daycard{border:1px solid #e5e7eb;border-radius:14px;padding:12px;background:#f9fafb}
+.daycard h4{margin:0 0 10px 0}
+.event{background:white;border-left:4px solid #2563eb;border-radius:10px;padding:9px;margin:8px 0;box-shadow:0 1px 6px #0001}
+.event.income{border-left-color:#16a34a}
+.event.repair,.event.service,.event.expense{border-left-color:#dc2626}
+.event.downtime{border-left-color:#f97316}
+.event .sum{font-weight:bold}
+.event .raw{font-size:13px;color:#6b7280;margin-top:4px}
 @media(max-width:800px){.grid{grid-template-columns:1fr 1fr}input.msg{width:100%;margin-bottom:8px}table{font-size:12px}}
 </style></head><body><div class="wrap"><h1>🚗 FleetAI Cloud</h1>
 <div id="summary"></div>
@@ -930,7 +939,51 @@ function rub(n){return (n||0).toLocaleString('ru-RU')+' ₽'}
 async function loadSummary(){let s=await api('/api/summary'); summary.innerHTML=`<div class="grid"><div class="stat">Всего <b>${s.cars}</b></div><div class="stat">Мои <b>${s.own_cars}</b></div><div class="stat">Инвесторов <b>${s.investor_cars}</b></div><div class="stat">Доход <b>${rub(s.income)}</b></div><div class="stat">Расход <b>${rub(s.expenses)}</b></div><div class="stat">Прибыль <b>${rub(s.profit)}</b></div><div class="stat">Простой <b>${s.downtime_days||0} дн.</b></div></div>`}
 async function loadInvestors(){let d=await api('/api/investors'); if(!d.length){investors.innerHTML='Пока нет машин инвесторов';return} investors.innerHTML=d.map(i=>`<div class="card"><h3>${i.name}</h3><b>Вложил:</b> ${rub(i.total_invested)} | <b>Выплачено:</b> ${rub(i.total_payouts)} | <b>Остаток:</b> ${rub(i.balance)} | <b>Общая прибыль:</b> ${rub(i.total_profit)} | <b>Доля инвестора:</b> ${rub(i.total_to_investor)} | <b>Простой:</b> ${i.total_downtime_days||0} дн.<table><tr><th>Машина</th><th>%</th><th>Доход</th><th>Расход</th><th>Прибыль</th><th>Инвестору</th><th>Простой</th><th>Карточка</th></tr>${i.cars.map(c=>`<tr><td>${c.code} ${c.car}</td><td>${c.percent}%</td><td>${rub(c.income)}</td><td>${rub(c.expenses)}</td><td>${rub(c.profit)}</td><td>${rub(c.to_investor)}</td><td>${c.downtime_days||0} дн.</td><td><button onclick="openCar('${c.code}')">Открыть</button></td></tr>`).join('')}</table></div>`).join('')}
 async function loadCars(filter='all'){currentFilter=filter; ['all','own','investor'].forEach(x=>document.getElementById('tab_'+x).classList.remove('active')); document.getElementById('tab_'+filter).classList.add('active'); let url='/api/cars'; if(filter!=='all')url+='?owner_type='+filter; let c=await api(url); cars.innerHTML='<tr><th>Тип</th><th>Код</th><th>Авто</th><th>Госномер</th><th>Инвестор</th><th>%</th><th>Пробег</th><th>Стоимость</th><th>Доход</th><th>Расход</th><th>Прибыль</th><th>Простой</th><th>Карточка</th></tr>'+c.map(x=>`<tr><td><span class="badge">${x.owner_type==='investor'?'Инвестор':'Моя'}</span></td><td>${x.code}</td><td>${x.brand||''} ${x.model||''}</td><td>${x.plate||''}</td><td>${x.investor_name||''}</td><td>${x.investor_percent||0}</td><td>${x.mileage||0}</td><td>${rub(x.full_cost)}</td><td>${rub(x.income)}</td><td>${rub(x.expenses)}</td><td class="${x.profit>=0?'ok':'bad'}">${rub(x.profit)}</td><td>${x.downtime_days||0} дн.</td><td><button onclick="openCar('${x.code}')">Открыть</button></td></tr>`).join('')}
-async function openCar(code){let d=await api('/api/car/'+code); if(!d.ok){alert(d.message);return} let c=d.car; let html=`<div class="card"><h2>${c.code} ${c.brand||''} ${c.model||''}</h2><p><b>Госномер:</b> ${c.plate||''}</p><p><b>Год:</b> ${c.year||''}</p><p><b>Пробег:</b> ${c.mileage||0}</p><p><b>Стоимость покупки:</b> ${rub(c.purchase_price)}</p><p><b>Доп. вложения:</b> ${rub(c.investments)}</p><p><b>Полная стоимость:</b> ${rub(c.full_cost)}</p><p><b>Доход:</b> ${rub(c.income)}</p><p><b>Расход:</b> ${rub(c.expenses)}</p><p><b>Прибыль:</b> ${rub(c.profit)}</p><p><b>Дни простоя:</b> ${c.downtime_days||0} дн.</p><p><button onclick="closeDowntime('${c.code}')">Закрыть активный простой</button></p><p><b>Инвестор:</b> ${c.investor_name||'-'} ${c.investor_percent?'('+c.investor_percent+'%)':''}</p></div><div class="card"><h3>Простои</h3><table><tr><th>Дата начала</th><th>Дата конца</th><th>Дней</th><th>Статус</th><th>Причина</th><th>Комментарий</th></tr>${d.downtime.map(o=>`<tr><td>${o.date}</td><td>${o.end_date||''}</td><td>${o.days}</td><td>${o.active?'Активный':'Закрыт'}</td><td>${o.reason||''}</td><td>${o.comment||''}</td></tr>`).join('')}</table></div><div class="card"><h3>История машины</h3><table><tr><th>Дата</th><th>Тип</th><th>Описание</th><th>Сумма</th><th>Пробег</th><th>Сообщение</th></tr>${d.operations.map(o=>`<tr><td>${o.date}</td><td>${o.type}</td><td>${o.description||''}</td><td>${rub(o.amount)}</td><td>${o.mileage||''}</td><td>${o.raw||''}</td></tr>`).join('')}</table></div>`; document.getElementById('carCard').innerHTML=html; window.scrollTo(0,document.getElementById('carCard').offsetTop)}
+
+function groupByDate(operations){
+  let groups = {};
+  operations.forEach(o=>{
+    let day = (o.date || '').split(' ')[0] || 'Без даты';
+    if(!groups[day]) groups[day] = [];
+    groups[day].push(o);
+  });
+  return groups;
+}
+
+function eventTitle(o){
+  if(o.type === 'income') return '💰 Доход';
+  if(o.type === 'repair') return '🔧 Ремонт';
+  if(o.type === 'service') return '🛠 ТО';
+  if(o.type === 'expense') return '💸 Расход';
+  if(o.type === 'car_investment') return '📈 Доп. вложение';
+  if(o.type === 'downtime') return '🚫 Простой';
+  if(o.type === 'downtime_closed') return '✅ Простой закрыт';
+  return '📝 Запись';
+}
+
+function renderCalendar(operations){
+  let groups = groupByDate(operations);
+
+  return `<div class="calendar">
+    ${Object.keys(groups).map(day=>`
+      <div class="daycard">
+        <h4>${day}</h4>
+        ${groups[day].map(o=>`
+          <div class="event ${o.type}">
+            <div><b>${eventTitle(o)}</b></div>
+            <div>${o.description || ''}</div>
+            <div class="sum">${rub(o.amount)}</div>
+            ${o.mileage ? `<div>Пробег: ${o.mileage}</div>` : ''}
+            <div class="raw">${o.raw || ''}</div>
+          </div>
+        `).join('')}
+      </div>
+    `).join('')}
+  </div>`;
+}
+
+
+async function openCar(code){let d=await api('/api/car/'+code); if(!d.ok){alert(d.message);return} let c=d.car; let html=`<div class="card"><h2>${c.code} ${c.brand||''} ${c.model||''}</h2><p><b>Госномер:</b> ${c.plate||''}</p><p><b>Год:</b> ${c.year||''}</p><p><b>Пробег:</b> ${c.mileage||0}</p><p><b>Стоимость покупки:</b> ${rub(c.purchase_price)}</p><p><b>Доп. вложения:</b> ${rub(c.investments)}</p><p><b>Полная стоимость:</b> ${rub(c.full_cost)}</p><p><b>Доход:</b> ${rub(c.income)}</p><p><b>Расход:</b> ${rub(c.expenses)}</p><p><b>Прибыль:</b> ${rub(c.profit)}</p><p><b>Дни простоя:</b> ${c.downtime_days||0} дн.</p><p><button onclick="closeDowntime('${c.code}')">Закрыть активный простой</button></p><p><b>Инвестор:</b> ${c.investor_name||'-'} ${c.investor_percent?'('+c.investor_percent+'%)':''}</p></div><div class="card"><h3>Простои</h3><table><tr><th>Дата начала</th><th>Дата конца</th><th>Дней</th><th>Статус</th><th>Причина</th><th>Комментарий</th></tr>${d.downtime.map(o=>`<tr><td>${o.date}</td><td>${o.end_date||''}</td><td>${o.days}</td><td>${o.active?'Активный':'Закрыт'}</td><td>${o.reason||''}</td><td>${o.comment||''}</td></tr>`).join('')}</table></div><div class="card"><h3>Календарь изменений</h3>${renderCalendar(d.operations)}</div><div class="card"><h3>История машины таблицей</h3><table><tr><th>Дата</th><th>Тип</th><th>Описание</th><th>Сумма</th><th>Пробег</th><th>Сообщение</th></tr>${d.operations.map(o=>`<tr><td>${o.date}</td><td>${o.type}</td><td>${o.description||''}</td><td>${rub(o.amount)}</td><td>${o.mileage||''}</td><td>${o.raw||''}</td></tr>`).join('')}</table></div>`; document.getElementById('carCard').innerHTML=html; window.scrollTo(0,document.getElementById('carCard').offsetTop)}
 async function closeDowntime(code){
   let r=await api('/api/close-downtime/'+code,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({})});
   alert(r.message);
