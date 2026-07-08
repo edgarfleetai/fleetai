@@ -35,6 +35,7 @@ class Car(Base):
     owner_type = Column(String, default="own")
     investor_name = Column(String, default="")
     investor_percent = Column(Integer, default=0)
+    settlement_day = Column(Integer, default=15)
 
 
 class Operation(Base):
@@ -656,6 +657,7 @@ def api_add_car():
         owner_type=str(p.get("owner_type") or "own").strip(),
         investor_name=str(p.get("investor_name") or "").strip(),
         investor_percent=only_int(p.get("investor_percent")),
+        settlement_day=only_int(p.get("settlement_day")) or 15,
         status="Работает"
     )
     s.add(car)
@@ -704,7 +706,8 @@ def api_cars():
                          investor_percent=c.investor_percent or 0,
                          investor_invested=inv_in,
                          investor_payouts=payouts,
-                         downtime_days=downtime_days))
+                         downtime_days=downtime_days,
+                         settlement_day=c.settlement_day or 15))
     s.close()
     return jsonify(rows)
 
@@ -821,6 +824,130 @@ def api_close_downtime(code):
 
     return jsonify({"ok": True, "message": "Простой закрыт"})
 
+
+@app.route("/api/period/<code>")
+def api_period_preview(code):
+    s = Session()
+    car = find_car(s, code)
+
+    if not car:
+        s.close()
+        return jsonify({"ok": False, "message": "Машина не найдена"})
+
+    start, end = period_bounds_for_car(car)
+    calc = calculate_period_for_car(s, car, start, end)
+
+    periods = [
+        {
+            "id": p.id,
+            "start_date": p.start_date.strftime("%d.%m.%Y") if p.start_date else "",
+            "end_date": p.end_date.strftime("%d.%m.%Y") if p.end_date else "",
+            "income": p.income or 0,
+            "expenses": p.expenses or 0,
+            "investments": p.investments or 0,
+            "profit": p.profit or 0,
+            "investor_amount": p.investor_amount or 0,
+            "owner_amount": p.owner_amount or 0,
+            "downtime_days": p.downtime_days or 0,
+            "closed_at": p.closed_at.strftime("%d.%m.%Y %H:%M") if p.closed_at else "",
+        }
+        for p in s.query(SettlementPeriod)
+        .filter(func.trim(SettlementPeriod.car_code) == normalize_code(car.code))
+        .order_by(SettlementPeriod.id.desc())
+        .all()
+    ]
+
+    s.close()
+
+    return jsonify({
+        "ok": True,
+        "car_code": car.code,
+        "settlement_day": car.settlement_day or 15,
+        "current_period": {
+            "start_date": start.strftime("%d.%m.%Y"),
+            "end_date": end.strftime("%d.%m.%Y"),
+            **calc
+        },
+        "closed_periods": periods
+    })
+
+
+@app.route("/api/close-period/<code>", methods=["POST"])
+def api_close_period(code):
+    s = Session()
+    car = find_car(s, code)
+
+    if not car:
+        s.close()
+        return jsonify({"ok": False, "message": "Машина не найдена"})
+
+    start, end = period_bounds_for_car(car)
+    calc = calculate_period_for_car(s, car, start, end)
+
+    exists = s.query(SettlementPeriod).filter(
+        func.trim(SettlementPeriod.car_code) == normalize_code(car.code),
+        SettlementPeriod.start_date == start,
+        SettlementPeriod.end_date == end
+    ).first()
+
+    if exists:
+        s.close()
+        return jsonify({"ok": False, "message": "Этот расчетный период уже закрыт"})
+
+    period = SettlementPeriod(
+        car_code=car.code,
+        start_date=start,
+        end_date=end,
+        income=calc["income"],
+        expenses=calc["expenses"],
+        investments=calc["investments"],
+        profit=calc["profit"],
+        investor_name=calc["investor_name"],
+        investor_percent=calc["investor_percent"],
+        investor_amount=calc["investor_amount"],
+        owner_amount=calc["owner_amount"],
+        downtime_days=calc["downtime_days"],
+        comment=f"Расчетный период {start.strftime('%d.%m.%Y')} - {end.strftime('%d.%m.%Y')}"
+    )
+    s.add(period)
+
+    op = Operation(
+        car_code=car.code,
+        type="settlement_period",
+        category="Расчетный период",
+        description=period.comment,
+        amount=calc["profit"],
+        raw_message=f"{car.code} закрыт расчетный период"
+    )
+    s.add(op)
+
+    s.commit()
+    s.close()
+
+    return jsonify({"ok": True, "message": "Расчетный период закрыт", "period": calc})
+
+
+@app.route("/api/set-settlement-day/<code>", methods=["POST"])
+def api_set_settlement_day(code):
+    payload = request.json or {}
+    day = only_int(payload.get("day"))
+
+    if day < 1 or day > 28:
+        return jsonify({"ok": False, "message": "День должен быть от 1 до 28"})
+
+    s = Session()
+    car = find_car(s, code)
+
+    if not car:
+        s.close()
+        return jsonify({"ok": False, "message": "Машина не найдена"})
+
+    car.settlement_day = day
+    s.commit()
+    s.close()
+
+    return jsonify({"ok": True, "message": f"Расчетный день установлен: {day}"})
+
 @app.route("/api/investors")
 def api_investors():
     s = Session()
@@ -922,7 +1049,7 @@ table{width:100%;border-collapse:collapse}td,th{padding:9px;border-bottom:1px so
 <select id="owner_type"><option value="own">Моя машина</option><option value="investor">Машина инвестора</option></select>
 <input id="code" placeholder="Код 777"><input id="brand" placeholder="Марка"><input id="model" placeholder="Модель"><input id="plate" placeholder="Госномер">
 <input id="year" placeholder="Год"><input id="purchase_date" placeholder="Дата покупки"><input id="purchase_price" placeholder="Цена покупки"><input id="mileage" placeholder="Пробег">
-<input id="investor_name" placeholder="Имя инвестора"><input id="investor_percent" placeholder="% инвестора"><button onclick="addCar()">Добавить авто</button><p id="carRes"></p>
+<input id="investor_name" placeholder="Имя инвестора"><input id="investor_percent" placeholder="% инвестора"><input id="settlement_day" placeholder="Расчетный день 15"><button onclick="addCar()">Добавить авто</button><p id="carRes"></p>
 </div>
 
 <div class="card">
@@ -937,8 +1064,8 @@ let currentFilter='all';
 async function api(u,o){let r=await fetch(u,o);return await r.json()}
 function rub(n){return (n||0).toLocaleString('ru-RU')+' ₽'}
 async function loadSummary(){let s=await api('/api/summary'); summary.innerHTML=`<div class="grid"><div class="stat">Всего <b>${s.cars}</b></div><div class="stat">Мои <b>${s.own_cars}</b></div><div class="stat">Инвесторов <b>${s.investor_cars}</b></div><div class="stat">Доход <b>${rub(s.income)}</b></div><div class="stat">Расход <b>${rub(s.expenses)}</b></div><div class="stat">Прибыль <b>${rub(s.profit)}</b></div><div class="stat">Простой <b>${s.downtime_days||0} дн.</b></div></div>`}
-async function loadInvestors(){let d=await api('/api/investors'); if(!d.length){investors.innerHTML='Пока нет машин инвесторов';return} investors.innerHTML=d.map(i=>`<div class="card"><h3>${i.name}</h3><b>Вложил:</b> ${rub(i.total_invested)} | <b>Выплачено:</b> ${rub(i.total_payouts)} | <b>Остаток:</b> ${rub(i.balance)} | <b>Общая прибыль:</b> ${rub(i.total_profit)} | <b>Доля инвестора:</b> ${rub(i.total_to_investor)} | <b>Простой:</b> ${i.total_downtime_days||0} дн.<table><tr><th>Машина</th><th>%</th><th>Доход</th><th>Расход</th><th>Прибыль</th><th>Инвестору</th><th>Простой</th><th>Карточка</th></tr>${i.cars.map(c=>`<tr><td>${c.code} ${c.car}</td><td>${c.percent}%</td><td>${rub(c.income)}</td><td>${rub(c.expenses)}</td><td>${rub(c.profit)}</td><td>${rub(c.to_investor)}</td><td>${c.downtime_days||0} дн.</td><td><button onclick="openCar('${c.code}')">Открыть</button></td></tr>`).join('')}</table></div>`).join('')}
-async function loadCars(filter='all'){currentFilter=filter; ['all','own','investor'].forEach(x=>document.getElementById('tab_'+x).classList.remove('active')); document.getElementById('tab_'+filter).classList.add('active'); let url='/api/cars'; if(filter!=='all')url+='?owner_type='+filter; let c=await api(url); cars.innerHTML='<tr><th>Тип</th><th>Код</th><th>Авто</th><th>Госномер</th><th>Инвестор</th><th>%</th><th>Пробег</th><th>Стоимость</th><th>Доход</th><th>Расход</th><th>Прибыль</th><th>Простой</th><th>Карточка</th></tr>'+c.map(x=>`<tr><td><span class="badge">${x.owner_type==='investor'?'Инвестор':'Моя'}</span></td><td>${x.code}</td><td>${x.brand||''} ${x.model||''}</td><td>${x.plate||''}</td><td>${x.investor_name||''}</td><td>${x.investor_percent||0}</td><td>${x.mileage||0}</td><td>${rub(x.full_cost)}</td><td>${rub(x.income)}</td><td>${rub(x.expenses)}</td><td class="${x.profit>=0?'ok':'bad'}">${rub(x.profit)}</td><td>${x.downtime_days||0} дн.</td><td><button onclick="openCar('${x.code}')">Открыть</button></td></tr>`).join('')}
+async function loadInvestors(){let d=await api('/api/investors'); if(!d.length){investors.innerHTML='Пока нет машин инвесторов';return} investors.innerHTML=d.map(i=>`<div class="card"><h3>${i.name}</h3><b>Вложил:</b> ${rub(i.total_invested)} | <b>Выплачено:</b> ${rub(i.total_payouts)} | <b>Остаток:</b> ${rub(i.balance)} | <b>Общая прибыль:</b> ${rub(i.total_profit)} | <b>Доля инвестора:</b> ${rub(i.total_to_investor)} | <b>Простой:</b> ${i.total_downtime_days||0} дн.<table><tr><th>Машина</th><th>%</th><th>Доход</th><th>Расход</th><th>Прибыль</th><th>Инвестору</th><th>Простой</th><th>Расчет</th><th>Карточка</th></tr>${i.cars.map(c=>`<tr><td>${c.code} ${c.car}</td><td>${c.percent}%</td><td>${rub(c.income)}</td><td>${rub(c.expenses)}</td><td>${rub(c.profit)}</td><td>${rub(c.to_investor)}</td><td>${c.downtime_days||0} дн.</td><td><button onclick="openCar('${c.code}')">Открыть</button></td></tr>`).join('')}</table></div>`).join('')}
+async function loadCars(filter='all'){currentFilter=filter; ['all','own','investor'].forEach(x=>document.getElementById('tab_'+x).classList.remove('active')); document.getElementById('tab_'+filter).classList.add('active'); let url='/api/cars'; if(filter!=='all')url+='?owner_type='+filter; let c=await api(url); cars.innerHTML='<tr><th>Тип</th><th>Код</th><th>Авто</th><th>Госномер</th><th>Инвестор</th><th>%</th><th>Пробег</th><th>Стоимость</th><th>Доход</th><th>Расход</th><th>Прибыль</th><th>Простой</th><th>Расчет</th><th>Карточка</th></tr>'+c.map(x=>`<tr><td><span class="badge">${x.owner_type==='investor'?'Инвестор':'Моя'}</span></td><td>${x.code}</td><td>${x.brand||''} ${x.model||''}</td><td>${x.plate||''}</td><td>${x.investor_name||''}</td><td>${x.investor_percent||0}</td><td>${x.mileage||0}</td><td>${rub(x.full_cost)}</td><td>${rub(x.income)}</td><td>${rub(x.expenses)}</td><td class="${x.profit>=0?'ok':'bad'}">${rub(x.profit)}</td><td>${x.downtime_days||0} дн.</td><td>${x.settlement_day||15} число<br><button onclick="openPeriod('${x.code}')">Расчет</button></td><td><button onclick="openCar('${x.code}')">Открыть</button></td></tr>`).join('')}
 
 function groupByDate(operations){
   let groups = {};
@@ -983,7 +1110,64 @@ function renderCalendar(operations){
 }
 
 
-async function openCar(code){let d=await api('/api/car/'+code); if(!d.ok){alert(d.message);return} let c=d.car; let html=`<div class="card"><h2>${c.code} ${c.brand||''} ${c.model||''}</h2><p><b>Госномер:</b> ${c.plate||''}</p><p><b>Год:</b> ${c.year||''}</p><p><b>Пробег:</b> ${c.mileage||0}</p><p><b>Стоимость покупки:</b> ${rub(c.purchase_price)}</p><p><b>Доп. вложения:</b> ${rub(c.investments)}</p><p><b>Полная стоимость:</b> ${rub(c.full_cost)}</p><p><b>Доход:</b> ${rub(c.income)}</p><p><b>Расход:</b> ${rub(c.expenses)}</p><p><b>Прибыль:</b> ${rub(c.profit)}</p><p><b>Дни простоя:</b> ${c.downtime_days||0} дн.</p><p><button onclick="closeDowntime('${c.code}')">Закрыть активный простой</button></p><p><b>Инвестор:</b> ${c.investor_name||'-'} ${c.investor_percent?'('+c.investor_percent+'%)':''}</p></div><div class="card"><h3>Простои</h3><table><tr><th>Дата начала</th><th>Дата конца</th><th>Дней</th><th>Статус</th><th>Причина</th><th>Комментарий</th></tr>${d.downtime.map(o=>`<tr><td>${o.date}</td><td>${o.end_date||''}</td><td>${o.days}</td><td>${o.active?'Активный':'Закрыт'}</td><td>${o.reason||''}</td><td>${o.comment||''}</td></tr>`).join('')}</table></div><div class="card"><h3>Календарь изменений</h3>${renderCalendar(d.operations)}</div><div class="card"><h3>История машины таблицей</h3><table><tr><th>Дата</th><th>Тип</th><th>Описание</th><th>Сумма</th><th>Пробег</th><th>Сообщение</th></tr>${d.operations.map(o=>`<tr><td>${o.date}</td><td>${o.type}</td><td>${o.description||''}</td><td>${rub(o.amount)}</td><td>${o.mileage||''}</td><td>${o.raw||''}</td></tr>`).join('')}</table></div>`; document.getElementById('carCard').innerHTML=html; window.scrollTo(0,document.getElementById('carCard').offsetTop)}
+
+async function openPeriod(code){
+  let d = await api('/api/period/' + code);
+  if(!d.ok){alert(d.message);return}
+
+  let p = d.current_period;
+  let html = `
+  <div class="card warn">
+    <h2>Расчетный период машины ${code}</h2>
+    <p><b>Период:</b> ${p.start_date} — ${p.end_date}</p>
+    <p><b>Расчетный день:</b> ${d.settlement_day} число</p>
+    <p><b>Доход:</b> ${rub(p.income)}</p>
+    <p><b>Расход:</b> ${rub(p.expenses)}</p>
+    <p><b>Доп. вложения:</b> ${rub(p.investments)}</p>
+    <p><b>Прибыль:</b> ${rub(p.profit)}</p>
+    <p><b>Инвестору:</b> ${rub(p.investor_amount)} ${p.investor_percent ? '('+p.investor_percent+'%)' : ''}</p>
+    <p><b>Собственнику:</b> ${rub(p.owner_amount)}</p>
+    <p><b>Простой:</b> ${p.downtime_days || 0} дн.</p>
+    <button onclick="closePeriod('${code}')">Закрыть расчетный период</button>
+  </div>
+
+  <div class="card">
+    <h3>История закрытых периодов</h3>
+    <table>
+      <tr><th>Период</th><th>Доход</th><th>Расход</th><th>Прибыль</th><th>Инвестору</th><th>Собственнику</th><th>Простой</th><th>Закрыт</th></tr>
+      ${d.closed_periods.map(x=>`
+        <tr>
+          <td>${x.start_date} — ${x.end_date}</td>
+          <td>${rub(x.income)}</td>
+          <td>${rub(x.expenses)}</td>
+          <td>${rub(x.profit)}</td>
+          <td>${rub(x.investor_amount)}</td>
+          <td>${rub(x.owner_amount)}</td>
+          <td>${x.downtime_days||0} дн.</td>
+          <td>${x.closed_at}</td>
+        </tr>
+      `).join('')}
+    </table>
+  </div>`;
+
+  document.getElementById('carCard').innerHTML = html;
+  window.scrollTo(0, document.getElementById('carCard').offsetTop);
+}
+
+async function closePeriod(code){
+  if(!confirm('Закрыть расчетный период по машине '+code+'?')) return;
+  let r = await api('/api/close-period/' + code, {
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({})
+  });
+  alert(r.message);
+  await load();
+  await openPeriod(code);
+}
+
+
+async function openCar(code){let d=await api('/api/car/'+code); if(!d.ok){alert(d.message);return} let c=d.car; let html=`<div class="card"><h2>${c.code} ${c.brand||''} ${c.model||''}</h2><p><b>Госномер:</b> ${c.plate||''}</p><p><b>Год:</b> ${c.year||''}</p><p><b>Пробег:</b> ${c.mileage||0}</p><p><b>Стоимость покупки:</b> ${rub(c.purchase_price)}</p><p><b>Доп. вложения:</b> ${rub(c.investments)}</p><p><b>Полная стоимость:</b> ${rub(c.full_cost)}</p><p><b>Доход:</b> ${rub(c.income)}</p><p><b>Расход:</b> ${rub(c.expenses)}</p><p><b>Прибыль:</b> ${rub(c.profit)}</p><p><b>Дни простоя:</b> ${c.downtime_days||0} дн.</p><p><button onclick="closeDowntime('${c.code}')">Закрыть активный простой</button></p><p><b>Инвестор:</b> ${c.investor_name||'-'} ${c.investor_percent?'('+c.investor_percent+'%)':''}</p><p><button onclick="openPeriod('${c.code}')">Открыть расчетный период</button></p></div><div class="card"><h3>Простои</h3><table><tr><th>Дата начала</th><th>Дата конца</th><th>Дней</th><th>Статус</th><th>Причина</th><th>Комментарий</th></tr>${d.downtime.map(o=>`<tr><td>${o.date}</td><td>${o.end_date||''}</td><td>${o.days}</td><td>${o.active?'Активный':'Закрыт'}</td><td>${o.reason||''}</td><td>${o.comment||''}</td></tr>`).join('')}</table></div><div class="card"><h3>Календарь изменений</h3>${renderCalendar(d.operations)}</div><div class="card"><h3>История машины таблицей</h3><table><tr><th>Дата</th><th>Тип</th><th>Описание</th><th>Сумма</th><th>Пробег</th><th>Сообщение</th></tr>${d.operations.map(o=>`<tr><td>${o.date}</td><td>${o.type}</td><td>${o.description||''}</td><td>${rub(o.amount)}</td><td>${o.mileage||''}</td><td>${o.raw||''}</td></tr>`).join('')}</table></div>`; document.getElementById('carCard').innerHTML=html; window.scrollTo(0,document.getElementById('carCard').offsetTop)}
 async function closeDowntime(code){
   let r=await api('/api/close-downtime/'+code,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({})});
   alert(r.message);
@@ -1003,7 +1187,7 @@ async function add(){
     res.innerText='Ошибка записи. Открой Render Logs или проверь /api/add. ' + e;
   }
 }
-async function addCar(){let payload={owner_type:owner_type.value,code:code.value,brand:brand.value,model:model.value,plate:plate.value,year:year.value,purchase_date:purchase_date.value,purchase_price:purchase_price.value,mileage:mileage.value,investor_name:investor_name.value,investor_percent:investor_percent.value}; let r=await api('/api/add-car',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}); carRes.innerText=r.message; load()}
+async function addCar(){let payload={owner_type:owner_type.value,code:code.value,brand:brand.value,model:model.value,plate:plate.value,year:year.value,purchase_date:purchase_date.value,purchase_price:purchase_price.value,mileage:mileage.value,investor_name:investor_name.value,investor_percent:investor_percent.value,settlement_day:settlement_day.value}; let r=await api('/api/add-car',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}); carRes.innerText=r.message; load()}
 msg.addEventListener('keydown',e=>{if(e.key==='Enter')add()}); load();
 </script></body></html>
 """
