@@ -382,12 +382,15 @@ def ensure_schema():
         "ALTER TABLE downtime ADD COLUMN operation_id INTEGER",
         "ALTER TABLE downtime ADD COLUMN active INTEGER DEFAULT 0",
     ]
-    with engine.begin() as conn:
-        for sql in migrations:
-            try:
+    # Важно: каждая миграция в отдельной транзакции.
+    # Если одна колонка уже существует, PostgreSQL отменяет только эту транзакцию,
+    # а следующие ALTER TABLE все равно выполняются.
+    for sql in migrations:
+        try:
+            with engine.begin() as conn:
                 conn.execute(sql_text(sql))
-            except Exception:
-                pass
+        except Exception:
+            pass
 
 
 def init_seed():
