@@ -1,6 +1,6 @@
 import os
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 from flask import Flask, request, jsonify, render_template_string
 from sqlalchemy import create_engine, Column, Integer, String, DateTime, Text, func, text as sql_text
 from sqlalchemy.orm import declarative_base, sessionmaker
@@ -266,6 +266,15 @@ def parse_message(message):
         data["category"] = "Простой"
         data["total"] = 0
 
+        start_dt, end_dt, period_days, period_reason = parse_downtime_period(text)
+
+        if period_days:
+            data["days"] = period_days
+            data["start_date"] = start_dt
+            data["end_date"] = end_dt
+            data["description"] = period_reason or "Простой"
+            return data
+
         days_match = re.search(r"(\d+)\s*(день|дня|дней)", text)
         if days_match:
             data["days"] = int(days_match.group(1))
@@ -431,6 +440,8 @@ def save(data):
         s.add(Downtime(
             operation_id=op.id,
             car_code=car.code,
+            start_date=data.get("start_date") or datetime.now(),
+            end_date=data.get("end_date"),
             days=data.get("days", 0),
             reason=data["description"],
             comment=data["raw"]
