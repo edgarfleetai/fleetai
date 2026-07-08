@@ -30,19 +30,29 @@ def investor_balance_for_car(session, car):
             "investor_debt_to_park": 0, "park_debt_to_investor": 0,
             "investor_share_total": 0, "paid_to_investor": 0,
             "debt_repaid_by_profit": 0, "available_to_pay": 0,
+            "normal_profit_for_split": 0,
         }
 
     income, expenses, investments, payouts, investor_invested, downtime_days = car_finance(session, car.code)
-    profit = income - expenses
-    investor_share_total = round(profit * (car.investor_percent or 0) / 100)
+    percent = car.investor_percent or 0
 
     debt = 0
     park_debt = 0
+    split_expenses = 0
     for row in session.query(InvestorSettlement).all():
         if normalize_code(row.car_code) == normalize_code(car.code):
             debt += row.investor_debt_to_park or 0
             park_debt += row.park_debt_to_investor or 0
+            split_expenses += row.total_cost or 0
 
+    # ВАЖНО: расходы запуска/доп. расходы, по которым создан взаиморасчет,
+    # не должны второй раз уменьшать долю инвестора. Они уже отражены как долг.
+    # Поэтому для расчета доли берем: доход - обычные расходы, кроме split_expenses.
+    normal_expenses = max((expenses or 0) - split_expenses, 0)
+    normal_profit_for_split = (income or 0) - normal_expenses
+    investor_share_total = round(normal_profit_for_split * percent / 100)
+
+    # Долг инвестора закрывается только его долей, например 75%, а не всей выручкой.
     debt_repaid = min(max(investor_share_total, 0), debt)
     remaining_debt = max(debt - debt_repaid, 0)
     available = max(investor_share_total - debt_repaid, 0) + park_debt - payouts
@@ -54,6 +64,7 @@ def investor_balance_for_car(session, car):
         "paid_to_investor": payouts,
         "debt_repaid_by_profit": debt_repaid,
         "available_to_pay": available,
+        "normal_profit_for_split": normal_profit_for_split,
     }
 
 

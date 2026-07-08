@@ -142,6 +142,26 @@ def parse_message(message):
             data["brand"] = brand.upper()
             break
 
+
+    # Строгие быстрые команды FleetAI:
+    # 636 I+25000  -> инвестор внес деньги
+    # 636 I-10000  -> выплата инвестору
+    m_i_plus = re.search(r"\bi\s*\+\s*(\d{2,9})\b", text, re.I)
+    if m_i_plus:
+        data["type"] = "investor_investment"
+        data["category"] = "Вложение инвестора"
+        data["total"] = int(m_i_plus.group(1))
+        data["description"] = "Вложение инвестора"
+        return data
+
+    m_i_minus = re.search(r"\bi\s*-\s*(\d{2,9})\b", text, re.I)
+    if m_i_minus:
+        data["type"] = "investor_payout"
+        data["category"] = "Выплата инвестору"
+        data["total"] = int(m_i_minus.group(1))
+        data["description"] = "Выплата инвестору"
+        return data
+
     if any(x in text for x in ["простой", "стояла", "стоял", "стоит", "в простое", "не работала", "не работал"]):
         data["type"] = "downtime"
         data["category"] = "Простой"
@@ -184,15 +204,24 @@ def parse_message(message):
         data["description"] = "Дополнительное вложение"
         return data
 
-    if "инвестор" in text and any(w in text for w in ["вложил", "внес", "дал"]):
+    if "инвестор" in text and any(w in text for w in ["вложил", "внес", "дал", "оплатил", "оплатила"]):
         data["type"] = "investor_investment"
         data["category"] = "Вложение инвестора"
         nums = parse_amounts(text, data["car_code"])
         data["total"] = nums[0] if nums else 0
         pct = re.search(r"(\d{1,3})\s*%", text)
         data["investor_percent"] = int(pct.group(1)) if pct else 0
+
+        # Важно: фраза "636 инвестор вложил 25000" НЕ означает,
+        # что инвестора зовут "Вложил". Если имя не указано явно,
+        # имя берем из карточки машины уже в routes.py.
+        verbs = {"вложил", "вложила", "внес", "внесла", "дал", "дала", "оплатил", "оплатила"}
         name = re.search(r"инвестор\s+([а-яa-zё]+)", text)
-        data["investor_name"] = name.group(1).capitalize() if name else ""
+        if name and name.group(1) not in verbs:
+            data["investor_name"] = name.group(1).capitalize()
+        else:
+            data["investor_name"] = ""
+
         data["description"] = "Вложение инвестора"
         return data
 

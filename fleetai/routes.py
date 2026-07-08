@@ -11,6 +11,87 @@ from .views import HTML
 
 bp = Blueprint("main", __name__)
 
+BAD_INVESTOR_NAMES = {"вложил", "вложила", "оплатил", "оплатила", "внес", "внесла", "дал", "дала", "инвестор", ""}
+
+
+def cleanup_legacy_investor_mess(session):
+    """Исправляет старые ошибочные записи, которые уже попали в базу.
+
+    1) Если инвестор случайно получил имя "Вложил"/"Оплатил" — перекидываем
+       машину и операции на нормального инвестора (обычно "илья").
+    2) Если есть операция вида "доп расходы 41700 инвестор оплатил 25000",
+       но нет записи InvestorSettlement, создаем взаиморасчет.
+    """
+    changed = False
+
+    real_names = []
+    for name, in session.query(Car.investor_name).filter(Car.investor_name != "").all():
+        if (name or "").strip().lower() not in BAD_INVESTOR_NAMES:
+            real_names.append((name or "").strip())
+
+    default_name = real_names[0] if real_names else "илья"
+
+    # Исправляем машины с ошибочным именем инвестора.
+    for car in session.query(Car).filter(Car.owner_type == "investor").all():
+        if (car.investor_name or "").strip().lower() in BAD_INVESTOR_NAMES:
+            car.investor_name = default_name
+            if not car.investor_percent:
+                car.investor_percent = 75
+            changed = True
+
+    # Исправляем записи вложений/выплат/взаиморасчетов с ошибочным именем.
+    for table in (InvestorInvestment, InvestorPayout, InvestorSettlement):
+        for row in session.query(table).all():
+            name = (getattr(row, "investor_name", "") or "").strip().lower()
+            if name in BAD_INVESTOR_NAMES:
+                car = find_car(session, getattr(row, "car_code", ""))
+                setattr(row, "investor_name", (car.investor_name if car and car.investor_name else default_name))
+                changed = True
+
+    # Создаем недостающий взаиморасчет из старых операций.
+    import re
+    for op in session.query(Operation).all():
+        raw = (op.raw_message or "").lower()
+        if "доп" not in raw or "расход" not in raw or "инвестор" not in raw:
+            continue
+        exists = session.query(InvestorSettlement).filter_by(operation_id=op.id).first()
+        if exists:
+            continue
+        nums = [int(x) for x in re.findall(r"\b\d{2,9}\b", raw) if str(x) != str(op.car_code)]
+        if not nums:
+            continue
+        total_cost = nums[0]
+        investor_paid = 0
+        m = re.search(r"инвестор\s*(?:оплатил|оплатила|дал|дала|внес|внесла)?\s*(\d{2,9})", raw)
+        if m:
+            investor_paid = int(m.group(1))
+        elif len(nums) > 1:
+            investor_paid = nums[1]
+        park_paid = max(total_cost - investor_paid, 0)
+        car = find_car(session, op.car_code)
+        session.add(InvestorSettlement(
+            operation_id=op.id,
+            investor_name=(car.investor_name if car and car.investor_name else default_name),
+            car_code=op.car_code,
+            total_cost=total_cost,
+            investor_paid=investor_paid,
+            park_paid=park_paid,
+            investor_debt_to_park=park_paid,
+            park_debt_to_investor=0,
+            description="Доп. расходы / взаиморасчет",
+            comment=op.raw_message,
+        ))
+        # Если расход уже есть по этой операции — не дублируем.
+        exp = session.query(Expense).filter_by(operation_id=op.id).first()
+        if not exp:
+            session.add(Expense(operation_id=op.id, car_code=op.car_code, category="Доп. расходы", amount=total_cost, share_type="shared"))
+        changed = True
+
+    if changed:
+        session.commit()
+    return changed
+
+
 
 def save_operation(data):
     session = Session()
@@ -43,10 +124,23 @@ def save_operation(data):
         session.add(CarInvestment(operation_id=op.id, car_code=car.code, category=data["category"], description=data["description"], amount=data["total"], raw_message=data["raw"]))
 
     elif data["type"] == "investor_investment":
-        session.add(InvestorInvestment(operation_id=op.id, car_code=car.code, investor_name=data["investor_name"], amount=data["total"], percent=data["investor_percent"], comment=data["raw"]))
-        if data["investor_name"]:
-            car.owner_type = "investor"
-            car.investor_name = data["investor_name"]
+        # Если написано просто "636 инвестор вложил 25000",
+        # не создаем инвестора с именем "Вложил". Берем текущего
+        # инвестора из карточки машины.
+        investor_name = data.get("investor_name") or car.investor_name or ""
+
+        session.add(InvestorInvestment(
+            operation_id=op.id,
+            car_code=car.code,
+            investor_name=investor_name,
+            amount=data["total"],
+            percent=data["investor_percent"] or car.investor_percent or 0,
+            comment=data["raw"],
+        ))
+
+        car.owner_type = "investor"
+        if investor_name:
+            car.investor_name = investor_name
         if data["investor_percent"]:
             car.investor_percent = data["investor_percent"]
 
@@ -100,7 +194,37 @@ def healthz():
 @bp.route("/api/add", methods=["POST"])
 def api_add():
     payload = request.json or {}
-    return jsonify(save_operation(parse_message(payload.get("message", ""))))
+    message = (payload.get("message", "") or "").strip()
+
+    # Поддержка нескольких записей в одной строке:
+    # 703 получил 13000 / 703 доп расходы 41700 инвестор оплатил 25000
+    parts = [p.strip() for p in message.split("/") if p.strip()]
+
+    if len(parts) <= 1:
+        return jsonify(save_operation(parse_message(message)))
+
+    results = []
+    ok = True
+    first_code = None
+
+    for part in parts:
+        parsed = parse_message(part)
+
+        if parsed.get("car_code"):
+            first_code = parsed.get("car_code")
+        elif first_code:
+            parsed["car_code"] = first_code
+
+        result = save_operation(parsed)
+        results.append(result.get("message", ""))
+        if not result.get("ok"):
+            ok = False
+
+    return jsonify({
+        "ok": ok,
+        "message": " | ".join(results),
+        "results": results,
+    })
 
 
 @bp.route("/api/add-car", methods=["POST"])
@@ -140,6 +264,7 @@ def api_add_car():
 @bp.route("/api/summary")
 def api_summary():
     session = Session()
+    cleanup_legacy_investor_mess(session)
     income = session.query(func.coalesce(func.sum(Income.amount), 0)).scalar()
     expenses = session.query(func.coalesce(func.sum(Expense.amount), 0)).scalar()
     investments = session.query(func.coalesce(func.sum(CarInvestment.amount), 0)).scalar()
@@ -158,6 +283,7 @@ def api_summary():
 @bp.route("/api/cars")
 def api_cars():
     session = Session()
+    cleanup_legacy_investor_mess(session)
     rows = []
     for car in session.query(Car).order_by(Car.code).all():
         income, expenses, investments, payouts, investor_invested, downtime_days = car_finance(session, car.code)
@@ -203,6 +329,7 @@ def api_car(code):
 @bp.route("/api/investor-balance/<code>")
 def api_investor_balance(code):
     session = Session()
+    cleanup_legacy_investor_mess(session)
     car = find_car(session, code)
     if not car:
         session.close()
@@ -253,9 +380,19 @@ def api_close_period(code):
     return jsonify({"ok": period is not None, "message": msg})
 
 
+
+@bp.route("/api/fix-investor-data", methods=["POST", "GET"])
+def api_fix_investor_data():
+    session = Session()
+    changed = cleanup_legacy_investor_mess(session)
+    session.close()
+    return jsonify({"ok": True, "message": "Ошибочные инвесторы и взаиморасчеты исправлены" if changed else "Исправлять нечего"})
+
+
 @bp.route("/api/investors-summary")
 def api_investors_summary():
     session = Session()
+    cleanup_legacy_investor_mess(session)
     names = [r[0] for r in session.query(Car.investor_name).filter(Car.owner_type == "investor", Car.investor_name != "").distinct().all()]
     investors = []
     totals = dict(total_invested=0, total_payouts=0, income=0, expenses=0, profit=0, investor_share=0, owner_share=0, investor_debt_to_park=0, park_debt_to_investor=0, available_to_pay=0)
@@ -267,8 +404,8 @@ def api_investors_summary():
         for car in cars:
             income, expenses, investments, payouts, investor_invested, downtime_days = car_finance(session, car.code)
             profit = income - expenses
-            share = round(profit * (car.investor_percent or 0) / 100)
             bal = investor_balance_for_car(session, car)
+            share = bal["investor_share_total"]
             row["income"] += income
             row["expenses"] += expenses
             row["profit"] += profit
@@ -287,6 +424,7 @@ def api_investors_summary():
 @bp.route("/api/investors")
 def api_investors():
     session = Session()
+    cleanup_legacy_investor_mess(session)
     names = [r[0] for r in session.query(Car.investor_name).filter(Car.owner_type == "investor", Car.investor_name != "").distinct().all()]
     result = []
     for name in names:
@@ -296,16 +434,94 @@ def api_investors():
         for car in cars:
             income, expenses, investments, payouts, investor_invested, downtime_days = car_finance(session, car.code)
             profit = income - expenses
-            share = round(profit * (car.investor_percent or 0) / 100)
             bal = investor_balance_for_car(session, car)
+            share = bal["investor_share_total"]
             totals["total_profit"] += profit
             totals["total_to_investor"] += share
             totals["investor_debt_to_park"] += bal["investor_debt_to_park"]
             totals["available_to_pay"] += bal["available_to_pay"]
-            details.append({"code": car.code, "car": f"{car.brand or ''} {car.model or ''}", "percent": car.investor_percent or 0, "income": income, "expenses": expenses, "profit": profit, "to_investor": share, "available_to_pay": bal["available_to_pay"]})
+            details.append({"code": car.code, "car": f"{car.brand or ''} {car.model or ''}", "percent": car.investor_percent or 0, "income": income, "expenses": expenses, "profit": profit, "to_investor": share, "available_to_pay": bal["available_to_pay"], "investor_debt_to_park": bal["investor_debt_to_park"]})
         result.append({"name": name, "cars": details, **totals})
     session.close()
     return jsonify(result)
+
+
+
+def delete_operation_dependencies(session, operation_id):
+    """Удаляет операцию и все связанные с ней записи, чтобы пересчеты стали чистыми."""
+    for model in (Income, Expense, Part, CarInvestment, InvestorInvestment, InvestorPayout, Downtime, InvestorSettlement):
+        for row in session.query(model).filter_by(operation_id=operation_id).all():
+            session.delete(row)
+
+
+@bp.route("/api/delete-operation/<int:operation_id>", methods=["POST"])
+def api_delete_operation(operation_id):
+    session = Session()
+    op = session.query(Operation).filter_by(id=operation_id).first()
+    if not op:
+        session.close()
+        return jsonify({"ok": False, "message": "Операция не найдена"})
+
+    delete_operation_dependencies(session, operation_id)
+    session.delete(op)
+    session.commit()
+    session.close()
+    return jsonify({"ok": True, "message": f"Операция #{operation_id} удалена. Расчеты обновлены."})
+
+
+@bp.route("/api/delete-car/<code>", methods=["POST"])
+def api_delete_car(code):
+    session = Session()
+    car = find_car(session, code)
+    if not car:
+        session.close()
+        return jsonify({"ok": False, "message": "Машина не найдена"})
+
+    normalized = normalize_code(code)
+
+    # Сначала удаляем операции и связанные таблицы по operation_id.
+    operations = session.query(Operation).filter(func.trim(Operation.car_code) == normalized).all()
+    for op in operations:
+        delete_operation_dependencies(session, op.id)
+        session.delete(op)
+
+    # Потом чистим записи, которые могли быть без operation_id.
+    for model in (Income, Expense, Part, CarInvestment, InvestorInvestment, InvestorPayout, Mileage, Downtime, SettlementPeriod, InvestorSettlement):
+        for row in session.query(model).all():
+            if normalize_code(getattr(row, "car_code", "")) == normalized:
+                session.delete(row)
+
+    session.delete(car)
+    session.commit()
+    session.close()
+    return jsonify({"ok": True, "message": f"Машина {code} и ее записи удалены"})
+
+
+@bp.route("/api/reset-car-investor/<code>", methods=["POST"])
+def api_reset_car_investor(code):
+    session = Session()
+    car = find_car(session, code)
+    if not car:
+        session.close()
+        return jsonify({"ok": False, "message": "Машина не найдена"})
+
+    car.owner_type = "own"
+    car.investor_name = ""
+    car.investor_percent = 0
+
+    for row in session.query(InvestorInvestment).all():
+        if normalize_code(row.car_code) == normalize_code(code):
+            session.delete(row)
+    for row in session.query(InvestorPayout).all():
+        if normalize_code(row.car_code) == normalize_code(code):
+            session.delete(row)
+    for row in session.query(InvestorSettlement).all():
+        if normalize_code(row.car_code) == normalize_code(code):
+            session.delete(row)
+
+    session.commit()
+    session.close()
+    return jsonify({"ok": True, "message": f"Инвестор у машины {code} убран"})
 
 
 @bp.route("/api/operations")
