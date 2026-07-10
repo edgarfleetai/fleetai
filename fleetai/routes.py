@@ -2,17 +2,39 @@ import os
 import requests
 
 from datetime import datetime, date, timedelta
+
 from flask import Blueprint, request, jsonify, render_template_string
 from sqlalchemy import func
 
 from .db import Session
-from .models import Car, Operation, Income, Expense, Part, CarInvestment, InvestorInvestment, InvestorPayout, Mileage, Downtime, SettlementPeriod, InvestorSettlement
+from .models import (
+    Car,
+    Operation,
+    Income,
+    Expense,
+    Part,
+    CarInvestment,
+    InvestorInvestment,
+    InvestorPayout,
+    Mileage,
+    Downtime,
+    SettlementPeriod,
+    InvestorSettlement,
+)
 from .utils import only_int, normalize_code, find_car
 from .parser import parse_message
-from .finance import car_finance, investor_balance_for_car, period_bounds_for_car, calculate_period_for_car, close_period
+from .finance import (
+    car_finance,
+    investor_balance_for_car,
+    period_bounds_for_car,
+    calculate_period_for_car,
+    close_period,
+)
 from .views import HTML
 
+
 bp = Blueprint("main", __name__)
+
 
 def send_telegram_message(text):
     token = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -42,14 +64,37 @@ def send_telegram_message(text):
         print(f"Ошибка Telegram: {error}")
         return False
 
-@bp.route("/api/test-telegram")
+
+@bp.route("/api/test-telegram", methods=["GET"])
+def test_telegram():
+    success = send_telegram_message(
+        "✅ <b>Fleet AI</b>\n"
+        "Telegram-уведомления успешно подключены."
+    )
+
+    if success:
+        return jsonify({
+            "ok": True,
+            "message": "Сообщение отправлено",
+        })
+
+    return jsonify({
+        "ok": False,
+        "message": "Сообщение не отправлено",
+    }), 500
+
+
 @bp.route("/api/payment-settings", methods=["POST"])
 def save_payment_settings():
     data = request.get_json(silent=True) or request.form
 
-    car_code = normalize_code(data.get("car_code") or data.get("code") or "")
+    car_code = normalize_code(
+        data.get("car_code") or data.get("code") or ""
+    )
     driver = (data.get("driver") or "").strip()
-    next_payment_date = (data.get("next_payment_date") or "").strip()
+    next_payment_date = (
+        data.get("next_payment_date") or ""
+    ).strip()
 
     try:
         weekly_payment = int(data.get("weekly_payment") or 0)
@@ -57,25 +102,25 @@ def save_payment_settings():
     except (TypeError, ValueError):
         return jsonify({
             "ok": False,
-            "message": "Сумма или день недели указаны неправильно"
+            "message": "Сумма или день недели указаны неправильно",
         }), 400
 
     if not car_code:
         return jsonify({
             "ok": False,
-            "message": "Не указан номер машины"
+            "message": "Не указан номер машины",
         }), 400
 
     if weekly_payment < 0:
         return jsonify({
             "ok": False,
-            "message": "Сумма не может быть отрицательной"
+            "message": "Сумма не может быть отрицательной",
         }), 400
 
     if payment_weekday < 0 or payment_weekday > 6:
         return jsonify({
             "ok": False,
-            "message": "Неправильно указан день недели"
+            "message": "Неправильно указан день недели",
         }), 400
 
     if next_payment_date:
@@ -84,7 +129,7 @@ def save_payment_settings():
         except ValueError:
             return jsonify({
                 "ok": False,
-                "message": "Дата должна быть в формате ГГГГ-ММ-ДД"
+                "message": "Дата должна быть в формате ГГГГ-ММ-ДД",
             }), 400
 
     session = Session()
@@ -95,7 +140,7 @@ def save_payment_settings():
         if not car:
             return jsonify({
                 "ok": False,
-                "message": f"Машина {car_code} не найдена"
+                "message": f"Машина {car_code} не найдена",
             }), 404
 
         car.driver = driver
@@ -114,8 +159,8 @@ def save_payment_settings():
                 "driver": car.driver,
                 "weekly_payment": car.weekly_payment,
                 "payment_weekday": car.payment_weekday,
-                "next_payment_date": car.next_payment_date
-            }
+                "next_payment_date": car.next_payment_date,
+            },
         })
 
     except Exception as error:
@@ -124,13 +169,14 @@ def save_payment_settings():
 
         return jsonify({
             "ok": False,
-            "message": "Не удалось сохранить настройки"
+            "message": "Не удалось сохранить настройки",
         }), 500
 
     finally:
         session.close()
 
-        @bp.route("/api/check-driver-payments", methods=["GET"])
+
+@bp.route("/api/check-driver-payments", methods=["GET"])
 def check_driver_payments():
     secret = os.getenv("CRON_SECRET", "")
     received_secret = request.args.get("secret", "")
@@ -138,7 +184,7 @@ def check_driver_payments():
     if secret and received_secret != secret:
         return jsonify({
             "ok": False,
-            "message": "Нет доступа"
+            "message": "Нет доступа",
         }), 403
 
     session = Session()
@@ -160,21 +206,21 @@ def check_driver_payments():
             try:
                 payment_date = datetime.strptime(
                     car.next_payment_date,
-                    "%Y-%m-%d"
+                    "%Y-%m-%d",
                 ).date()
-            except ValueError:
+            except (ValueError, TypeError):
                 continue
 
             days_left = (payment_date - today).days
             driver_name = car.driver or "Не указан"
+            payment_text = f"{car.weekly_payment:,}".replace(",", " ")
 
             if days_left == 1:
                 messages.append(
                     "🟡 <b>Завтра расчёт</b>\n"
                     f"🚕 Машина: <b>{car.code}</b>\n"
                     f"👤 Водитель: {driver_name}\n"
-                    f"💰 Сумма: {car.weekly_payment:,} ₽"
-                    .replace(",", " ")
+                    f"💰 Сумма: {payment_text} ₽"
                 )
 
             elif days_left == 0:
@@ -182,8 +228,7 @@ def check_driver_payments():
                     "🟠 <b>Сегодня расчёт</b>\n"
                     f"🚕 Машина: <b>{car.code}</b>\n"
                     f"👤 Водитель: {driver_name}\n"
-                    f"💰 Должен внести: {car.weekly_payment:,} ₽"
-                    .replace(",", " ")
+                    f"💰 Должен внести: {payment_text} ₽"
                 )
 
             elif days_left < 0:
@@ -193,16 +238,15 @@ def check_driver_payments():
                     "🔴 <b>Платёж просрочен</b>\n"
                     f"🚕 Машина: <b>{car.code}</b>\n"
                     f"👤 Водитель: {driver_name}\n"
-                    f"💰 Долг: {car.weekly_payment:,} ₽\n"
+                    f"💰 Долг: {payment_text} ₽\n"
                     f"⏰ Просрочка: {overdue_days} дн."
-                    .replace(",", " ")
                 )
 
         if not messages:
             return jsonify({
                 "ok": True,
                 "message": "Платежей на сегодня нет",
-                "notifications": 0
+                "notifications": 0,
             })
 
         telegram_text = (
@@ -219,7 +263,7 @@ def check_driver_payments():
                 if sent
                 else "Не удалось отправить уведомление"
             ),
-            "notifications": len(messages)
+            "notifications": len(messages),
         })
 
     except Exception as error:
@@ -227,16 +271,25 @@ def check_driver_payments():
 
         return jsonify({
             "ok": False,
-            "message": "Ошибка проверки платежей"
+            "message": "Ошибка проверки платежей",
         }), 500
 
     finally:
         session.close()
 
-        @bp.route("/api/mark-driver-payment-paid", methods=["POST"])
+
+@bp.route("/api/mark-driver-payment-paid", methods=["POST"])
 def mark_driver_payment_paid():
     data = request.get_json(silent=True) or request.form
-    car_code = normalize_code(data.get("car_code") or data.get("code") or "")
+    car_code = normalize_code(
+        data.get("car_code") or data.get("code") or ""
+    )
+
+    if not car_code:
+        return jsonify({
+            "ok": False,
+            "message": "Не указан номер машины",
+        }), 400
 
     session = Session()
 
@@ -246,7 +299,7 @@ def mark_driver_payment_paid():
         if not car:
             return jsonify({
                 "ok": False,
-                "message": f"Машина {car_code} не найдена"
+                "message": f"Машина {car_code} не найдена",
             }), 404
 
         today = date.today()
@@ -255,9 +308,9 @@ def mark_driver_payment_paid():
             try:
                 next_date = datetime.strptime(
                     car.next_payment_date,
-                    "%Y-%m-%d"
+                    "%Y-%m-%d",
                 ).date()
-            except ValueError:
+            except (ValueError, TypeError):
                 next_date = today
         else:
             next_date = today
@@ -274,7 +327,7 @@ def mark_driver_payment_paid():
             "ok": True,
             "message": "Оплата отмечена",
             "car_code": car.code,
-            "next_payment_date": car.next_payment_date
+            "next_payment_date": car.next_payment_date,
         })
 
     except Exception as error:
@@ -283,28 +336,11 @@ def mark_driver_payment_paid():
 
         return jsonify({
             "ok": False,
-            "message": "Не удалось отметить оплату"
+            "message": "Не удалось отметить оплату",
         }), 500
 
     finally:
         session.close()
-        
-        def test_telegram():
-    success = send_telegram_message(
-        "✅ <b>Fleet AI</b>\n"
-        "Telegram-уведомления успешно подключены."
-    )
-
-    if success:
-        return jsonify({
-            "ok": True,
-            "message": "Сообщение отправлено"
-        })
-
-    return jsonify({
-        "ok": False,
-        "message": "Сообщение не отправлено"
-    }), 500
     
 BAD_INVESTOR_NAMES = {"вложил", "вложила", "оплатил", "оплатила", "внес", "внесла", "дал", "дала", "инвестор", ""}
 
