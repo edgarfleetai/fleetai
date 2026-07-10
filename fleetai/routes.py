@@ -148,6 +148,26 @@ def create_dependencies_from_parsed(session, op, car, data):
         ))
         session.add(Expense(operation_id=op.id, car_code=car.code, category="Доп. расходы", amount=data["total_cost"], share_type="shared"))
 
+    elif data["type"] == "downtime_end":
+        downtime = (
+            session.query(Downtime)
+            .filter(
+                func.trim(Downtime.car_code) == normalize_code(car.code),
+                Downtime.active == 1,
+            )
+            .order_by(Downtime.id.desc())
+            .first()
+        )
+        if downtime:
+            downtime.end_date = op.date or datetime.now()
+            downtime.active = 0
+            if downtime.start_date:
+                downtime.days = max(
+                    (downtime.end_date.date() - downtime.start_date.date()).days,
+                    1,
+                )
+            car.status = "Работает"
+
     elif data["type"] == "downtime":
         session.add(Downtime(
             operation_id=op.id,
@@ -241,6 +261,26 @@ def save_operation(data):
             comment=data["raw"],
         ))
         session.add(Expense(operation_id=op.id, car_code=car.code, category="Доп. расходы", amount=data["total_cost"], share_type="shared"))
+
+    elif data["type"] == "downtime_end":
+        downtime = (
+            session.query(Downtime)
+            .filter(
+                func.trim(Downtime.car_code) == normalize_code(car.code),
+                Downtime.active == 1,
+            )
+            .order_by(Downtime.id.desc())
+            .first()
+        )
+        if downtime:
+            downtime.end_date = op.date or datetime.now()
+            downtime.active = 0
+            if downtime.start_date:
+                downtime.days = max(
+                    (downtime.end_date.date() - downtime.start_date.date()).days,
+                    1,
+                )
+            car.status = "Работает"
 
     elif data["type"] == "downtime":
         session.add(Downtime(
@@ -720,7 +760,7 @@ def api_rebuild_calculations():
 
             # Если старый парсер не понял raw_message, но сама операция уже имеет тип,
             # восстанавливаем зависимости по сохраненному op.type/op.amount.
-            if parsed.get("type") == "unknown" and op.type in ("income", "expense", "repair", "service", "car_investment", "investor_investment", "investor_payout"):
+            if parsed.get("type") == "unknown" and op.type in ("income", "expense", "repair", "service", "car_investment", "investor_investment", "investor_payout", "downtime", "downtime_end"):
                 parsed["type"] = op.type
                 parsed["category"] = op.category or parsed.get("category") or ""
                 parsed["description"] = op.description or parsed.get("description") or ""

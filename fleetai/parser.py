@@ -1,21 +1,7 @@
 import re
 from datetime import datetime
 
-PARTS = {
-    "стойка стаба": ("Стойка стабилизатора", "Подвеска"),
-    "стойки стаба": ("Стойка стабилизатора", "Подвеска"),
-    "стаба": ("Стойка стабилизатора", "Подвеска"),
-    "амортизатор": ("Амортизатор", "Подвеска"),
-    "колодки": ("Тормозные колодки", "Тормоза"),
-    "масло": ("Масло двигателя", "ТО"),
-    "масло двигателя": ("Масло двигателя", "ТО"),
-    "салонный": ("Салонный фильтр", "ТО"),
-    "воздушный": ("Воздушный фильтр", "ТО"),
-    "масляный": ("Масляный фильтр", "ТО"),
-    "масленый": ("Масляный фильтр", "ТО"),
-}
-
-BRANDS = ["amd", "ctr", "mann", "mando", "lynx", "hi-q", "hiq", "sachs", "kyb", "gates", "bosch", "ngk", "denso", "shell", "лукойл"]
+from .parts_catalog import PARTS, BRANDS
 
 MONTHS_RU = {
     "января": 1, "январь": 1, "февраля": 2, "февраль": 2, "марта": 3, "март": 3,
@@ -162,6 +148,18 @@ def parse_message(message):
         data["description"] = "Выплата инвестору"
         return data
 
+    # Завершение текущего простоя должно проверяться раньше обычного слова "простой".
+    if any(phrase in text for phrase in [
+        "конец простоя", "закончить простой", "завершить простой",
+        "вышла с простоя", "вышел с простоя", "вышли с простоя",
+        "закончил простой", "закончила простой", "простой закончен",
+        "снова работает", "вышла на линию", "вышел на линию",
+    ]):
+        data["type"] = "downtime_end"
+        data["category"] = "Простой"
+        data["description"] = "Завершение простоя"
+        return data
+
     if any(x in text for x in ["простой", "стояла", "стоял", "стоит", "в простое", "не работала", "не работал"]):
         data["type"] = "downtime"
         data["category"] = "Простой"
@@ -254,22 +252,32 @@ def parse_message(message):
             data["total"] = nums[-1] if nums else 0
             return data
 
-    if any(word in text for word in ["замена", "поменял", "поменяли", "ремонт"]):
-        data["type"] = "repair"
-        data["category"] = "Ремонт"
-        data["description"] = "Ремонт / замена"
-        nums = parse_amounts(text, data["car_code"])
-        if data["mileage"]:
-            nums = [n for n in nums if n != data["mileage"]]
-        data["total"] = sum(nums) if nums else 0
-        return data
-
+    # Сначала ищем конкретную деталь, и только потом применяем общий ремонт.
+    # Иначе фраза "замена петли капота" превращалась бы в безымянный ремонт.
     for key, val in sorted(PARTS.items(), key=lambda x: len(x[0]), reverse=True):
         if key in text:
             data["part"], data["category"] = val
             data["description"] = "Замена " + data["part"].lower()
             data["type"] = "service" if data["category"] == "ТО" else "repair"
             break
+
+    if not data["part"] and any(word in text for word in ["замена", "поменял", "поменяли", "ремонт", "починил", "починили"]):
+        data["type"] = "repair"
+        data["category"] = "Ремонт"
+
+        # Умный запасной вариант: незнакомую деталь все равно сохраняем.
+        # Например: "703 замена редкой детали 2500 работа 700".
+        candidate = text
+        if data["car_code"]:
+            candidate = re.sub(r"^\s*" + re.escape(data["car_code"]) + r"\b", "", candidate).strip()
+        candidate = re.sub(r"\b(замена|поменял|поменяли|ремонт|починил|починили)\b", "", candidate).strip()
+        candidate = re.sub(r"\b(цена|стоимость|работа|пробег)\s*\d+\b", "", candidate).strip()
+        candidate = re.sub(r"\b\d{2,9}\b", "", candidate).strip(" -—.,")
+        if candidate:
+            data["part"] = candidate[:120].capitalize()
+            data["description"] = "Ремонт / замена: " + data["part"].lower()
+        else:
+            data["description"] = "Ремонт / замена"
 
     price = re.search(r"(стоимость|цена)\s*(\d+)", text)
     labor = re.search(r"(работа|ремонт)\s*(\d+)", text)
