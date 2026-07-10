@@ -1,3 +1,6 @@
+import os
+import requests
+
 from datetime import datetime
 from flask import Blueprint, request, jsonify, render_template_string
 from sqlalchemy import func
@@ -11,6 +14,52 @@ from .views import HTML
 
 bp = Blueprint("main", __name__)
 
+def send_telegram_message(text):
+    token = os.getenv("TELEGRAM_BOT_TOKEN")
+    chat_id = os.getenv("TELEGRAM_CHAT_ID")
+
+    if not token or not chat_id:
+        print("Telegram не настроен: нет токена или chat id")
+        return False
+
+    url = f"https://api.telegram.org/bot{token}/sendMessage"
+
+    try:
+        response = requests.post(
+            url,
+            json={
+                "chat_id": chat_id,
+                "text": text,
+                "parse_mode": "HTML",
+            },
+            timeout=15,
+        )
+
+        response.raise_for_status()
+        return True
+
+    except requests.RequestException as error:
+        print(f"Ошибка Telegram: {error}")
+        return False
+
+@bp.route("/api/test-telegram")
+def test_telegram():
+    success = send_telegram_message(
+        "✅ <b>Fleet AI</b>\n"
+        "Telegram-уведомления успешно подключены."
+    )
+
+    if success:
+        return jsonify({
+            "ok": True,
+            "message": "Сообщение отправлено"
+        })
+
+    return jsonify({
+        "ok": False,
+        "message": "Сообщение не отправлено"
+    }), 500
+    
 BAD_INVESTOR_NAMES = {"вложил", "вложила", "оплатил", "оплатила", "внес", "внесла", "дал", "дала", "инвестор", ""}
 
 
