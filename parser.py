@@ -178,6 +178,14 @@ def parse_message(message):
         data["description"] = reason or "Простой"
         data["active"] = active
         return data
+        
+    if (
+    "конец простоя" in text
+    or "вышла с простоя" in text
+    or "закончил простой" in text
+):
+    data["type"] = "downtime_end"
+    return data
 
     investment_words = ["доп вложение", "дополнительное вложение", "дополнительные вложения", "допы", "доп", "вложение", "вложения", "кап вложение", "капиталка", "гбо"]
     if any(re.search(r"\b" + re.escape(w) + r"\b", text) for w in investment_words):
