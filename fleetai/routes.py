@@ -750,7 +750,11 @@ def api_cars():
             "full_cost": (car.purchase_price or 0) + investments,
             "owner_type": car.owner_type or "own", "investor_name": car.investor_name or "",
             "investor_percent": car.investor_percent or 0, "downtime_days": downtime_days,
-            "settlement_day": car.settlement_day or 15,
+            "settlement_day": car.settlement_day or 15,"driver": car.driver or "",
+            "weekly_payment": car.weekly_payment or 0,
+            "payment_weekday": car.payment_weekday or 0,
+            "next_payment_date": car.next_payment_date or "",
+            "payment_notifications": car.payment_notifications or 0,
         })
     session.close()
     return jsonify(rows)
