@@ -21,6 +21,12 @@ def run_migrations():
         "ALTER TABLE cars ADD COLUMN investor_percent INTEGER DEFAULT 0",
         "ALTER TABLE cars ADD COLUMN driver VARCHAR DEFAULT ''",
         "ALTER TABLE cars ADD COLUMN settlement_day INTEGER DEFAULT 15",
+
+        "ALTER TABLE cars ADD COLUMN weekly_payment INTEGER DEFAULT 0",
+        "ALTER TABLE cars ADD COLUMN payment_weekday INTEGER DEFAULT 0",
+        "ALTER TABLE cars ADD COLUMN next_payment_date VARCHAR DEFAULT ''",
+        "ALTER TABLE cars ADD COLUMN payment_notifications INTEGER DEFAULT 1",
+        
         "ALTER TABLE expenses ADD COLUMN share_type VARCHAR DEFAULT 'shared'",
         "ALTER TABLE car_investments ADD COLUMN investor_name VARCHAR DEFAULT ''",
         "ALTER TABLE downtime ADD COLUMN operation_id INTEGER",
