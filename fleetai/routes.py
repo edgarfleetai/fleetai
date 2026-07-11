@@ -415,7 +415,7 @@ def cleanup_legacy_investor_mess(session):
         # Если расход уже есть по этой операции — не дублируем.
         exp = session.query(Expense).filter_by(operation_id=op.id).first()
         if not exp:
-            session.add(Expense(operation_id=op.id, car_code=op.car_code, category="Доп. расходы", amount=total_cost, share_type="shared"))
+            session.add(Expense(operation_id=op.id, car_code=op.car_code, category="Доп. расходы", amount=total_cost, share_type="investor_only"))
         changed = True
 
     if changed:
@@ -591,7 +591,7 @@ def save_operation(data):
             park_debt_to_investor=data["park_debt_to_investor"], description=data["description"],
             comment=data["raw"],
         ))
-        session.add(Expense(operation_id=op.id, car_code=car.code, category="Доп. расходы", amount=data["total_cost"], share_type="shared"))
+        session.add(Expense(operation_id=op.id, car_code=car.code, category="Доп. расходы", amount=data["total_cost"], share_type="investor_only"))
 
     elif data["type"] == "downtime_end":
         downtime = (
@@ -997,7 +997,7 @@ def api_investors():
 
                     amount = row.amount or 0
 
-                                        operation = None
+                    operation = None
 
                     if row.operation_id:
                         operation = (
