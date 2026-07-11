@@ -996,6 +996,24 @@ def api_investors():
                         continue
 
                     amount = row.amount or 0
+
+                                        operation = None
+
+                    if row.operation_id:
+                        operation = (
+                            session.query(Operation)
+                            .filter_by(id=row.operation_id)
+                            .first()
+                        )
+
+                    if (
+                        operation
+                        and operation.type
+                        == "investor_expense_split"
+                    ):
+                        investor_only_expenses += amount
+                        continue
+                        
                     expense_type = (
                         row.share_type or "shared"
                     ).strip().lower()
