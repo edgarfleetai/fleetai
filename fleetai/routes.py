@@ -477,7 +477,7 @@ def create_dependencies_from_parsed(session, op, car, data):
             description=data["description"],
             comment=data["raw"],
         ))
-        session.add(Expense(operation_id=op.id, car_code=car.code, category="Доп. расходы", amount=data["total_cost"], share_type="shared"))
+        session.add(Expense(operation_id=op.id, car_code=car.code, category="Доп. расходы", amount=data["total_cost"], share_type="investor_only"))
 
     elif data["type"] == "downtime_end":
         downtime = (
