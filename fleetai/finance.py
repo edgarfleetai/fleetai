@@ -37,21 +37,25 @@ def car_finance(session, code):
 
 
 def investor_balance_for_car(session, car):
-    """Правильный расчет инвестора по машине.
-
-    Логика для ситуации запуска машины:
-    - машина получила доход;
-    - были доп. расходы/расходы после покупки;
-    - инвестор внес часть денег на эти расходы;
-    - остаток расходов закрывается ТОЛЬКО долей инвестора, например 75%, а не всей выручкой.
-
-    Пример:
-    доход 13 000, расходы 41 700, инвестор внес 25 000, доля 75%.
-    долг = 41 700 - 25 000 = 16 700
-    доля инвестора = 13 000 * 75% = 9 750
-    остаток долга = 16 700 - 9 750 = 6 950
-    к выплате = 0
     """
+    Расчёт инвестора по машине.
+
+    shared:
+        обычный расход;
+        сначала вычитается из дохода;
+        остаток делится между инвестором и парком.
+
+    investor_only:
+        допрасход;
+        вычитается только из доли инвестора.
+
+    park_only:
+        вычитается только из доли парка.
+
+    Расчёт ведётся накопительно, поэтому долг инвестора
+    автоматически переносится на следующие доходы.
+    """
+
     if car.owner_type != "investor":
         return {
             "investor_debt_to_park": 0,
@@ -64,62 +68,185 @@ def investor_balance_for_car(session, car):
             "debt_base": 0,
             "investor_extra_paid": 0,
             "extra_expenses": 0,
+            "shared_expenses": 0,
+            "park_only_expenses": 0,
             "park_share_total": 0,
         }
 
-    income, expenses, investments, payouts, investor_invested, downtime_days = car_finance(session, car.code)
+    car_code = normalize_code(car.code)
     percent = car.investor_percent or 0
 
-    # Данные из явных взаиморасчетов: "636 доп расходы 41700 инвестор оплатил 25000"
-    settlement_debt = 0
-    park_debt = 0
+    income = 0
+    payouts = 0
+    investor_invested = 0
+
+    shared_expenses = 0
+    investor_only_expenses = 0
+    park_only_expenses = 0
+
+    # Доход машины.
+    for row in session.query(Income).all():
+        if normalize_code(row.car_code) == car_code:
+            income += row.amount or 0
+
+    # Выплаты инвестору.
+    for row in session.query(InvestorPayout).all():
+        if normalize_code(row.car_code) == car_code:
+            payouts += row.amount or 0
+
+    # Деньги, которые инвестор дополнительно внес на расходы.
+    for row in session.query(InvestorInvestment).all():
+        if normalize_code(row.car_code) == car_code:
+            investor_invested += row.amount or 0
+
+    # Разделяем расходы по типам.
+    for row in session.query(Expense).all():
+        if normalize_code(row.car_code) != car_code:
+            continue
+
+        amount = row.amount or 0
+        expense_type = (
+            row.share_type or "shared"
+        ).strip().lower()
+
+        if expense_type in {
+            "investor_only",
+            "investor",
+            "investor-only",
+            "только инвестор",
+            "допрасход",
+            "доп расход",
+            "доп расходы",
+        }:
+            investor_only_expenses += amount
+
+        elif expense_type in {
+            "park_only",
+            "park",
+            "owner_only",
+            "только парк",
+        }:
+            park_only_expenses += amount
+
+        else:
+            # Все старые расходы без типа считаются обычными.
+            shared_expenses += amount
+
+    # Явные взаиморасчёты:
+    # "636 доп расходы 41700 инвестор оплатил 25000"
     settlement_expenses = 0
     settlement_investor_paid = 0
+    park_debt_to_investor = 0
 
     for row in session.query(InvestorSettlement).all():
-        if normalize_code(row.car_code) == normalize_code(car.code):
-            settlement_debt += row.investor_debt_to_park or 0
-            park_debt += row.park_debt_to_investor or 0
-            settlement_expenses += row.total_cost or 0
-            settlement_investor_paid += row.investor_paid or 0
+        if normalize_code(row.car_code) != car_code:
+            continue
 
-    # Если явного взаиморасчета нет, но есть расходы и инвестор внес деньги,
-    # считаем это запуском/доп. расходами: расходы - вложение инвестора = долг инвестора.
-    # Это именно твой кейс: расход 41 700, инвестор внес 25 000.
+        settlement_expenses += row.total_cost or 0
+        settlement_investor_paid += row.investor_paid or 0
+        park_debt_to_investor += row.park_debt_to_investor or 0
+
+    # Если есть явный взаиморасчёт, используем его как допрасход.
+    # Это защищает от двойного учёта одной и той же операции.
     if settlement_expenses > 0:
         extra_expenses = settlement_expenses
         investor_extra_paid = settlement_investor_paid
-        debt_base = settlement_debt
     else:
-        extra_expenses = expenses or 0
-        investor_extra_paid = investor_invested or 0
-        debt_base = max(extra_expenses - investor_extra_paid, 0)
+        extra_expenses = investor_only_expenses
+        investor_extra_paid = investor_invested
 
-    # Расходы, которые сформировали долг/запуск, не должны второй раз уменьшать долю инвестора.
-    # Поэтому для деления 75/25 берем доход минус обычные расходы, НЕ включая extra_expenses.
-    normal_expenses = max((expenses or 0) - (extra_expenses or 0), 0)
-    normal_profit_for_split = (income or 0) - normal_expenses
+    # Обычные расходы вычитаются ДО разделения прибыли.
+    normal_profit_for_split = (
+        income
+        - shared_expenses
+    )
 
-    investor_share_total = round(max(normal_profit_for_split, 0) * percent / 100)
-    park_share_total = max(normal_profit_for_split, 0) - investor_share_total
+    # Доля инвестора может быть отрицательной,
+    # если обычные расходы оказались больше дохода.
+    investor_share_raw = round(
+        normal_profit_for_split
+        * percent
+        / 100
+    )
 
-    # Долг инвестора закрывается только его долей.
-    debt_repaid = min(investor_share_total, debt_base)
-    remaining_debt = max(debt_base - debt_repaid, 0)
+    park_share_raw = (
+        normal_profit_for_split
+        - investor_share_raw
+    )
 
-    available = max(investor_share_total - debt_repaid, 0) + park_debt - payouts
+    # Если по обычным расходам инвестор получил минус,
+    # его часть убытка тоже становится долгом.
+    investor_shared_loss = max(
+        -investor_share_raw,
+        0,
+    )
+
+    investor_positive_share = max(
+        investor_share_raw,
+        0,
+    )
+
+    # Допрасход инвестора минус деньги,
+    # которые он уже сам внёс.
+    extra_debt = max(
+        extra_expenses
+        - investor_extra_paid,
+        0,
+    )
+
+    # Общая задолженность инвестора.
+    debt_base = (
+        extra_debt
+        + investor_shared_loss
+    )
+
+    # Сколько долга погашено из накопленной доли инвестора.
+    debt_repaid = min(
+        investor_positive_share,
+        debt_base,
+    )
+
+    remaining_debt = max(
+        debt_base
+        - investor_positive_share,
+        0,
+    )
+
+    # Остаток доли после закрытия долга и прежних выплат.
+    available_to_pay = max(
+        investor_positive_share
+        - debt_base
+        + park_debt_to_investor
+        - payouts,
+        0,
+    )
+
+    # Доля парка после обычного разделения,
+    # затем отдельно вычитаются расходы только парка.
+    park_share_total = (
+        park_share_raw
+        - park_only_expenses
+        + debt_repaid
+    )
 
     return {
         "investor_debt_to_park": remaining_debt,
-        "park_debt_to_investor": park_debt,
-        "investor_share_total": investor_share_total,
+        "park_debt_to_investor": park_debt_to_investor,
+
+        "investor_share_total": investor_positive_share,
         "paid_to_investor": payouts,
         "debt_repaid_by_profit": debt_repaid,
-        "available_to_pay": available,
+        "available_to_pay": available_to_pay,
+
         "normal_profit_for_split": normal_profit_for_split,
+
         "debt_base": debt_base,
         "investor_extra_paid": investor_extra_paid,
+
         "extra_expenses": extra_expenses,
+        "shared_expenses": shared_expenses,
+        "park_only_expenses": park_only_expenses,
+
         "park_share_total": park_share_total,
     }
 
