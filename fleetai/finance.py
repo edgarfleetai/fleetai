@@ -100,11 +100,32 @@ def investor_balance_for_car(session, car):
             investor_invested += row.amount or 0
 
     # Разделяем расходы по типам.
+        shared_expenses = 0
+    investor_only_expenses = 0
+    park_only_expenses = 0
+
     for row in session.query(Expense).all():
         if normalize_code(row.car_code) != car_code:
             continue
 
         amount = row.amount or 0
+
+        operation = None
+
+        if row.operation_id:
+            operation = (
+                session.query(Operation)
+                .filter_by(id=row.operation_id)
+                .first()
+            )
+
+        # Все операции "Доп. расходы / взаиморасчёт"
+        # всегда считаем только расходом инвестора,
+        # даже если в старой записи share_type сохранился неправильно.
+        if operation and operation.type == "investor_expense_split":
+            investor_only_expenses += amount
+            continue
+
         expense_type = (
             row.share_type or "shared"
         ).strip().lower()
@@ -129,9 +150,8 @@ def investor_balance_for_car(session, car):
             park_only_expenses += amount
 
         else:
-            # Все старые расходы без типа считаются обычными.
             shared_expenses += amount
-
+            
     # Явные взаиморасчёты:
     # "636 доп расходы 41700 инвестор оплатил 25000"
     settlement_expenses = 0
@@ -148,9 +168,17 @@ def investor_balance_for_car(session, car):
 
     # Если есть явный взаиморасчёт, используем его как допрасход.
     # Это защищает от двойного учёта одной и той же операции.
-    if settlement_expenses > 0:
+        if settlement_expenses > 0:
+        # InvestorSettlement уже содержит сумму допрасхода.
+        # Не прибавляем investor_only_expenses второй раз.
         extra_expenses = settlement_expenses
-        investor_extra_paid = settlement_investor_paid
+
+        # Учитываем и оплату внутри одной команды,
+        # и отдельные вложения инвестора.
+        investor_extra_paid = max(
+            settlement_investor_paid,
+            investor_invested,
+        )
     else:
         extra_expenses = investor_only_expenses
         investor_extra_paid = investor_invested
