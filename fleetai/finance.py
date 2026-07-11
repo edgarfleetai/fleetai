@@ -168,25 +168,23 @@ def investor_balance_for_car(session, car):
 
     # Если есть явный взаиморасчёт, используем его как допрасход.
     # Это защищает от двойного учёта одной и той же операции.
-        if settlement_expenses > 0:
-        # InvestorSettlement уже содержит сумму допрасхода.
-        # Не прибавляем investor_only_expenses второй раз.
+           if settlement_expenses > 0:
+        # Явный взаиморасчёт уже содержит сумму допрасхода.
         extra_expenses = settlement_expenses
 
-        # Учитываем и оплату внутри одной команды,
-        # и отдельные вложения инвестора.
+        # Учитываем оплату из одной команды или отдельное вложение.
         investor_extra_paid = max(
             settlement_investor_paid,
             investor_invested,
         )
+
     else:
         extra_expenses = investor_only_expenses
         investor_extra_paid = investor_invested
 
-    # Обычные расходы вычитаются ДО разделения прибыли.
-    normal_profit_for_split = (
-        income
-        - shared_expenses
+    debt_base = max(
+        extra_expenses - investor_extra_paid,
+        0,
     )
 
     # Доля инвестора может быть отрицательной,
