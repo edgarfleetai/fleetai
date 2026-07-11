@@ -83,36 +83,213 @@ def downtime_days_by_period(session, car_code, start, end):
 
     return total
 
+def previous_investor_debt(session, car_code, before_date):
+    """
+    Получает долг инвестора, перенесённый из последнего
+    закрытого расчётного периода.
+
+    Отрицательный investor_amount означает, что инвестор
+    должен парку.
+    """
+
+    last_period = (
+        session.query(SettlementPeriod)
+        .filter(
+            func.trim(SettlementPeriod.car_code)
+            == normalize_code(car_code),
+            SettlementPeriod.end_date <= before_date,
+        )
+        .order_by(SettlementPeriod.end_date.desc())
+        .first()
+    )
+
+    if not last_period:
+        return 0
+
+    investor_amount = last_period.investor_amount or 0
+
+    if investor_amount < 0:
+        return abs(investor_amount)
+
+    return 0
 
 def calculate_period_for_car(session, car, start, end):
+    car_code = normalize_code(car.code)
+
     income = 0
+
     for row in session.query(Income).all():
-        if normalize_code(row.car_code) == normalize_code(car.code) and row.date and start <= row.date < end:
+        if (
+            normalize_code(row.car_code) == car_code
+            and row.date
+            and start <= row.date < end
+        ):
             income += row.amount or 0
 
-    expenses = 0
+    shared_expenses = 0
+    investor_only_expenses = 0
+    park_only_expenses = 0
+
     for row in session.query(Expense).all():
-        if normalize_code(row.car_code) == normalize_code(car.code) and row.date and start <= row.date < end:
-            expenses += row.amount or 0
+        if (
+            normalize_code(row.car_code) != car_code
+            or not row.date
+            or not (start <= row.date < end)
+        ):
+            continue
+
+        amount = row.amount or 0
+        expense_type = (row.share_type or "shared").strip().lower()
+
+        if expense_type in {
+            "investor_only",
+            "investor",
+            "investor-only",
+            "только инвестор",
+            "допрасход",
+            "доп расходы",
+        }:
+            investor_only_expenses += amount
+
+        elif expense_type in {
+            "park_only",
+            "park",
+            "owner_only",
+            "только парк",
+        }:
+            park_only_expenses += amount
+
+        else:
+            shared_expenses += amount
 
     investments = 0
+
     for row in session.query(CarInvestment).all():
-        if normalize_code(row.car_code) == normalize_code(car.code) and row.date and start <= row.date < end:
+        if (
+            normalize_code(row.car_code) == car_code
+            and row.date
+            and start <= row.date < end
+        ):
             investments += row.amount or 0
 
-    profit = income - expenses
     investor_percent = car.investor_percent or 0
-    investor_amount = round(profit * investor_percent / 100) if car.owner_type == "investor" else 0
-    owner_amount = profit - investor_amount
-    downtime_days = downtime_days_by_period(session, car.code, start, end)
+
+    # Обычные расходы сначала вычитаются из общего дохода.
+    shared_profit = income - shared_expenses
+
+    if car.owner_type == "investor":
+        investor_share_before_expenses = round(
+            shared_profit * investor_percent / 100
+        )
+
+        owner_share_before_expenses = (
+            shared_profit - investor_share_before_expenses
+        )
+    else:
+        investor_share_before_expenses = 0
+        owner_share_before_expenses = shared_profit
+
+    previous_debt = 0
+
+    if car.owner_type == "investor":
+        previous_debt = previous_investor_debt(
+            session,
+            car.code,
+            start,
+        )
+
+    # Всё, что должен покрыть инвестор:
+    # старый долг + новые расходы только инвестора.
+    total_investor_debt = (
+        previous_debt
+        + investor_only_expenses
+    )
+
+    # Если доля инвестора отрицательная из-за общих расходов,
+    # эта сумма тоже становится его долгом.
+    negative_investor_share = max(
+        -investor_share_before_expenses,
+        0,
+    )
+
+    available_investor_share = max(
+        investor_share_before_expenses,
+        0,
+    )
+
+    # Сколько долга удалось закрыть из текущей доли инвестора.
+    debt_repaid = min(
+        available_investor_share,
+        total_investor_debt,
+    )
+
+    investor_payout = max(
+        available_investor_share
+        - total_investor_debt,
+        0,
+    )
+
+    investor_debt_to_park = (
+        max(
+            total_investor_debt
+            - available_investor_share,
+            0,
+        )
+        + negative_investor_share
+    )
+
+    # Если остался долг, сохраняем investor_amount отрицательным.
+    # Так следующий расчётный период автоматически его увидит.
+    if investor_debt_to_park > 0:
+        investor_amount = -investor_debt_to_park
+    else:
+        investor_amount = investor_payout
+
+    # Парк получает свою долю, минус свои расходы,
+    # плюс сумму долга, которую удалось удержать из доли инвестора.
+    owner_amount = (
+        owner_share_before_expenses
+        - park_only_expenses
+        + debt_repaid
+    )
+
+    total_expenses = (
+        shared_expenses
+        + investor_only_expenses
+        + park_only_expenses
+    )
+
+    total_profit = income - total_expenses
+
+    downtime_days = downtime_days_by_period(
+        session,
+        car.code,
+        start,
+        end,
+    )
 
     return {
         "income": income,
-        "expenses": expenses,
+        "expenses": total_expenses,
+        "shared_expenses": shared_expenses,
+        "investor_only_expenses": investor_only_expenses,
+        "park_only_expenses": park_only_expenses,
         "investments": investments,
-        "profit": profit,
+        "profit": total_profit,
+
         "investor_name": car.investor_name or "",
         "investor_percent": investor_percent,
+
+        "investor_share_before_expenses":
+            investor_share_before_expenses,
+
+        "owner_share_before_expenses":
+            owner_share_before_expenses,
+
+        "previous_investor_debt": previous_debt,
+        "debt_repaid": debt_repaid,
+        "investor_debt_to_park": investor_debt_to_park,
+
         "investor_amount": investor_amount,
         "owner_amount": owner_amount,
         "downtime_days": downtime_days,
