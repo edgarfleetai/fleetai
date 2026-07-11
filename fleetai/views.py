@@ -185,10 +185,104 @@ async function loadInvestorsSummary(){
   investorsSummary.innerHTML=`<div class="card"><h3>Общий расчет по инвесторам</h3><div class="grid"><div class="stat">Инвесторов <b>${s.investors_count}</b></div><div class="stat">Вложили <b>${rub(s.total_invested)}</b></div><div class="stat">Выплачено <b>${rub(s.total_payouts)}</b></div><div class="stat">К выплате <b>${rub(s.available_to_pay)}</b></div><div class="stat">Долг инвесторов <b>${rub(s.investor_debt_to_park)}</b></div><div class="stat">Прибыль <b>${rub(s.profit)}</b></div><div class="stat">Доля парка <b>${rub(s.owner_share)}</b></div></div><table><tr><th>Инвестор</th><th>Машин</th><th>Вложил</th><th>Прибыль</th><th>Доля инвестора</th><th>Выплачено</th><th>К выплате</th><th>Долг инвестора</th><th>Парк должен</th></tr>${s.investors.map(i=>`<tr><td>${i.name}</td><td>${i.cars_count}</td><td>${rub(i.total_invested)}</td><td>${rub(i.profit)}</td><td>${rub(i.investor_share)}</td><td>${rub(i.total_payouts)}</td><td>${rub(i.available_to_pay)}</td><td>${rub(i.investor_debt_to_park)}</td><td>${rub(i.park_debt_to_investor)}</td></tr>`).join('')}</table></div>`;
 }
 
-async function loadInvestors(){
-  let d=await api('/api/investors');
-  if(!d.length){investors.innerHTML='Пока нет машин инвесторов';return}
-  investors.innerHTML=d.map(i=>`<div class="card"><h3>${i.name}</h3><b>Вложил:</b> ${rub(i.total_invested)} | <b>Выплачено:</b> ${rub(i.total_payouts)} | <b>К выплате:</b> ${rub(i.available_to_pay)} | <b>Долг инвестора:</b> ${rub(i.investor_debt_to_park)}<table><tr><th>Машина</th><th>%</th><th>Вложил</th><th>Доход</th><th>Расход</th><th>Прибыль</th><th>К выплате</th><th>Долг</th><th>Карточка</th></tr>${i.cars.map(c=>`<tr><td>${c.code} ${c.car}</td><td>${c.percent}%</td><td>${rub(c.invested)}</td><td>${rub(c.income)}</td><td>${rub(c.expenses)}</td><td>${rub(c.profit)}</td><td>${rub(c.available_to_pay)}</td><td>${rub(c.investor_debt_to_park||0)}</td><td><button onclick="openCar('${c.code}')">Открыть</button></td></tr>`).join('')}</table></div>`).join('');
+async function loadInvestors() {
+    let data = await api('/api/investors');
+
+    if (!Array.isArray(data)) {
+        investors.innerHTML =
+            `<div class="bad">${data.message || 'Ошибка загрузки инвесторов'}</div>`;
+        return;
+    }
+
+    if (!data.length) {
+        investors.innerHTML = 'Пока нет машин инвесторов';
+        return;
+    }
+
+    investors.innerHTML = data.map(investor => `
+        <div class="card">
+            <h3>${investor.name}</h3>
+
+            <p>
+                <b>Вложил:</b>
+                ${rub(investor.total_invested)}
+
+                |
+
+                <b>Выплачено:</b>
+                ${rub(investor.total_payouts)}
+
+                |
+
+                <b>К выплате:</b>
+                ${rub(investor.available_to_pay)}
+
+                |
+
+                <b>Долг инвестора:</b>
+                ${rub(investor.investor_debt_to_park)}
+            </p>
+
+            <table>
+                <tr>
+                    <th>Машина</th>
+                    <th>%</th>
+                    <th>Вложил</th>
+                    <th>Доход</th>
+                    <th>Допрасход</th>
+                    <th>Расход</th>
+                    <th>К выплате</th>
+                    <th>Долг</th>
+                    <th>Карточка</th>
+                </tr>
+
+                ${investor.cars.map(car => `
+                    <tr>
+                        <td>
+                            ${car.code}
+                            ${car.car || ''}
+                        </td>
+
+                        <td>
+                            ${car.percent || 0}%
+                        </td>
+
+                        <td>
+                            ${rub(car.invested)}
+                        </td>
+
+                        <td>
+                            ${rub(car.income)}
+                        </td>
+
+                        <td>
+                            ${rub(car.investor_only_expenses)}
+                        </td>
+
+                        <td>
+                            ${rub(car.shared_expenses)}
+                        </td>
+
+                        <td>
+                            ${rub(car.available_to_pay)}
+                        </td>
+
+                        <td>
+                            ${rub(car.investor_debt_to_park)}
+                        </td>
+
+                        <td>
+                            <button
+                                onclick="openCar('${car.code}')"
+                            >
+                                Открыть
+                            </button>
+                        </td>
+                    </tr>
+                `).join('')}
+            </table>
+        </div>
+    `).join('');
 }
 
 let paymentCars=[];
