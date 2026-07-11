@@ -23,6 +23,11 @@ class Car(Base):
     investor_percent = Column(Integer, default=0)
     settlement_day = Column(Integer, default=15)
 
+    weekly_payment = Column(Integer, default=0)
+    payment_weekday = Column(Integer, default=0)
+    next_payment_date = Column(String, default="")
+    payment_notifications = Column(Integer, default=1)
+
 
 class Operation(Base):
     __tablename__ = "operations"
