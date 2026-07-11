@@ -922,29 +922,170 @@ def api_investors_summary():
 @bp.route("/api/investors")
 def api_investors():
     session = Session()
-    cleanup_legacy_investor_mess(session)
-    names = [r[0] for r in session.query(Car.investor_name).filter(Car.owner_type == "investor", Car.investor_name != "").distinct().all()]
-    result = []
-    for name in names:
-        cars = session.query(Car).filter_by(owner_type="investor", investor_name=name).all()
-        details = []
-        totals = dict(total_invested=0, total_payouts=session.query(func.coalesce(func.sum(InvestorPayout.amount), 0)).filter_by(investor_name=name).scalar(), total_profit=0, total_to_investor=0, investor_debt_to_park=0, available_to_pay=0)
-        for car in cars:
-            car_total_invested = investor_total_invested_for_car(session, car)
-            totals["total_invested"] += car_total_invested
-            income, expenses, investments, payouts, investor_invested, downtime_days = car_finance(session, car.code)
-            profit = income - expenses
-            bal = investor_balance_for_car(session, car)
-            split_profit = bal.get("normal_profit_for_split", profit)
-            share = bal["investor_share_total"]
-            totals["total_profit"] += split_profit
-            totals["total_to_investor"] += share
-            totals["investor_debt_to_park"] += bal["investor_debt_to_park"]
-            totals["available_to_pay"] += bal["available_to_pay"]
-            details.append({"code": car.code, "car": f"{car.brand or ''} {car.model or ''}", "percent": car.investor_percent or 0, "income": income, "expenses": expenses, "profit": split_profit, "to_investor": share, "available_to_pay": bal["available_to_pay"], "investor_debt_to_park": bal["investor_debt_to_park"], "invested": car_total_invested})
-        result.append({"name": name, "cars": details, **totals})
-    session.close()
-    return jsonify(result)
+
+    try:
+        cleanup_legacy_investor_mess(session)
+
+        names = [
+            row[0]
+            for row in (
+                session.query(Car.investor_name)
+                .filter(
+                    Car.owner_type == "investor",
+                    Car.investor_name != "",
+                )
+                .distinct()
+                .all()
+            )
+        ]
+
+        result = []
+
+        for name in names:
+            cars = (
+                session.query(Car)
+                .filter_by(
+                    owner_type="investor",
+                    investor_name=name,
+                )
+                .all()
+            )
+
+            details = []
+
+            totals = {
+                "total_invested": 0,
+                "total_income": 0,
+                "total_shared_expenses": 0,
+                "total_investor_only_expenses": 0,
+                "total_payouts": (
+                    session.query(
+                        func.coalesce(
+                            func.sum(InvestorPayout.amount),
+                            0,
+                        )
+                    )
+                    .filter_by(investor_name=name)
+                    .scalar()
+                    or 0
+                ),
+                "total_to_investor": 0,
+                "investor_debt_to_park": 0,
+                "available_to_pay": 0,
+            }
+
+            for car in cars:
+                car_code = normalize_code(car.code)
+
+                car_total_invested = investor_total_invested_for_car(
+                    session,
+                    car,
+                )
+
+                income = 0
+                shared_expenses = 0
+                investor_only_expenses = 0
+                park_only_expenses = 0
+
+                for row in session.query(Income).all():
+                    if normalize_code(row.car_code) == car_code:
+                        income += row.amount or 0
+
+                for row in session.query(Expense).all():
+                    if normalize_code(row.car_code) != car_code:
+                        continue
+
+                    amount = row.amount or 0
+                    expense_type = (
+                        row.share_type or "shared"
+                    ).strip().lower()
+
+                    if expense_type in {
+                        "investor_only",
+                        "investor",
+                        "investor-only",
+                        "только инвестор",
+                        "допрасход",
+                        "доп расход",
+                        "доп расходы",
+                    }:
+                        investor_only_expenses += amount
+
+                    elif expense_type in {
+                        "park_only",
+                        "owner_only",
+                        "park",
+                        "только парк",
+                    }:
+                        park_only_expenses += amount
+
+                    else:
+                        shared_expenses += amount
+
+                balance = investor_balance_for_car(session, car)
+
+                available_to_pay = (
+                    balance.get("available_to_pay", 0) or 0
+                )
+
+                investor_debt = (
+                    balance.get("investor_debt_to_park", 0) or 0
+                )
+
+                investor_share = (
+                    balance.get("investor_share_total", 0) or 0
+                )
+
+                totals["total_invested"] += car_total_invested
+                totals["total_income"] += income
+                totals["total_shared_expenses"] += shared_expenses
+                totals[
+                    "total_investor_only_expenses"
+                ] += investor_only_expenses
+                totals["total_to_investor"] += investor_share
+                totals["available_to_pay"] += available_to_pay
+                totals["investor_debt_to_park"] += investor_debt
+
+                details.append({
+                    "code": car.code,
+                    "car": (
+                        f"{car.brand or ''} {car.model or ''}"
+                    ).strip(),
+                    "percent": car.investor_percent or 0,
+
+                    "invested": car_total_invested,
+                    "income": income,
+
+                    "investor_only_expenses":
+                        investor_only_expenses,
+
+                    "shared_expenses": shared_expenses,
+                    "park_only_expenses": park_only_expenses,
+
+                    "to_investor": investor_share,
+                    "available_to_pay": available_to_pay,
+                    "investor_debt_to_park": investor_debt,
+                })
+
+            result.append({
+                "name": name,
+                "cars": details,
+                **totals,
+            })
+
+        return jsonify(result)
+
+    except Exception as error:
+        session.rollback()
+        print(f"Ошибка /api/investors: {error}")
+
+        return jsonify({
+            "ok": False,
+            "message": "Ошибка расчёта инвесторов",
+        }), 500
+
+    finally:
+        session.close()
 
 
 
