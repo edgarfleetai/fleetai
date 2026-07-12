@@ -10,7 +10,7 @@ HTML = '''
 body{font-family:Arial;background:#f3f5f7;margin:0;color:#111827}
 .wrap{max-width:1280px;margin:auto;padding:24px}
 .card{background:white;border-radius:16px;padding:18px;margin:14px 0;box-shadow:0 2px 12px #0001}
-.grid{display:grid;grid-template-columns:repeat(7,1fr);gap:12px}
+.grid{display:grid;grid-template-columns:repeat(5,1fr);gap:12px}
 .stat{background:#111827;color:white;border-radius:14px;padding:16px}
 .stat b{font-size:22px;display:block;margin-top:8px}
 input,select{padding:12px;font-size:16px;border:1px solid #ddd;border-radius:10px;margin:4px}
@@ -140,46 +140,64 @@ td,th{padding:9px;border-bottom:1px solid #eee;text-align:left}
 </div>
 
 <div class="card">
-  <h2>Расчёты водителей</h2>
+  <div class="section-head">
+    <div>
+      <h2>Расчёты водителей</h2>
+      <p class="raw">График оплат и настройка уведомлений.</p>
+    </div>
 
-  <div class="payment-form">
-    <label>Машина
-      <select id="payment_car">
-        <option value="">Выбери машину</option>
-      </select>
-    </label>
-
-    <label>Водитель
-      <input id="payment_driver" placeholder="Имя водителя">
-    </label>
-
-    <label>Сумма за неделю
-      <input id="payment_amount" type="number" min="0" placeholder="13000">
-    </label>
-
-    <label>День расчёта
-      <select id="payment_weekday">
-        <option value="0">Понедельник</option>
-        <option value="1">Вторник</option>
-        <option value="2">Среда</option>
-        <option value="3">Четверг</option>
-        <option value="4">Пятница</option>
-        <option value="5">Суббота</option>
-        <option value="6">Воскресенье</option>
-      </select>
-    </label>
-
-    <label>Ближайшая дата оплаты
-      <input id="payment_date" type="date">
-    </label>
+    <button
+      id="paymentsToggleButton"
+      class="section-toggle"
+      onclick="togglePaymentsPanel()"
+    >
+      Открыть
+    </button>
   </div>
 
-  <button onclick="saveDriverPayment()">Сохранить расчёт</button>
-  <button onclick="checkPaymentsNow()">Проверить уведомления</button>
-  <p id="paymentRes"></p>
+  <div id="paymentsPanel" class="collapsible-panel">
+    <div class="payment-form">
+      <label>Машина
+        <select id="payment_car">
+          <option value="">Выбери машину</option>
+        </select>
+      </label>
 
-  <h3>График платежей</h3>
-  <table id="driverPayments"></table>
+      <label>Водитель
+        <input id="payment_driver" placeholder="Имя водителя">
+      </label>
+
+      <label>Сумма за неделю
+        <input id="payment_amount" type="number" min="0" placeholder="13000">
+      </label>
+
+      <label>День расчёта
+        <select id="payment_weekday">
+          <option value="0">Понедельник</option>
+          <option value="1">Вторник</option>
+          <option value="2">Среда</option>
+          <option value="3">Четверг</option>
+          <option value="4">Пятница</option>
+          <option value="5">Суббота</option>
+          <option value="6">Воскресенье</option>
+        </select>
+      </label>
+
+      <label>Ближайшая дата оплаты
+        <input id="payment_date" type="date">
+      </label>
+    </div>
+
+    <button onclick="saveDriverPayment()">Сохранить расчёт</button>
+    <button class="secondary" onclick="checkPaymentsNow()">
+      Проверить уведомления
+    </button>
+
+    <p id="paymentRes"></p>
+
+    <h3>График платежей</h3>
+    <table id="driverPayments"></table>
+  </div>
 </div>
 
 <div id="addCarPanel" class="card collapsible-panel">
@@ -266,7 +284,16 @@ async function resetCarInvestor(code){
 
 async function loadSummary(){
   let s=await api('/api/summary');
-  summary.innerHTML=`<div class="grid"><div class="stat">Всего <b>${s.cars}</b></div><div class="stat">Мои <b>${s.own_cars}</b></div><div class="stat">Инвесторов <b>${s.investor_cars}</b></div><div class="stat">Доход <b>${rub(s.income)}</b></div><div class="stat">Расход <b>${rub(s.expenses)}</b></div><div class="stat">Прибыль <b>${rub(s.profit)}</b></div><div class="stat">Простой <b>${s.downtime_days||0} дн.</b></div></div>`;
+
+  summary.innerHTML=`
+    <div class="grid">
+      <div class="stat">Всего машин <b>${s.cars}</b></div>
+      <div class="stat">Доход <b>${rub(s.income)}</b></div>
+      <div class="stat">Расход <b>${rub(s.expenses)}</b></div>
+      <div class="stat">Прибыль <b>${rub(s.profit)}</b></div>
+      <div class="stat">Простой <b>${s.downtime_days||0} дн.</b></div>
+    </div>
+  `;
 }
 
 async function loadInvestorsSummary(){
@@ -582,6 +609,17 @@ async function reopenPeriod(code){
 }
 async function loadOps(){let o=await api('/api/operations');ops.innerHTML='<tr><th>ID</th><th>Дата</th><th>Машина</th><th>Тип</th><th>Описание</th><th>Сумма</th><th>Сообщение</th><th>Удалить</th></tr>'+o.map(x=>`<tr><td>${x.id}</td><td>${x.date}</td><td>${x.car_code}</td><td>${x.type}</td><td>${x.description||''}</td><td>${rub(x.amount)}</td><td>${x.raw||''}</td><td><button class="danger small" onclick="deleteOperation(${x.id})">Удалить</button></td></tr>`).join('')}
 async function add(){let m=msg.value;try{let r=await api('/api/add',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:m})});res.innerText=r.message||JSON.stringify(r);if(r.ok)msg.value='';load()}catch(e){res.innerText='Ошибка: '+e}}
+
+function togglePaymentsPanel(){
+  const panel=document.getElementById('paymentsPanel');
+  const button=document.getElementById('paymentsToggleButton');
+
+  panel.classList.toggle('open');
+
+  button.innerText=panel.classList.contains('open')
+    ? 'Скрыть'
+    : 'Открыть';
+}
 
 function toggleAddCarForm(){
   const panel=document.getElementById('addCarPanel');
