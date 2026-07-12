@@ -63,6 +63,21 @@ td,th{padding:9px;border-bottom:1px solid #eee;text-align:left}
 .negative{color:#b91c1c}
 .admin-tools{margin:12px 0}
 .admin-tools summary{cursor:pointer;color:#64748b;font-weight:600}
+
+.top-actions{display:flex;justify-content:flex-end;gap:8px;margin:10px 0 16px}
+.icon-button{width:44px;height:44px;border-radius:50%;font-size:26px;line-height:1;padding:0;display:flex;align-items:center;justify-content:center}
+.collapsible-panel{display:none}
+.collapsible-panel.open{display:block}
+.section-head{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.section-toggle{background:#e5e7eb;color:#111827}
+.car-list-wrap{display:none;margin-top:12px}
+.car-list-wrap.open{display:block}
+.add-car-grid{display:grid;grid-template-columns:repeat(4,minmax(160px,1fr));gap:8px}
+@media(max-width:800px){
+  .add-car-grid{grid-template-columns:1fr}
+  .top-actions{justify-content:flex-end}
+}
+
 @media(max-width:800px){
   .investor-summary-grid{grid-template-columns:1fr 1fr}
   .investor-flow{grid-template-columns:1fr 1fr}
@@ -83,6 +98,16 @@ td,th{padding:9px;border-bottom:1px solid #eee;text-align:left}
 <body>
 <div class="wrap">
 <h1>🚕 FleetAI 3.0</h1>
+
+<div class="top-actions">
+  <button
+    class="icon-button"
+    onclick="toggleAddCarForm()"
+    title="Добавить машину"
+  >
+    +
+  </button>
+</div>
 
 <div id="summary"></div>
 
@@ -157,28 +182,49 @@ td,th{padding:9px;border-bottom:1px solid #eee;text-align:left}
   <table id="driverPayments"></table>
 </div>
 
-<div class="card">
-  <h2>Добавить машину</h2>
-  <select id="owner_type">
-    <option value="own">Моя машина</option>
-    <option value="investor">Машина инвестора</option>
-  </select>
-  <input id="code" placeholder="Код 777">
-  <input id="brand" placeholder="Марка">
-  <input id="model" placeholder="Модель">
-  <input id="plate" placeholder="Госномер">
-  <input id="year" placeholder="Год">
-  <input id="purchase_date" placeholder="Дата покупки">
-  <input id="purchase_price" placeholder="Цена покупки">
-  <input id="mileage" placeholder="Пробег">
-  <input id="investor_name" placeholder="Имя инвестора">
-  <input id="investor_percent" placeholder="% инвестора">
-  <input id="settlement_day" placeholder="Расчетный день 15">
+<div id="addCarPanel" class="card collapsible-panel">
+  <div class="section-head">
+    <h2>Добавить машину</h2>
+    <button class="secondary" onclick="toggleAddCarForm()">Закрыть</button>
+  </div>
+
+  <div class="add-car-grid">
+    <select id="owner_type">
+      <option value="own">Моя машина</option>
+      <option value="investor">Машина инвестора</option>
+    </select>
+    <input id="code" placeholder="Код 777">
+    <input id="brand" placeholder="Марка">
+    <input id="model" placeholder="Модель">
+    <input id="plate" placeholder="Госномер">
+    <input id="year" placeholder="Год">
+    <input id="purchase_date" placeholder="Дата покупки">
+    <input id="purchase_price" placeholder="Цена покупки">
+    <input id="mileage" placeholder="Пробег">
+    <input id="investor_name" placeholder="Имя инвестора">
+    <input id="investor_percent" placeholder="% инвестора">
+    <input id="settlement_day" placeholder="Расчётный день 15">
+  </div>
+
   <button onclick="addCar()">Добавить авто</button>
   <p id="carRes"></p>
 </div>
 
-<div class="card"><h2>Машины</h2><table id="cars"></table></div>
+<div class="card">
+  <div class="section-head">
+    <div>
+      <h2>Машины</h2>
+      <p class="raw">Список скрыт, чтобы не перегружать страницу.</p>
+    </div>
+    <button class="section-toggle" onclick="toggleCarsList()">
+      Показать список
+    </button>
+  </div>
+
+  <div id="carsListWrap" class="car-list-wrap">
+    <table id="cars"></table>
+  </div>
+</div>
 <div id="carCard"></div>
 <div class="card"><h2>Последние операции</h2><table id="ops"></table></div>
 </div>
@@ -536,7 +582,59 @@ async function reopenPeriod(code){
 }
 async function loadOps(){let o=await api('/api/operations');ops.innerHTML='<tr><th>ID</th><th>Дата</th><th>Машина</th><th>Тип</th><th>Описание</th><th>Сумма</th><th>Сообщение</th><th>Удалить</th></tr>'+o.map(x=>`<tr><td>${x.id}</td><td>${x.date}</td><td>${x.car_code}</td><td>${x.type}</td><td>${x.description||''}</td><td>${rub(x.amount)}</td><td>${x.raw||''}</td><td><button class="danger small" onclick="deleteOperation(${x.id})">Удалить</button></td></tr>`).join('')}
 async function add(){let m=msg.value;try{let r=await api('/api/add',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:m})});res.innerText=r.message||JSON.stringify(r);if(r.ok)msg.value='';load()}catch(e){res.innerText='Ошибка: '+e}}
-async function addCar(){let payload={owner_type:owner_type.value,code:code.value,brand:brand.value,model:model.value,plate:plate.value,year:year.value,purchase_date:purchase_date.value,purchase_price:purchase_price.value,mileage:mileage.value,investor_name:investor_name.value,investor_percent:investor_percent.value,settlement_day:settlement_day.value};let r=await api('/api/add-car',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});carRes.innerText=r.message;load()}
+
+function toggleAddCarForm(){
+  const panel=document.getElementById('addCarPanel');
+  panel.classList.toggle('open');
+
+  if(panel.classList.contains('open')){
+    panel.scrollIntoView({behavior:'smooth',block:'start'});
+    setTimeout(()=>document.getElementById('code')?.focus(),250);
+  }
+}
+
+function toggleCarsList(){
+  const wrap=document.getElementById('carsListWrap');
+  const button=event?.currentTarget;
+
+  wrap.classList.toggle('open');
+
+  if(button){
+    button.innerText=wrap.classList.contains('open')
+      ? 'Скрыть список'
+      : 'Показать список';
+  }
+}
+
+async function addCar(){
+  let payload={
+    owner_type:owner_type.value,
+    code:code.value,
+    brand:brand.value,
+    model:model.value,
+    plate:plate.value,
+    year:year.value,
+    purchase_date:purchase_date.value,
+    purchase_price:purchase_price.value,
+    mileage:mileage.value,
+    investor_name:investor_name.value,
+    investor_percent:investor_percent.value,
+    settlement_day:settlement_day.value
+  };
+
+  let r=await api('/api/add-car',{
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify(payload)
+  });
+
+  carRes.innerText=r.message;
+
+  if(r.ok){
+    await load();
+    document.getElementById('addCarPanel').classList.remove('open');
+  }
+}
 async function load(){await loadSummary();await loadInvestorsSummary();await loadInvestors();await loadCars();await loadOps()}
 
 msg.addEventListener('keydown',e=>{if(e.key==='Enter')add()});
