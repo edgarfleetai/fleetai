@@ -1085,6 +1085,114 @@ def api_close_period(code):
 
 
 
+@bp.route("/api/reopen-period/<code>", methods=["POST"])
+def api_reopen_period(code):
+    """
+    Удаляет последний закрытый расчётный период машины.
+
+    После этого период снова можно пересчитать и закрыть заново.
+    Доходы, расходы и остальные операции машины не удаляются.
+    """
+    session = Session()
+
+    try:
+        car = find_car(session, code)
+
+        if not car:
+            return jsonify({
+                "ok": False,
+                "message": "Машина не найдена",
+            }), 404
+
+        latest_period = (
+            session.query(SettlementPeriod)
+            .filter(
+                func.trim(SettlementPeriod.car_code)
+                == normalize_code(car.code)
+            )
+            .order_by(
+                SettlementPeriod.end_date.desc(),
+                SettlementPeriod.id.desc(),
+            )
+            .first()
+        )
+
+        if not latest_period:
+            return jsonify({
+                "ok": False,
+                "message": "У машины нет закрытых периодов",
+            }), 404
+
+        period_start = latest_period.start_date
+        period_end = latest_period.end_date
+        period_comment = latest_period.comment or ""
+
+        # Удаляем служебную операцию закрытия именно этого периода.
+        settlement_operation = None
+
+        if period_comment:
+            settlement_operation = (
+                session.query(Operation)
+                .filter(
+                    func.trim(Operation.car_code)
+                    == normalize_code(car.code),
+                    Operation.type == "settlement_period",
+                    Operation.description == period_comment,
+                )
+                .order_by(Operation.id.desc())
+                .first()
+            )
+
+        if not settlement_operation:
+            settlement_operation = (
+                session.query(Operation)
+                .filter(
+                    func.trim(Operation.car_code)
+                    == normalize_code(car.code),
+                    Operation.type == "settlement_period",
+                )
+                .order_by(Operation.id.desc())
+                .first()
+            )
+
+        if settlement_operation:
+            session.delete(settlement_operation)
+
+        session.delete(latest_period)
+        session.commit()
+
+        return jsonify({
+            "ok": True,
+            "message": (
+                "Последний период открыт заново. "
+                "Теперь исправь записи и снова нажми «Закрыть период»."
+            ),
+            "car_code": car.code,
+            "period_start": (
+                period_start.strftime("%d.%m.%Y")
+                if period_start
+                else ""
+            ),
+            "period_end": (
+                period_end.strftime("%d.%m.%Y")
+                if period_end
+                else ""
+            ),
+        })
+
+    except Exception as error:
+        session.rollback()
+        print(f"Ошибка открытия периода: {error}")
+
+        return jsonify({
+            "ok": False,
+            "message": f"Не удалось открыть период: {error}",
+        }), 500
+
+    finally:
+        session.close()
+
+
 
 def investor_total_invested_for_car(session, car):
     """Возвращает все вложения инвестора по машине.
