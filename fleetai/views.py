@@ -185,104 +185,10 @@ async function loadInvestorsSummary(){
   investorsSummary.innerHTML=`<div class="card"><h3>Общий расчет по инвесторам</h3><div class="grid"><div class="stat">Инвесторов <b>${s.investors_count}</b></div><div class="stat">Вложили <b>${rub(s.total_invested)}</b></div><div class="stat">Выплачено <b>${rub(s.total_payouts)}</b></div><div class="stat">К выплате <b>${rub(s.available_to_pay)}</b></div><div class="stat">Долг инвесторов <b>${rub(s.investor_debt_to_park)}</b></div><div class="stat">Прибыль <b>${rub(s.profit)}</b></div><div class="stat">Доля парка <b>${rub(s.owner_share)}</b></div></div><table><tr><th>Инвестор</th><th>Машин</th><th>Вложил</th><th>Прибыль</th><th>Доля инвестора</th><th>Выплачено</th><th>К выплате</th><th>Долг инвестора</th><th>Парк должен</th></tr>${s.investors.map(i=>`<tr><td>${i.name}</td><td>${i.cars_count}</td><td>${rub(i.total_invested)}</td><td>${rub(i.profit)}</td><td>${rub(i.investor_share)}</td><td>${rub(i.total_payouts)}</td><td>${rub(i.available_to_pay)}</td><td>${rub(i.investor_debt_to_park)}</td><td>${rub(i.park_debt_to_investor)}</td></tr>`).join('')}</table></div>`;
 }
 
-async function loadInvestors() {
-    let data = await api('/api/investors');
-
-    if (!Array.isArray(data)) {
-        investors.innerHTML =
-            `<div class="bad">${data.message || 'Ошибка загрузки инвесторов'}</div>`;
-        return;
-    }
-
-    if (!data.length) {
-        investors.innerHTML = 'Пока нет машин инвесторов';
-        return;
-    }
-
-    investors.innerHTML = data.map(investor => `
-        <div class="card">
-            <h3>${investor.name}</h3>
-
-            <p>
-                <b>Вложил:</b>
-                ${rub(investor.total_invested)}
-
-                |
-
-                <b>Выплачено:</b>
-                ${rub(investor.total_payouts)}
-
-                |
-
-                <b>К выплате:</b>
-                ${rub(investor.available_to_pay)}
-
-                |
-
-                <b>Долг инвестора:</b>
-                ${rub(investor.investor_debt_to_park)}
-            </p>
-
-            <table>
-                <tr>
-                    <th>Машина</th>
-                    <th>%</th>
-                    <th>Вложил</th>
-                    <th>Доход</th>
-                    <th>Допрасход</th>
-                    <th>Расход</th>
-                    <th>К выплате</th>
-                    <th>Долг</th>
-                    <th>Карточка</th>
-                </tr>
-
-                ${investor.cars.map(car => `
-                    <tr>
-                        <td>
-                            ${car.code}
-                            ${car.car || ''}
-                        </td>
-
-                        <td>
-                            ${car.percent || 0}%
-                        </td>
-
-                        <td>
-                            ${rub(car.invested)}
-                        </td>
-
-                        <td>
-                            ${rub(car.income)}
-                        </td>
-
-                        <td>
-                            ${rub(car.investor_only_expenses)}
-                        </td>
-
-                        <td>
-                            ${rub(car.shared_expenses)}
-                        </td>
-
-                        <td>
-                            ${rub(car.available_to_pay)}
-                        </td>
-
-                        <td>
-                            ${rub(car.investor_debt_to_park)}
-                        </td>
-
-                        <td>
-                            <button
-                                onclick="openCar('${car.code}')"
-                            >
-                                Открыть
-                            </button>
-                        </td>
-                    </tr>
-                `).join('')}
-            </table>
-        </div>
-    `).join('');
+async function loadInvestors(){
+  let d=await api('/api/investors');
+  if(!d.length){investors.innerHTML='Пока нет машин инвесторов';return}
+  investors.innerHTML=d.map(i=>`<div class="card"><h3>${i.name}</h3><b>Вложил:</b> ${rub(i.total_invested)} | <b>Выплачено:</b> ${rub(i.total_payouts)} | <b>К выплате:</b> ${rub(i.available_to_pay)} | <b>Долг инвестора:</b> ${rub(i.investor_debt_to_park)}<table><tr><th>Машина</th><th>%</th><th>Вложил</th><th>Доход</th><th>Расход</th><th>Прибыль</th><th>К выплате</th><th>Долг</th><th>Карточка</th></tr>${i.cars.map(c=>`<tr><td>${c.code} ${c.car}</td><td>${c.percent}%</td><td>${rub(c.invested)}</td><td>${rub(c.income)}</td><td>${rub(c.expenses)}</td><td>${rub(c.profit)}</td><td>${rub(c.available_to_pay)}</td><td>${rub(c.investor_debt_to_park||0)}</td><td><button onclick="openCar('${c.code}')">Открыть</button></td></tr>`).join('')}</table></div>`).join('');
 }
 
 let paymentCars=[];
@@ -381,8 +287,85 @@ function renderCalendar(ops){let g=groupByDate(ops);return `<div class="calendar
 
 async function openCar(code){let d=await api('/api/car/'+code);let c=d.car;let html=`<div class="card"><h2>${c.code} ${c.brand||''} ${c.model||''}</h2><p><b>Доход:</b> ${rub(c.income)} | <b>Расход:</b> ${rub(c.expenses)} | <b>Прибыль:</b> ${rub(c.profit)}</p><p><b>Инвестор:</b> ${c.investor_name||'-'} ${c.investor_percent?'('+c.investor_percent+'%)':''}</p><p><button onclick="openPeriod('${c.code}')">Расчетный период</button> <button onclick="openInvestorBalance('${c.code}')">Взаиморасчет</button> <button class="danger" onclick="resetCarInvestor('${c.code}')">Убрать инвестора</button></p></div><div class="card"><h3>Календарь изменений</h3>${renderCalendar(d.operations)}</div>`;carCard.innerHTML=html;window.scrollTo(0,carCard.offsetTop)}
 async function openInvestorBalance(code){let d=await api('/api/investor-balance/'+code);let b=d.balance;carCard.innerHTML=`<div class="card warn"><h2>Взаиморасчет ${code}</h2><p><b>Доля прибыли инвестора:</b> ${rub(b.investor_share_total)}</p><p><b>Погашено долгом:</b> ${rub(b.debt_repaid_by_profit)}</p><p><b>Инвестор должен парку:</b> ${rub(b.investor_debt_to_park)}</p><p><b>Парк должен инвестору:</b> ${rub(b.park_debt_to_investor)}</p><p><b>Выплачено:</b> ${rub(b.paid_to_investor)}</p><p><b>Доступно к выплате:</b> ${rub(b.available_to_pay)}</p></div><div class="card"><h3>Журнал взаиморасчетов</h3><table><tr><th>Дата</th><th>Всего</th><th>Инвестор оплатил</th><th>Парк оплатил</th><th>Долг инвестора</th><th>Комментарий</th></tr>${d.settlements.map(x=>`<tr><td>${x.date}</td><td>${rub(x.total_cost)}</td><td>${rub(x.investor_paid)}</td><td>${rub(x.park_paid)}</td><td>${rub(x.investor_debt_to_park)}</td><td>${x.comment||''}</td></tr>`).join('')}</table></div>`;window.scrollTo(0,carCard.offsetTop)}
-async function openPeriod(code){let d=await api('/api/period/'+code);let p=d.current_period;carCard.innerHTML=`<div class="card warn"><h2>Расчетный период ${code}</h2><p>${p.start_date} — ${p.end_date}</p><p>Доход: ${rub(p.income)} | Расход: ${rub(p.expenses)} | Прибыль: ${rub(p.profit)}</p><p>Инвестору: ${rub(p.investor_amount)} | Парку: ${rub(p.owner_amount)}</p><button onclick="closePeriod('${code}')">Закрыть период</button></div>`}
-async function closePeriod(code){let r=await api('/api/close-period/'+code,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({})});alert(r.message);load();openPeriod(code)}
+async function openPeriod(code){
+  let d=await api('/api/period/'+code);
+  if(!d.ok){
+    alert(d.message||'Не удалось открыть расчётный период');
+    return;
+  }
+
+  let p=d.current_period;
+  let hasClosedPeriods=Array.isArray(d.closed_periods)&&d.closed_periods.length>0;
+  let lastClosed=hasClosedPeriods?d.closed_periods[0]:null;
+
+  carCard.innerHTML=`
+    <div class="card warn">
+      <h2>Расчётный период ${code}</h2>
+
+      <p><b>Текущий период:</b> ${p.start_date} — ${p.end_date}</p>
+
+      <p>
+        Доход: ${rub(p.income)}
+        | Расход: ${rub(p.expenses)}
+        | Прибыль: ${rub(p.profit)}
+      </p>
+
+      <p>
+        Инвестору: ${rub(p.investor_amount)}
+        | Парку: ${rub(p.owner_amount)}
+      </p>
+
+      <button onclick="closePeriod('${code}')">
+        Закрыть период
+      </button>
+
+      ${hasClosedPeriods?`
+        <button class="danger" onclick="reopenPeriod('${code}')">
+          Открыть последний период заново
+        </button>
+
+        <p class="raw">
+          Последний закрытый период:
+          ${lastClosed.start_date} — ${lastClosed.end_date}
+        </p>
+      `:''}
+    </div>
+  `;
+
+  window.scrollTo(0,carCard.offsetTop);
+}
+
+async function closePeriod(code){
+  let r=await api('/api/close-period/'+code,{
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({})
+  });
+
+  alert(r.message);
+  await load();
+  await openPeriod(code);
+}
+
+async function reopenPeriod(code){
+  if(!confirm(
+    'Открыть последний закрытый период машины '+code+' заново? '+
+    'Сохранённый расчёт будет удалён, но доходы и расходы останутся.'
+  ))return;
+
+  let r=await api('/api/reopen-period/'+code,{
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({})
+  });
+
+  alert(r.message);
+
+  if(r.ok){
+    await load();
+    await openPeriod(code);
+  }
+}
 async function loadOps(){let o=await api('/api/operations');ops.innerHTML='<tr><th>ID</th><th>Дата</th><th>Машина</th><th>Тип</th><th>Описание</th><th>Сумма</th><th>Сообщение</th><th>Удалить</th></tr>'+o.map(x=>`<tr><td>${x.id}</td><td>${x.date}</td><td>${x.car_code}</td><td>${x.type}</td><td>${x.description||''}</td><td>${rub(x.amount)}</td><td>${x.raw||''}</td><td><button class="danger small" onclick="deleteOperation(${x.id})">Удалить</button></td></tr>`).join('')}
 async function add(){let m=msg.value;try{let r=await api('/api/add',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:m})});res.innerText=r.message||JSON.stringify(r);if(r.ok)msg.value='';load()}catch(e){res.innerText='Ошибка: '+e}}
 async function addCar(){let payload={owner_type:owner_type.value,code:code.value,brand:brand.value,model:model.value,plate:plate.value,year:year.value,purchase_date:purchase_date.value,purchase_price:purchase_price.value,mileage:mileage.value,investor_name:investor_name.value,investor_percent:investor_percent.value,settlement_day:settlement_day.value};let r=await api('/api/add-car',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});carRes.innerText=r.message;load()}
