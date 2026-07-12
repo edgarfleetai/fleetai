@@ -1433,8 +1433,12 @@ def api_investors():
                     .scalar()
                     or 0
                 ),
-                "total_to_investor": 0,
+                "total_profit_for_split": 0,
+                "total_accrued": 0,
+                "total_withheld": 0,
+                "total_park_share": 0,
                 "investor_debt_to_park": 0,
+                "park_debt_to_investor": 0,
                 "available_to_pay": 0,
             }
 
@@ -1518,15 +1522,49 @@ def api_investors():
                     balance.get("investor_share_total", 0) or 0
                 )
 
+                car_payouts = sum(
+                    (row.amount or 0)
+                    for row in session.query(InvestorPayout).all()
+                    if normalize_code(row.car_code) == car_code
+                )
+
+                profit_for_split = (
+                    balance.get(
+                        "normal_profit_for_split",
+                        income - shared_expenses,
+                    )
+                    or 0
+                )
+
+                park_share = (
+                    balance.get("park_share_total", 0) or 0
+                )
+
+                park_debt = (
+                    balance.get("park_debt_to_investor", 0) or 0
+                )
+
+                withheld = max(
+                    investor_share
+                    + park_debt
+                    - car_payouts
+                    - available_to_pay,
+                    0,
+                )
+
                 totals["total_invested"] += car_total_invested
                 totals["total_income"] += income
                 totals["total_shared_expenses"] += shared_expenses
                 totals[
                     "total_investor_only_expenses"
                 ] += investor_only_expenses
-                totals["total_to_investor"] += investor_share
+                totals["total_profit_for_split"] += profit_for_split
+                totals["total_accrued"] += investor_share
+                totals["total_withheld"] += withheld
+                totals["total_park_share"] += park_share
                 totals["available_to_pay"] += available_to_pay
                 totals["investor_debt_to_park"] += investor_debt
+                totals["park_debt_to_investor"] += park_debt
 
                 details.append({
                     "code": car.code,
@@ -1544,7 +1582,12 @@ def api_investors():
                     "shared_expenses": shared_expenses,
                     "park_only_expenses": park_only_expenses,
 
-                    "to_investor": investor_share,
+                    "profit_for_split": profit_for_split,
+                    "accrued_to_investor": investor_share,
+                    "withheld": withheld,
+                    "paid_to_investor": car_payouts,
+                    "park_share": park_share,
+                    "park_debt_to_investor": park_debt,
                     "available_to_pay": available_to_pay,
                     "investor_debt_to_park": investor_debt,
                 })
