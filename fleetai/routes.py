@@ -193,12 +193,29 @@ def build_investor_report_pdf(
         spaceAfter=7,
     )
 
+    subheading_style = ParagraphStyle(
+        "ReportSubheading",
+        parent=styles["Heading3"],
+        fontName=font_name,
+        fontSize=11,
+        leading=15,
+        spaceBefore=8,
+        spaceAfter=5,
+    )
+
     normal_style = ParagraphStyle(
         "ReportNormal",
         parent=styles["BodyText"],
         fontName=font_name,
         fontSize=9,
         leading=13,
+    )
+
+    small_style = ParagraphStyle(
+        "ReportSmall",
+        parent=normal_style,
+        fontSize=8,
+        leading=11,
     )
 
     story = [
@@ -221,19 +238,23 @@ def build_investor_report_pdf(
     total_income = 0
     total_shared = 0
     total_extra = 0
+    total_park_only = 0
     total_investor_paid = 0
     total_available = 0
     total_owner = 0
     total_debt = 0
+    total_downtime_days = 0
 
     for item in car_rows:
         total_income += item["income"]
         total_shared += item["shared_expenses"]
         total_extra += item["investor_only_expenses"]
+        total_park_only += item["park_only_expenses"]
         total_investor_paid += item["investor_extra_paid"]
         total_available += item["available_to_pay"]
         total_owner += item["owner_amount"]
         total_debt += item["investor_debt_to_park"]
+        total_downtime_days += item["downtime_days"]
 
         story.append(
             Paragraph(
@@ -242,7 +263,7 @@ def build_investor_report_pdf(
             )
         )
 
-        table_data = [
+        summary_data = [
             [
                 Paragraph("<b>Показатель</b>", normal_style),
                 Paragraph("<b>Сумма</b>", normal_style),
@@ -250,19 +271,21 @@ def build_investor_report_pdf(
             [Paragraph("Доход", normal_style), Paragraph(money(item["income"]), normal_style)],
             [Paragraph("Обычные расходы", normal_style), Paragraph(money(item["shared_expenses"]), normal_style)],
             [Paragraph("Допрасходы инвестора", normal_style), Paragraph(money(item["investor_only_expenses"]), normal_style)],
+            [Paragraph("Расходы только парка", normal_style), Paragraph(money(item["park_only_expenses"]), normal_style)],
             [Paragraph("Инвестор внёс", normal_style), Paragraph(money(item["investor_extra_paid"]), normal_style)],
             [Paragraph(f"Доля инвестора ({item['percent']}%)", normal_style), Paragraph(money(item["investor_share_total"]), normal_style)],
             [Paragraph("К выплате инвестору", normal_style), Paragraph(money(item["available_to_pay"]), normal_style)],
             [Paragraph("Доля парка", normal_style), Paragraph(money(item["owner_amount"]), normal_style)],
             [Paragraph("Долг инвестора", normal_style), Paragraph(money(item["investor_debt_to_park"]), normal_style)],
+            [Paragraph("Дней простоя", normal_style), Paragraph(str(item["downtime_days"]), normal_style)],
         ]
 
-        table = Table(
-            table_data,
+        summary_table = Table(
+            summary_data,
             colWidths=[115 * mm, 55 * mm],
             repeatRows=1,
         )
-        table.setStyle(
+        summary_table.setStyle(
             TableStyle([
                 ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#E5E7EB")),
                 ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#D1D5DB")),
@@ -273,26 +296,115 @@ def build_investor_report_pdf(
                 ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
             ])
         )
-        story.append(table)
-        story.append(Spacer(1, 7 * mm))
+        story.append(summary_table)
+
+        story.append(Paragraph("Куда ушли деньги", subheading_style))
+
+        if item["expense_rows"]:
+            expense_table_data = [[
+                Paragraph("<b>Дата</b>", small_style),
+                Paragraph("<b>Тип</b>", small_style),
+                Paragraph("<b>Описание</b>", small_style),
+                Paragraph("<b>Сумма</b>", small_style),
+            ]]
+
+            for expense in item["expense_rows"]:
+                expense_table_data.append([
+                    Paragraph(expense["date"], small_style),
+                    Paragraph(expense["type_label"], small_style),
+                    Paragraph(expense["description"], small_style),
+                    Paragraph(money(expense["amount"]), small_style),
+                ])
+
+            expense_table = Table(
+                expense_table_data,
+                colWidths=[25 * mm, 35 * mm, 85 * mm, 25 * mm],
+                repeatRows=1,
+            )
+            expense_table.setStyle(
+                TableStyle([
+                    ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#F3F4F6")),
+                    ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#D1D5DB")),
+                    ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                    ("LEFTPADDING", (0, 0), (-1, -1), 5),
+                    ("RIGHTPADDING", (0, 0), (-1, -1), 5),
+                    ("TOPPADDING", (0, 0), (-1, -1), 5),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+                ])
+            )
+            story.append(expense_table)
+        else:
+            story.append(
+                Paragraph(
+                    "За этот период расходов не зарегистрировано.",
+                    normal_style,
+                )
+            )
+
+        story.append(Paragraph("Простой", subheading_style))
+
+        if item["downtime_rows"]:
+            downtime_table_data = [[
+                Paragraph("<b>Начало</b>", small_style),
+                Paragraph("<b>Окончание</b>", small_style),
+                Paragraph("<b>Дней</b>", small_style),
+                Paragraph("<b>Причина</b>", small_style),
+            ]]
+
+            for downtime in item["downtime_rows"]:
+                downtime_table_data.append([
+                    Paragraph(downtime["start"], small_style),
+                    Paragraph(downtime["end"], small_style),
+                    Paragraph(str(downtime["days"]), small_style),
+                    Paragraph(downtime["reason"], small_style),
+                ])
+
+            downtime_table = Table(
+                downtime_table_data,
+                colWidths=[30 * mm, 38 * mm, 18 * mm, 84 * mm],
+                repeatRows=1,
+            )
+            downtime_table.setStyle(
+                TableStyle([
+                    ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#FFF7ED")),
+                    ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#D1D5DB")),
+                    ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                    ("LEFTPADDING", (0, 0), (-1, -1), 5),
+                    ("RIGHTPADDING", (0, 0), (-1, -1), 5),
+                    ("TOPPADDING", (0, 0), (-1, -1), 5),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+                ])
+            )
+            story.append(downtime_table)
+        else:
+            story.append(
+                Paragraph(
+                    "За этот период простой не зарегистрирован.",
+                    normal_style,
+                )
+            )
+
+        story.append(Spacer(1, 8 * mm))
 
     story.append(Paragraph("Общий итог по инвестору", heading_style))
 
-    summary_data = [
+    totals_data = [
         [Paragraph("<b>Всего доход</b>", normal_style), Paragraph(money(total_income), normal_style)],
         [Paragraph("<b>Обычные расходы</b>", normal_style), Paragraph(money(total_shared), normal_style)],
         [Paragraph("<b>Допрасходы инвестора</b>", normal_style), Paragraph(money(total_extra), normal_style)],
+        [Paragraph("<b>Расходы только парка</b>", normal_style), Paragraph(money(total_park_only), normal_style)],
         [Paragraph("<b>Инвестор внёс</b>", normal_style), Paragraph(money(total_investor_paid), normal_style)],
         [Paragraph("<b>К выплате инвестору</b>", normal_style), Paragraph(money(total_available), normal_style)],
         [Paragraph("<b>Доля парка</b>", normal_style), Paragraph(money(total_owner), normal_style)],
         [Paragraph("<b>Долг инвестора</b>", normal_style), Paragraph(money(total_debt), normal_style)],
+        [Paragraph("<b>Всего дней простоя</b>", normal_style), Paragraph(str(total_downtime_days), normal_style)],
     ]
 
-    summary_table = Table(
-        summary_data,
+    totals_table = Table(
+        totals_data,
         colWidths=[115 * mm, 55 * mm],
     )
-    summary_table.setStyle(
+    totals_table.setStyle(
         TableStyle([
             ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#F3F4F6")),
             ("GRID", (0, 0), (-1, -1), 0.6, colors.HexColor("#9CA3AF")),
@@ -304,7 +416,7 @@ def build_investor_report_pdf(
         ])
     )
 
-    story.append(summary_table)
+    story.append(totals_table)
     document.build(story)
 
     return buffer.getvalue()
@@ -1704,6 +1816,116 @@ def test_investor_report(investor_name):
             )
             balance = investor_balance_for_car(session, car)
 
+            expense_rows = []
+
+            for expense in (
+                session.query(Expense)
+                .filter(
+                    func.trim(Expense.car_code)
+                    == normalize_code(car.code),
+                    Expense.date >= period_start,
+                    Expense.date < period_end,
+                )
+                .order_by(Expense.date.asc(), Expense.id.asc())
+                .all()
+            ):
+                operation = None
+
+                if expense.operation_id:
+                    operation = (
+                        session.query(Operation)
+                        .filter_by(id=expense.operation_id)
+                        .first()
+                    )
+
+                expense_type = (
+                    expense.share_type or "shared"
+                ).strip().lower()
+
+                if operation and operation.type == "investor_expense_split":
+                    expense_type = "investor_only"
+
+                if expense_type in {
+                    "investor_only",
+                    "investor",
+                    "investor-only",
+                    "только инвестор",
+                    "допрасход",
+                    "доп расход",
+                    "доп расходы",
+                }:
+                    type_label = "Допрасход инвестора"
+                elif expense_type in {
+                    "park_only",
+                    "park",
+                    "owner_only",
+                    "только парк",
+                }:
+                    type_label = "Только парк"
+                else:
+                    type_label = "Обычный расход"
+
+                description = (
+                    (operation.description if operation else "")
+                    or expense.category
+                    or (operation.raw_message if operation else "")
+                    or "Расход"
+                )
+
+                expense_rows.append({
+                    "date": (
+                        expense.date.strftime("%d.%m.%Y")
+                        if expense.date
+                        else ""
+                    ),
+                    "type_label": type_label,
+                    "description": description,
+                    "amount": expense.amount or 0,
+                })
+
+            downtime_rows = []
+            downtime_days = 0
+
+            for downtime in session.query(Downtime).all():
+                if normalize_code(downtime.car_code) != normalize_code(car.code):
+                    continue
+
+                downtime_start = downtime.start_date or period_start
+                downtime_end = (
+                    datetime.now()
+                    if downtime.active
+                    else (downtime.end_date or period_end)
+                )
+
+                overlap_start = max(downtime_start, period_start)
+                overlap_end = min(downtime_end, period_end)
+
+                if overlap_end <= overlap_start:
+                    continue
+
+                days = max(
+                    (overlap_end.date() - overlap_start.date()).days,
+                    1,
+                )
+                downtime_days += days
+
+                reason = (
+                    downtime.reason
+                    or downtime.comment
+                    or "Причина не указана"
+                )
+
+                downtime_rows.append({
+                    "start": overlap_start.strftime("%d.%m.%Y"),
+                    "end": (
+                        "по настоящее время"
+                        if downtime.active and downtime_end >= datetime.now()
+                        else overlap_end.strftime("%d.%m.%Y")
+                    ),
+                    "days": days,
+                    "reason": reason,
+                })
+
             report_rows.append({
                 "code": car.code,
                 "car_name": (
@@ -1714,6 +1936,9 @@ def test_investor_report(investor_name):
                 "shared_expenses": calc.get("shared_expenses", 0) or 0,
                 "investor_only_expenses": (
                     calc.get("investor_only_expenses", 0) or 0
+                ),
+                "park_only_expenses": (
+                    calc.get("park_only_expenses", 0) or 0
                 ),
                 "investor_extra_paid": (
                     balance.get("investor_extra_paid", 0) or 0
@@ -1727,6 +1952,9 @@ def test_investor_report(investor_name):
                     -(period.investor_amount or 0),
                     0,
                 ),
+                "expense_rows": expense_rows,
+                "downtime_rows": downtime_rows,
+                "downtime_days": downtime_days,
             })
 
         if not report_rows:
@@ -1775,8 +2003,8 @@ def test_investor_report(investor_name):
         return jsonify({
             "ok": True,
             "message": (
-                "Отчёт сформирован и отправлен "
-                "в твой Telegram"
+                "Подробный отчёт сформирован "
+                "и отправлен в твой Telegram"
             ),
             "investor": investor_name,
             "period_start": period_start.isoformat(),
