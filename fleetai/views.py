@@ -33,7 +33,7 @@ td,th{padding:9px;border-bottom:1px solid #eee;text-align:left}
 .raw{font-size:13px;color:#6b7280}
 .payment-form{display:grid;grid-template-columns:repeat(5,minmax(160px,1fr));gap:8px;align-items:end}
 
-.investor-summary-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin:14px 0}
+.investor-summary-grid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:12px;margin:14px 0}
 .investor-kpi{background:#111827;color:white;border-radius:16px;padding:16px}
 .investor-kpi span{display:block;font-size:13px;color:#cbd5e1}
 .investor-kpi b{display:block;font-size:22px;margin-top:7px}
@@ -253,12 +253,13 @@ async function loadInvestors(){
   const totalPay=data.reduce((s,i)=>s+(i.available_to_pay||0),0);
   const totalDebt=data.reduce((s,i)=>s+(i.investor_debt_to_park||0),0);
   const totalAccrued=data.reduce((s,i)=>s+(i.total_accrued||0),0);
-  const totalPark=data.reduce((s,i)=>s+(i.total_park_share||0),0);
+  const totalProfitForSplit=data.reduce((s,i)=>s+(i.total_profit_for_split||0),0);
 
   investorsSummary.innerHTML=`
     <div class="investor-summary-grid">
       <div class="investor-kpi"><span>Инвесторов</span><b>${data.length}</b></div>
-      <div class="investor-kpi"><span>Начислено</span><b>${rub(totalAccrued)}</b></div>
+      <div class="investor-kpi"><span>Прибыль до разделения</span><b>${rub(totalProfitForSplit)}</b></div>
+      <div class="investor-kpi"><span>Начислено инвесторам</span><b>${rub(totalAccrued)}</b></div>
       <div class="investor-kpi"><span>К выплате</span><b>${rub(totalPay)}</b></div>
       <div class="investor-kpi"><span>Долг инвесторов</span><b>${rub(totalDebt)}</b></div>
     </div>
@@ -284,7 +285,11 @@ async function loadInvestors(){
 
           <div class="investor-flow">
             <div class="flow-item">
-              <span>Начислено</span>
+              <span>Прибыль до разделения</span>
+              <b>${rub(i.total_profit_for_split||0)}</b>
+            </div>
+            <div class="flow-item">
+              <span>Начислено инвестору</span>
               <b>${rub(i.total_accrued||0)}</b>
             </div>
             <div class="flow-item">
@@ -328,7 +333,12 @@ async function loadInvestors(){
               </div>
 
               <div class="metric">
-                <span>Начислено</span>
+                <span>Прибыль до разделения</span>
+                <b>${rub(c.profit_for_split||0)}</b>
+              </div>
+
+              <div class="metric">
+                <span>Начислено инвестору</span>
                 <b>${rub(c.accrued_to_investor||0)}</b>
               </div>
 
