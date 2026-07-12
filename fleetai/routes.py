@@ -1,10 +1,30 @@
 import os
+import io
+import re
 import requests
+
+from pathlib import Path
+from urllib.parse import unquote
 
 from datetime import datetime, date, timedelta
 
 from flask import Blueprint, request, jsonify, render_template_string
 from sqlalchemy import func
+
+from reportlab.lib import colors
+from reportlab.lib.enums import TA_CENTER
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.units import mm
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
+from reportlab.platypus import (
+    SimpleDocTemplate,
+    Paragraph,
+    Spacer,
+    Table,
+    TableStyle,
+)
 
 from .db import Session
 from .models import (
@@ -63,6 +83,231 @@ def send_telegram_message(text):
     except requests.RequestException as error:
         print(f"Ошибка Telegram: {error}")
         return False
+
+
+def send_telegram_document(file_bytes, filename, caption=""):
+    token = os.getenv("TELEGRAM_BOT_TOKEN")
+    chat_id = os.getenv("TELEGRAM_CHAT_ID")
+
+    if not token or not chat_id:
+        print("Telegram не настроен: нет токена или chat id")
+        return False
+
+    url = f"https://api.telegram.org/bot{token}/sendDocument"
+
+    try:
+        response = requests.post(
+            url,
+            data={
+                "chat_id": chat_id,
+                "caption": caption,
+                "parse_mode": "HTML",
+            },
+            files={
+                "document": (
+                    filename,
+                    file_bytes,
+                    "application/pdf",
+                )
+            },
+            timeout=60,
+        )
+        response.raise_for_status()
+        return True
+
+    except requests.RequestException as error:
+        print(f"Ошибка отправки PDF в Telegram: {error}")
+        return False
+
+
+def register_pdf_font():
+    font_paths = [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/dejavu/DejaVuSans.ttf",
+        "/usr/local/share/fonts/DejaVuSans.ttf",
+    ]
+
+    if "FleetAIFont" in pdfmetrics.getRegisteredFontNames():
+        return "FleetAIFont"
+
+    for font_path in font_paths:
+        if Path(font_path).exists():
+            pdfmetrics.registerFont(
+                TTFont("FleetAIFont", font_path)
+            )
+            return "FleetAIFont"
+
+    raise RuntimeError(
+        "Не найден системный шрифт DejaVuSans для русского PDF"
+    )
+
+
+def money(value):
+    return f"{int(value or 0):,} ₽".replace(",", " ")
+
+
+def safe_filename(value):
+    cleaned = re.sub(r"[^0-9A-Za-zА-Яа-яЁё_-]+", "_", value or "")
+    return cleaned.strip("_") or "investor"
+
+
+def build_investor_report_pdf(
+    investor_name,
+    period_start,
+    period_end,
+    car_rows,
+):
+    font_name = register_pdf_font()
+    buffer = io.BytesIO()
+
+    document = SimpleDocTemplate(
+        buffer,
+        pagesize=A4,
+        rightMargin=15 * mm,
+        leftMargin=15 * mm,
+        topMargin=15 * mm,
+        bottomMargin=15 * mm,
+        title=f"Отчёт инвестора {investor_name}",
+        author="FleetAI",
+    )
+
+    styles = getSampleStyleSheet()
+
+    title_style = ParagraphStyle(
+        "ReportTitle",
+        parent=styles["Title"],
+        fontName=font_name,
+        fontSize=18,
+        leading=22,
+        alignment=TA_CENTER,
+        spaceAfter=12,
+    )
+
+    heading_style = ParagraphStyle(
+        "ReportHeading",
+        parent=styles["Heading2"],
+        fontName=font_name,
+        fontSize=13,
+        leading=17,
+        spaceBefore=10,
+        spaceAfter=7,
+    )
+
+    normal_style = ParagraphStyle(
+        "ReportNormal",
+        parent=styles["BodyText"],
+        fontName=font_name,
+        fontSize=9,
+        leading=13,
+    )
+
+    story = [
+        Paragraph("Отчёт по расчётному периоду", title_style),
+        Paragraph(f"<b>Инвестор:</b> {investor_name}", normal_style),
+        Paragraph(
+            "<b>Период:</b> "
+            f"{period_start.strftime('%d.%m.%Y')} — "
+            f"{period_end.strftime('%d.%m.%Y')}",
+            normal_style,
+        ),
+        Paragraph(
+            "<b>Сформирован:</b> "
+            f"{datetime.now().strftime('%d.%m.%Y %H:%M')}",
+            normal_style,
+        ),
+        Spacer(1, 8 * mm),
+    ]
+
+    total_income = 0
+    total_shared = 0
+    total_extra = 0
+    total_investor_paid = 0
+    total_available = 0
+    total_owner = 0
+    total_debt = 0
+
+    for item in car_rows:
+        total_income += item["income"]
+        total_shared += item["shared_expenses"]
+        total_extra += item["investor_only_expenses"]
+        total_investor_paid += item["investor_extra_paid"]
+        total_available += item["available_to_pay"]
+        total_owner += item["owner_amount"]
+        total_debt += item["investor_debt_to_park"]
+
+        story.append(
+            Paragraph(
+                f"Машина {item['code']} — {item['car_name']}",
+                heading_style,
+            )
+        )
+
+        table_data = [
+            [
+                Paragraph("<b>Показатель</b>", normal_style),
+                Paragraph("<b>Сумма</b>", normal_style),
+            ],
+            [Paragraph("Доход", normal_style), Paragraph(money(item["income"]), normal_style)],
+            [Paragraph("Обычные расходы", normal_style), Paragraph(money(item["shared_expenses"]), normal_style)],
+            [Paragraph("Допрасходы инвестора", normal_style), Paragraph(money(item["investor_only_expenses"]), normal_style)],
+            [Paragraph("Инвестор внёс", normal_style), Paragraph(money(item["investor_extra_paid"]), normal_style)],
+            [Paragraph(f"Доля инвестора ({item['percent']}%)", normal_style), Paragraph(money(item["investor_share_total"]), normal_style)],
+            [Paragraph("К выплате инвестору", normal_style), Paragraph(money(item["available_to_pay"]), normal_style)],
+            [Paragraph("Доля парка", normal_style), Paragraph(money(item["owner_amount"]), normal_style)],
+            [Paragraph("Долг инвестора", normal_style), Paragraph(money(item["investor_debt_to_park"]), normal_style)],
+        ]
+
+        table = Table(
+            table_data,
+            colWidths=[115 * mm, 55 * mm],
+            repeatRows=1,
+        )
+        table.setStyle(
+            TableStyle([
+                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#E5E7EB")),
+                ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#D1D5DB")),
+                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                ("LEFTPADDING", (0, 0), (-1, -1), 7),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 7),
+                ("TOPPADDING", (0, 0), (-1, -1), 6),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+            ])
+        )
+        story.append(table)
+        story.append(Spacer(1, 7 * mm))
+
+    story.append(Paragraph("Общий итог по инвестору", heading_style))
+
+    summary_data = [
+        [Paragraph("<b>Всего доход</b>", normal_style), Paragraph(money(total_income), normal_style)],
+        [Paragraph("<b>Обычные расходы</b>", normal_style), Paragraph(money(total_shared), normal_style)],
+        [Paragraph("<b>Допрасходы инвестора</b>", normal_style), Paragraph(money(total_extra), normal_style)],
+        [Paragraph("<b>Инвестор внёс</b>", normal_style), Paragraph(money(total_investor_paid), normal_style)],
+        [Paragraph("<b>К выплате инвестору</b>", normal_style), Paragraph(money(total_available), normal_style)],
+        [Paragraph("<b>Доля парка</b>", normal_style), Paragraph(money(total_owner), normal_style)],
+        [Paragraph("<b>Долг инвестора</b>", normal_style), Paragraph(money(total_debt), normal_style)],
+    ]
+
+    summary_table = Table(
+        summary_data,
+        colWidths=[115 * mm, 55 * mm],
+    )
+    summary_table.setStyle(
+        TableStyle([
+            ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#F3F4F6")),
+            ("GRID", (0, 0), (-1, -1), 0.6, colors.HexColor("#9CA3AF")),
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("LEFTPADDING", (0, 0), (-1, -1), 7),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 7),
+            ("TOPPADDING", (0, 0), (-1, -1), 7),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
+        ])
+    )
+
+    story.append(summary_table)
+    document.build(story)
+
+    return buffer.getvalue()
 
 
 @bp.route("/api/test-telegram", methods=["GET"])
@@ -380,7 +625,6 @@ def cleanup_legacy_investor_mess(session):
                 changed = True
 
     # Создаем недостающий взаиморасчет из старых операций.
-    import re
     for op in session.query(Operation).all():
         raw = (op.raw_message or "").lower()
         if "доп" not in raw or "расход" not in raw or "инвестор" not in raw:
@@ -1272,6 +1516,177 @@ def api_rebuild_calculations():
     session.commit()
     session.close()
     return jsonify({"ok": True, "message": f"Пересчет выполнен. Восстановлено записей: {rebuilt}. Пропущено: {skipped}."})
+
+
+@bp.route(
+    "/api/test-investor-report/<path:investor_name>",
+    methods=["GET"],
+)
+def test_investor_report(investor_name):
+    investor_name = unquote(investor_name).strip()
+    session = Session()
+
+    try:
+        cleanup_legacy_investor_mess(session)
+
+        cars = (
+            session.query(Car)
+            .filter(
+                Car.owner_type == "investor",
+                func.lower(func.trim(Car.investor_name))
+                == investor_name.lower(),
+            )
+            .order_by(Car.code)
+            .all()
+        )
+
+        if not cars:
+            return jsonify({
+                "ok": False,
+                "message": f"Инвестор «{investor_name}» не найден",
+            }), 404
+
+        car_codes = [normalize_code(car.code) for car in cars]
+
+        latest_period = (
+            session.query(SettlementPeriod)
+            .filter(
+                func.trim(SettlementPeriod.car_code).in_(car_codes)
+            )
+            .order_by(
+                SettlementPeriod.end_date.desc(),
+                SettlementPeriod.id.desc(),
+            )
+            .first()
+        )
+
+        if not latest_period:
+            return jsonify({
+                "ok": False,
+                "message": (
+                    "У этого инвестора пока нет "
+                    "закрытых расчётных периодов"
+                ),
+            }), 404
+
+        period_start = latest_period.start_date
+        period_end = latest_period.end_date
+        report_rows = []
+
+        for car in cars:
+            period = (
+                session.query(SettlementPeriod)
+                .filter(
+                    func.trim(SettlementPeriod.car_code)
+                    == normalize_code(car.code),
+                    SettlementPeriod.start_date == period_start,
+                    SettlementPeriod.end_date == period_end,
+                )
+                .first()
+            )
+
+            if not period:
+                continue
+
+            calc = calculate_period_for_car(
+                session,
+                car,
+                period_start,
+                period_end,
+            )
+            balance = investor_balance_for_car(session, car)
+
+            report_rows.append({
+                "code": car.code,
+                "car_name": (
+                    f"{car.brand or ''} {car.model or ''}"
+                ).strip(),
+                "percent": car.investor_percent or 0,
+                "income": period.income or calc.get("income", 0) or 0,
+                "shared_expenses": calc.get("shared_expenses", 0) or 0,
+                "investor_only_expenses": (
+                    calc.get("investor_only_expenses", 0) or 0
+                ),
+                "investor_extra_paid": (
+                    balance.get("investor_extra_paid", 0) or 0
+                ),
+                "investor_share_total": (
+                    balance.get("investor_share_total", 0) or 0
+                ),
+                "available_to_pay": max(period.investor_amount or 0, 0),
+                "owner_amount": period.owner_amount or 0,
+                "investor_debt_to_park": max(
+                    -(period.investor_amount or 0),
+                    0,
+                ),
+            })
+
+        if not report_rows:
+            return jsonify({
+                "ok": False,
+                "message": (
+                    "За последний закрытый период "
+                    "не найдено машин"
+                ),
+            }), 404
+
+        pdf_bytes = build_investor_report_pdf(
+            investor_name=investor_name,
+            period_start=period_start,
+            period_end=period_end,
+            car_rows=report_rows,
+        )
+
+        filename = (
+            f"report_{safe_filename(investor_name)}_"
+            f"{period_start.strftime('%Y-%m-%d')}_"
+            f"{period_end.strftime('%Y-%m-%d')}.pdf"
+        )
+
+        sent = send_telegram_document(
+            pdf_bytes,
+            filename,
+            caption=(
+                "📄 <b>Тестовый отчёт инвестора</b>\n"
+                f"Инвестор: {investor_name}\n"
+                f"Период: "
+                f"{period_start.strftime('%d.%m.%Y')} — "
+                f"{period_end.strftime('%d.%m.%Y')}"
+            ),
+        )
+
+        if not sent:
+            return jsonify({
+                "ok": False,
+                "message": (
+                    "PDF создан, но отправить "
+                    "его в Telegram не удалось"
+                ),
+            }), 500
+
+        return jsonify({
+            "ok": True,
+            "message": (
+                "Отчёт сформирован и отправлен "
+                "в твой Telegram"
+            ),
+            "investor": investor_name,
+            "period_start": period_start.isoformat(),
+            "period_end": period_end.isoformat(),
+            "cars": len(report_rows),
+        })
+
+    except Exception as error:
+        session.rollback()
+        print(f"Ошибка отчёта инвестора: {error}")
+
+        return jsonify({
+            "ok": False,
+            "message": f"Ошибка создания отчёта: {error}",
+        }), 500
+
+    finally:
+        session.close()
 
 @bp.route("/api/operations")
 def api_operations():
