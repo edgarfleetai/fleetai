@@ -32,6 +32,45 @@ td,th{padding:9px;border-bottom:1px solid #eee;text-align:left}
 .event.downtime{border-left-color:#f97316}
 .raw{font-size:13px;color:#6b7280}
 .payment-form{display:grid;grid-template-columns:repeat(5,minmax(160px,1fr));gap:8px;align-items:end}
+
+.investor-summary-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin:14px 0}
+.investor-kpi{background:#111827;color:white;border-radius:16px;padding:16px}
+.investor-kpi span{display:block;font-size:13px;color:#cbd5e1}
+.investor-kpi b{display:block;font-size:22px;margin-top:7px}
+.investor-list{display:grid;gap:12px}
+.investor-card{border:1px solid #e5e7eb;border-radius:18px;background:#fff;overflow:hidden}
+.investor-head{padding:18px}
+.investor-top{display:flex;justify-content:space-between;gap:12px;align-items:flex-start}
+.investor-name{font-size:21px;font-weight:700}
+.investor-meta{font-size:13px;color:#6b7280;margin-top:4px}
+.investor-money{font-size:25px;font-weight:800;text-align:right}
+.investor-money small{display:block;font-size:12px;font-weight:400;color:#6b7280}
+.investor-flow{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin-top:16px}
+.flow-item{background:#f8fafc;border-radius:12px;padding:11px}
+.flow-item span{display:block;font-size:12px;color:#64748b}
+.flow-item b{display:block;margin-top:5px}
+.investor-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px}
+.secondary{background:#e5e7eb;color:#111827}
+.investor-cars{display:none;border-top:1px solid #e5e7eb;padding:8px 18px 18px}
+.investor-cars.open{display:block}
+.car-mini{display:grid;grid-template-columns:minmax(160px,1.4fr) repeat(4,minmax(110px,1fr)) auto;gap:10px;align-items:center;padding:14px 0;border-bottom:1px solid #f1f5f9}
+.car-mini:last-child{border-bottom:0}
+.car-title{font-weight:700}
+.car-sub{font-size:12px;color:#64748b;margin-top:3px}
+.metric span{display:block;font-size:11px;color:#64748b}
+.metric b{display:block;margin-top:4px;font-size:14px}
+.positive{color:#15803d}
+.negative{color:#b91c1c}
+.admin-tools{margin:12px 0}
+.admin-tools summary{cursor:pointer;color:#64748b;font-weight:600}
+@media(max-width:800px){
+  .investor-summary-grid{grid-template-columns:1fr 1fr}
+  .investor-flow{grid-template-columns:1fr 1fr}
+  .car-mini{grid-template-columns:1fr 1fr}
+  .car-mini .car-title{grid-column:1/-1}
+  .car-mini button{width:100%}
+}
+
 @media(max-width:800px){
   .grid{grid-template-columns:1fr 1fr}
   .payment-form{grid-template-columns:1fr}
@@ -53,19 +92,23 @@ td,th{padding:9px;border-bottom:1px solid #eee;text-align:left}
   <p id="res"></p>
 </div>
 
-<div class="card warn">
+<div class="card">
   <h2>Инвесторы</h2>
-  <button onclick="fixInvestorData()">Исправить старые неверные расчеты</button>
-  <button onclick="rebuildCalculations()">Пересчитать базу</button>
+  <p class="raw">Главное: сколько начислено, удержано и осталось выплатить.</p>
 
-  <div class="card">
-    <h3>Ручное исправление инвестора у машины</h3>
-    <input id="fix_code" placeholder="Код машины, например 636">
-    <input id="fix_name" placeholder="Правильный инвестор, например Илья">
-    <input id="fix_percent" placeholder="%, например 75">
-    <button onclick="reassignInvestor()">Перекинуть машину к инвестору</button>
-    <p>Используй это для ошибок типа инвестор «Вложил». Сначала перекинь машину, потом нажми «Пересчитать базу».</p>
-  </div>
+  <details class="admin-tools">
+    <summary>Служебные инструменты</summary>
+    <div class="card warn">
+      <button onclick="fixInvestorData()">Исправить старые расчёты</button>
+      <button onclick="rebuildCalculations()">Пересчитать базу</button>
+
+      <h3>Исправление инвестора у машины</h3>
+      <input id="fix_code" placeholder="Код машины">
+      <input id="fix_name" placeholder="Имя инвестора">
+      <input id="fix_percent" placeholder="Процент">
+      <button onclick="reassignInvestor()">Сохранить</button>
+    </div>
+  </details>
 
   <div id="investorsSummary"></div>
   <div id="investors"></div>
@@ -181,14 +224,129 @@ async function loadSummary(){
 }
 
 async function loadInvestorsSummary(){
-  let s=await api('/api/investors-summary');
-  investorsSummary.innerHTML=`<div class="card"><h3>Общий расчет по инвесторам</h3><div class="grid"><div class="stat">Инвесторов <b>${s.investors_count}</b></div><div class="stat">Вложили <b>${rub(s.total_invested)}</b></div><div class="stat">Выплачено <b>${rub(s.total_payouts)}</b></div><div class="stat">К выплате <b>${rub(s.available_to_pay)}</b></div><div class="stat">Долг инвесторов <b>${rub(s.investor_debt_to_park)}</b></div><div class="stat">Прибыль <b>${rub(s.profit)}</b></div><div class="stat">Доля парка <b>${rub(s.owner_share)}</b></div></div><table><tr><th>Инвестор</th><th>Машин</th><th>Вложил</th><th>Прибыль</th><th>Доля инвестора</th><th>Выплачено</th><th>К выплате</th><th>Долг инвестора</th><th>Парк должен</th></tr>${s.investors.map(i=>`<tr><td>${i.name}</td><td>${i.cars_count}</td><td>${rub(i.total_invested)}</td><td>${rub(i.profit)}</td><td>${rub(i.investor_share)}</td><td>${rub(i.total_payouts)}</td><td>${rub(i.available_to_pay)}</td><td>${rub(i.investor_debt_to_park)}</td><td>${rub(i.park_debt_to_investor)}</td></tr>`).join('')}</table></div>`;
+  investorsSummary.innerHTML='';
+}
+
+function toggleInvestorCars(id){
+  document.getElementById(id)?.classList.toggle('open');
+}
+
+async function sendInvestorReport(name){
+  const encoded=encodeURIComponent(name);
+  const r=await api('/api/test-investor-report/'+encoded);
+  alert(r.message||'Готово');
 }
 
 async function loadInvestors(){
-  let d=await api('/api/investors');
-  if(!d.length){investors.innerHTML='Пока нет машин инвесторов';return}
-  investors.innerHTML=d.map(i=>`<div class="card"><h3>${i.name}</h3><b>Вложил:</b> ${rub(i.total_invested)} | <b>Выплачено:</b> ${rub(i.total_payouts)} | <b>К выплате:</b> ${rub(i.available_to_pay)} | <b>Долг инвестора:</b> ${rub(i.investor_debt_to_park)}<table><tr><th>Машина</th><th>%</th><th>Вложил</th><th>Доход</th><th>Расход</th><th>Прибыль</th><th>К выплате</th><th>Долг</th><th>Карточка</th></tr>${i.cars.map(c=>`<tr><td>${c.code} ${c.car}</td><td>${c.percent}%</td><td>${rub(c.invested)}</td><td>${rub(c.income)}</td><td>${rub(c.expenses)}</td><td>${rub(c.profit)}</td><td>${rub(c.available_to_pay)}</td><td>${rub(c.investor_debt_to_park||0)}</td><td><button onclick="openCar('${c.code}')">Открыть</button></td></tr>`).join('')}</table></div>`).join('');
+  const data=await api('/api/investors');
+
+  if(!Array.isArray(data)){
+    investors.innerHTML=`<p class="bad">${data.message||'Ошибка загрузки инвесторов'}</p>`;
+    return;
+  }
+
+  if(!data.length){
+    investors.innerHTML='<p class="raw">Пока нет машин инвесторов.</p>';
+    return;
+  }
+
+  const totalPay=data.reduce((s,i)=>s+(i.available_to_pay||0),0);
+  const totalDebt=data.reduce((s,i)=>s+(i.investor_debt_to_park||0),0);
+  const totalAccrued=data.reduce((s,i)=>s+(i.total_accrued||0),0);
+  const totalPark=data.reduce((s,i)=>s+(i.total_park_share||0),0);
+
+  investorsSummary.innerHTML=`
+    <div class="investor-summary-grid">
+      <div class="investor-kpi"><span>Инвесторов</span><b>${data.length}</b></div>
+      <div class="investor-kpi"><span>Начислено</span><b>${rub(totalAccrued)}</b></div>
+      <div class="investor-kpi"><span>К выплате</span><b>${rub(totalPay)}</b></div>
+      <div class="investor-kpi"><span>Долг инвесторов</span><b>${rub(totalDebt)}</b></div>
+    </div>
+  `;
+
+  investors.innerHTML=`<div class="investor-list">${data.map((i,index)=>{
+    const carsId='investorCars'+index;
+    const withheld=i.total_withheld||0;
+
+    return `
+      <div class="investor-card">
+        <div class="investor-head">
+          <div class="investor-top">
+            <div>
+              <div class="investor-name">${i.name}</div>
+              <div class="investor-meta">${i.cars.length} машин · доля парка ${rub(i.total_park_share||0)}</div>
+            </div>
+            <div class="investor-money">
+              ${rub(i.available_to_pay||0)}
+              <small>осталось выплатить</small>
+            </div>
+          </div>
+
+          <div class="investor-flow">
+            <div class="flow-item">
+              <span>Начислено</span>
+              <b>${rub(i.total_accrued||0)}</b>
+            </div>
+            <div class="flow-item">
+              <span>Удержано</span>
+              <b>${rub(withheld)}</b>
+            </div>
+            <div class="flow-item">
+              <span>Выплачено</span>
+              <b>${rub(i.total_payouts||0)}</b>
+            </div>
+            <div class="flow-item">
+              <span>Долг</span>
+              <b class="${(i.investor_debt_to_park||0)>0?'negative':''}">
+                ${rub(i.investor_debt_to_park||0)}
+              </b>
+            </div>
+          </div>
+
+          <div class="investor-actions">
+            <button onclick="toggleInvestorCars('${carsId}')">Машины</button>
+            <button class="secondary" onclick="sendInvestorReport('${String(i.name).replace(/'/g,"\\'")}')">Отправить отчёт</button>
+          </div>
+        </div>
+
+        <div id="${carsId}" class="investor-cars">
+          ${i.cars.map(c=>`
+            <div class="car-mini">
+              <div class="car-title">
+                ${c.code} ${c.car||''}
+                <div class="car-sub">${c.percent||0}% инвестора</div>
+              </div>
+
+              <div class="metric">
+                <span>Доход</span>
+                <b>${rub(c.income||0)}</b>
+              </div>
+
+              <div class="metric">
+                <span>Расходы</span>
+                <b>${rub((c.shared_expenses||0)+(c.investor_only_expenses||0)+(c.park_only_expenses||0))}</b>
+              </div>
+
+              <div class="metric">
+                <span>Начислено</span>
+                <b>${rub(c.accrued_to_investor||0)}</b>
+              </div>
+
+              <div class="metric">
+                <span>К выплате</span>
+                <b class="${(c.available_to_pay||0)>0?'positive':''}">
+                  ${rub(c.available_to_pay||0)}
+                </b>
+                ${(c.withheld||0)>0?`<div class="car-sub">удержано ${rub(c.withheld)}</div>`:''}
+              </div>
+
+              <button class="small" onclick="openCar('${c.code}')">Открыть</button>
+            </div>
+          `).join('')}
+        </div>
+      </div>
+    `;
+  }).join('')}</div>`;
 }
 
 let paymentCars=[];
