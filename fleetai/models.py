@@ -182,3 +182,41 @@ class SettlementPeriod(Base):
     downtime_days = Column(Integer, default=0)
     closed_at = Column(DateTime, default=datetime.now)
     comment = Column(Text)
+
+
+class WarehouseItem(Base):
+    __tablename__ = "warehouse_items"
+
+    id = Column(Integer, primary_key=True)
+
+    part_name = Column(String)
+    brand = Column(String)
+
+    quantity = Column(Integer, default=0)
+    min_quantity = Column(Integer, default=0)
+
+    shelf = Column(String, default="")
+    comment = Column(Text)
+
+    created_at = Column(DateTime, default=datetime.now)
+
+
+class WarehouseMovement(Base):
+    __tablename__ = "warehouse_movements"
+
+    id = Column(Integer, primary_key=True)
+
+    operation_id = Column(Integer)
+
+    car_code = Column(String)
+
+    part_name = Column(String)
+    brand = Column(String)
+
+    quantity = Column(Integer, default=1)
+
+    movement_type = Column(String)
+
+    date = Column(DateTime, default=datetime.now)
+
+    comment = Column(Text)
