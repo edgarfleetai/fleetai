@@ -40,6 +40,8 @@ from .models import (
     Downtime,
     SettlementPeriod,
     InvestorSettlement,
+    WarehouseItem,
+    WarehouseMovement,
 )
 from .utils import only_int, normalize_code, find_car
 from .parser import parse_message
@@ -885,6 +887,136 @@ def create_dependencies_from_parsed(session, op, car, data):
 
 
 
+def normalize_warehouse_text(value):
+    value = (value or "").strip().lower().replace("ё", "е")
+    value = re.sub(r"\s+", " ", value)
+    return value
+
+
+def find_warehouse_item(session, part_name, brand=""):
+    part_key = normalize_warehouse_text(part_name)
+    brand_key = normalize_warehouse_text(brand)
+
+    exact_brand_match = None
+    no_brand_match = None
+
+    for item in session.query(WarehouseItem).all():
+        if normalize_warehouse_text(item.part_name) != part_key:
+            continue
+
+        item_brand = normalize_warehouse_text(item.brand)
+
+        if brand_key and item_brand == brand_key:
+            exact_brand_match = item
+            break
+
+        if not item_brand:
+            no_brand_match = item
+
+        if not brand_key and item_brand == "":
+            exact_brand_match = item
+            break
+
+    return exact_brand_match or no_brand_match
+
+
+def deduct_from_warehouse(session, op, car, data):
+    """
+    Списывает одну деталь со склада, когда в сообщении есть
+    «со склада» или «из склада».
+
+    Цена расхода берётся из команды и уже записывается в Expense.
+    Склад хранит только количество.
+    """
+    if not data.get("from_warehouse"):
+        return {
+            "used": False,
+            "message": "",
+            "low_stock_text": "",
+        }
+
+    part_name = (data.get("part") or "").strip()
+    brand = (data.get("brand") or "").strip()
+
+    if not part_name:
+        return {
+            "used": False,
+            "message": (
+                "Расход записан, но склад не списан: "
+                "не удалось распознать деталь."
+            ),
+            "low_stock_text": "",
+        }
+
+    item = find_warehouse_item(
+        session,
+        part_name=part_name,
+        brand=brand,
+    )
+
+    display_name = (
+        f"{part_name} {brand}".strip()
+    )
+
+    if not item:
+        return {
+            "used": False,
+            "message": (
+                f"Расход записан, но на складе не найдена "
+                f"деталь «{display_name}»."
+            ),
+            "low_stock_text": "",
+        }
+
+    if (item.quantity or 0) <= 0:
+        return {
+            "used": False,
+            "message": (
+                f"Расход записан, но «{display_name}» "
+                f"закончилась на складе."
+            ),
+            "low_stock_text": "",
+        }
+
+    item.quantity = (item.quantity or 0) - 1
+
+    session.add(
+        WarehouseMovement(
+            operation_id=op.id,
+            car_code=car.code,
+            part_name=item.part_name,
+            brand=item.brand or "",
+            quantity=1,
+            movement_type="out",
+            comment=data.get("raw") or "",
+        )
+    )
+
+    remaining = item.quantity or 0
+    minimum = item.min_quantity or 0
+
+    low_stock_text = ""
+
+    if remaining <= minimum:
+        low_stock_text = (
+            "⚠️ <b>Заканчивается деталь</b>\n"
+            f"Деталь: {item.part_name}"
+            f"{' ' + item.brand if item.brand else ''}\n"
+            f"Осталось: {remaining} шт.\n"
+            f"Минимум: {minimum} шт."
+        )
+
+    return {
+        "used": True,
+        "message": (
+            f"Со склада списано: {item.part_name}"
+            f"{' ' + item.brand if item.brand else ''} — 1 шт. "
+            f"Остаток: {remaining} шт."
+        ),
+        "low_stock_text": low_stock_text,
+    }
+
+
 def save_operation(data):
     session = Session()
     car = find_car(session, data.get("car_code"))
@@ -987,10 +1119,31 @@ def save_operation(data):
         car.current_mileage = data["mileage"]
         session.add(Mileage(car_code=car.code, mileage=data["mileage"], source=data["raw"]))
 
+    warehouse_result = deduct_from_warehouse(
+        session,
+        op,
+        car,
+        data,
+    )
+
     session.commit()
     op_id = op.id
+
+    low_stock_text = warehouse_result.get("low_stock_text") or ""
+    if low_stock_text:
+        send_telegram_message(low_stock_text)
+
+    message = f"Записано. Операция #{op_id}"
+    if warehouse_result.get("message"):
+        message += " | " + warehouse_result["message"]
+
     session.close()
-    return {"ok": True, "message": f"Записано. Операция #{op_id}", "data": data}
+    return {
+        "ok": True,
+        "message": message,
+        "data": data,
+        "warehouse": warehouse_result,
+    }
 
 
 @bp.route("/")
@@ -1614,10 +1767,262 @@ def api_investors():
 
 
 
+@bp.route("/api/warehouse")
+def api_warehouse():
+    session = Session()
+
+    try:
+        items = []
+
+        for item in (
+            session.query(WarehouseItem)
+            .order_by(WarehouseItem.part_name, WarehouseItem.brand)
+            .all()
+        ):
+            items.append({
+                "id": item.id,
+                "part_name": item.part_name or "",
+                "brand": item.brand or "",
+                "quantity": item.quantity or 0,
+                "min_quantity": item.min_quantity or 0,
+                "shelf": item.shelf or "",
+                "comment": item.comment or "",
+                "low_stock": (
+                    (item.quantity or 0)
+                    <= (item.min_quantity or 0)
+                ),
+            })
+
+        return jsonify(items)
+
+    finally:
+        session.close()
+
+
+@bp.route("/api/warehouse/add-item", methods=["POST"])
+def api_warehouse_add_item():
+    payload = request.get_json(silent=True) or {}
+
+    part_name = (payload.get("part_name") or "").strip()
+    brand = (payload.get("brand") or "").strip().upper()
+    shelf = (payload.get("shelf") or "").strip()
+    comment = (payload.get("comment") or "").strip()
+
+    quantity = only_int(payload.get("quantity"))
+    min_quantity = only_int(payload.get("min_quantity"))
+
+    if not part_name:
+        return jsonify({
+            "ok": False,
+            "message": "Укажи название детали",
+        }), 400
+
+    session = Session()
+
+    try:
+        existing = find_warehouse_item(
+            session,
+            part_name,
+            brand,
+        )
+
+        if existing:
+            return jsonify({
+                "ok": False,
+                "message": (
+                    "Такая позиция уже есть. "
+                    "Используй кнопку «Приход»."
+                ),
+            }), 400
+
+        item = WarehouseItem(
+            part_name=part_name,
+            brand=brand,
+            quantity=max(quantity, 0),
+            min_quantity=max(min_quantity, 0),
+            shelf=shelf,
+            comment=comment,
+        )
+        session.add(item)
+        session.flush()
+
+        if quantity > 0:
+            session.add(
+                WarehouseMovement(
+                    operation_id=None,
+                    car_code="",
+                    part_name=part_name,
+                    brand=brand,
+                    quantity=quantity,
+                    movement_type="in",
+                    comment="Первоначальный остаток",
+                )
+            )
+
+        session.commit()
+
+        return jsonify({
+            "ok": True,
+            "message": (
+                f"Добавлено на склад: {part_name}"
+                f"{' ' + brand if brand else ''}. "
+                f"Остаток: {max(quantity, 0)} шт."
+            ),
+        })
+
+    except Exception as error:
+        session.rollback()
+        return jsonify({
+            "ok": False,
+            "message": f"Не удалось добавить деталь: {error}",
+        }), 500
+
+    finally:
+        session.close()
+
+
+@bp.route("/api/warehouse/restock", methods=["POST"])
+def api_warehouse_restock():
+    payload = request.get_json(silent=True) or {}
+
+    item_id = only_int(payload.get("item_id"))
+    quantity = only_int(payload.get("quantity"))
+    comment = (payload.get("comment") or "").strip()
+
+    if not item_id or quantity <= 0:
+        return jsonify({
+            "ok": False,
+            "message": "Выбери деталь и укажи количество больше нуля",
+        }), 400
+
+    session = Session()
+
+    try:
+        item = (
+            session.query(WarehouseItem)
+            .filter_by(id=item_id)
+            .first()
+        )
+
+        if not item:
+            return jsonify({
+                "ok": False,
+                "message": "Позиция склада не найдена",
+            }), 404
+
+        item.quantity = (item.quantity or 0) + quantity
+
+        session.add(
+            WarehouseMovement(
+                operation_id=None,
+                car_code="",
+                part_name=item.part_name,
+                brand=item.brand or "",
+                quantity=quantity,
+                movement_type="in",
+                comment=comment or "Приход на склад",
+            )
+        )
+
+        session.commit()
+
+        return jsonify({
+            "ok": True,
+            "message": (
+                f"Приход записан. "
+                f"{item.part_name}"
+                f"{' ' + item.brand if item.brand else ''}: "
+                f"{item.quantity} шт."
+            ),
+        })
+
+    except Exception as error:
+        session.rollback()
+        return jsonify({
+            "ok": False,
+            "message": f"Не удалось записать приход: {error}",
+        }), 500
+
+    finally:
+        session.close()
+
+
+@bp.route("/api/warehouse/movements")
+def api_warehouse_movements():
+    session = Session()
+
+    try:
+        rows = []
+
+        for movement in (
+            session.query(WarehouseMovement)
+            .order_by(WarehouseMovement.id.desc())
+            .limit(100)
+            .all()
+        ):
+            rows.append({
+                "id": movement.id,
+                "date": (
+                    movement.date.strftime("%d.%m.%Y %H:%M")
+                    if movement.date
+                    else ""
+                ),
+                "car_code": movement.car_code or "",
+                "part_name": movement.part_name or "",
+                "brand": movement.brand or "",
+                "quantity": movement.quantity or 0,
+                "movement_type": movement.movement_type or "",
+                "comment": movement.comment or "",
+            })
+
+        return jsonify(rows)
+
+    finally:
+        session.close()
+
+
 def delete_operation_dependencies(session, operation_id):
-    """Удаляет операцию и все связанные с ней записи, чтобы пересчеты стали чистыми."""
-    for model in (Income, Expense, Part, CarInvestment, InvestorInvestment, InvestorPayout, Downtime, InvestorSettlement):
-        for row in session.query(model).filter_by(operation_id=operation_id).all():
+    """
+    Удаляет операцию и связанные записи.
+
+    Если операция списывала деталь со склада, остаток возвращается.
+    """
+    warehouse_movements = (
+        session.query(WarehouseMovement)
+        .filter_by(operation_id=operation_id)
+        .all()
+    )
+
+    for movement in warehouse_movements:
+        if movement.movement_type == "out":
+            item = find_warehouse_item(
+                session,
+                movement.part_name,
+                movement.brand,
+            )
+            if item:
+                item.quantity = (
+                    (item.quantity or 0)
+                    + (movement.quantity or 0)
+                )
+
+        session.delete(movement)
+
+    for model in (
+        Income,
+        Expense,
+        Part,
+        CarInvestment,
+        InvestorInvestment,
+        InvestorPayout,
+        Downtime,
+        InvestorSettlement,
+    ):
+        for row in (
+            session.query(model)
+            .filter_by(operation_id=operation_id)
+            .all()
+        ):
             session.delete(row)
 
 
