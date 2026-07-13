@@ -73,6 +73,18 @@ td,th{padding:9px;border-bottom:1px solid #eee;text-align:left}
 .car-list-wrap{display:none;margin-top:12px}
 .car-list-wrap.open{display:block}
 .add-car-grid{display:grid;grid-template-columns:repeat(4,minmax(160px,1fr));gap:8px}
+
+.warehouse-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:12px;margin-top:14px}
+.warehouse-item{border:1px solid #e5e7eb;border-radius:14px;padding:14px;background:#fff}
+.warehouse-item.low{border-color:#f97316;background:#fff7ed}
+.warehouse-name{font-weight:700;font-size:16px}
+.warehouse-stock{font-size:24px;font-weight:800;margin:8px 0}
+.warehouse-form{display:grid;grid-template-columns:repeat(6,minmax(130px,1fr));gap:8px;align-items:end}
+.warehouse-restock{display:grid;grid-template-columns:2fr 1fr 2fr auto;gap:8px;align-items:end;margin-top:12px}
+@media(max-width:800px){
+  .warehouse-form,.warehouse-restock{grid-template-columns:1fr}
+}
+
 @media(max-width:800px){
   .add-car-grid{grid-template-columns:1fr}
   .top-actions{justify-content:flex-end}
@@ -226,6 +238,50 @@ td,th{padding:9px;border-bottom:1px solid #eee;text-align:left}
 
   <button onclick="addCar()">Добавить авто</button>
   <p id="carRes"></p>
+</div>
+
+<div class="card">
+  <div class="section-head">
+    <div>
+      <h2>Склад</h2>
+      <p class="raw">Остатки деталей и автоматическое списание по команде «со склада».</p>
+    </div>
+    <button
+      id="warehouseToggleButton"
+      class="section-toggle"
+      onclick="toggleWarehousePanel()"
+    >
+      Открыть
+    </button>
+  </div>
+
+  <div id="warehousePanel" class="collapsible-panel">
+    <h3>Новая позиция</h3>
+
+    <div class="warehouse-form">
+      <input id="warehouse_part" placeholder="Название детали">
+      <input id="warehouse_brand" placeholder="Бренд, например AMD">
+      <input id="warehouse_quantity" type="number" min="0" placeholder="Количество">
+      <input id="warehouse_min" type="number" min="0" placeholder="Минимум">
+      <input id="warehouse_shelf" placeholder="Полка">
+      <button onclick="addWarehouseItem()">Добавить</button>
+    </div>
+
+    <p id="warehouseRes"></p>
+
+    <h3>Приход</h3>
+
+    <div class="warehouse-restock">
+      <select id="warehouse_restock_item">
+        <option value="">Выбери деталь</option>
+      </select>
+      <input id="warehouse_restock_quantity" type="number" min="1" placeholder="Количество">
+      <input id="warehouse_restock_comment" placeholder="Комментарий">
+      <button onclick="restockWarehouse()">Записать</button>
+    </div>
+
+    <div id="warehouseItems" class="warehouse-grid"></div>
+  </div>
 </div>
 
 <div class="card">
@@ -609,6 +665,106 @@ async function reopenPeriod(code){
 }
 async function loadOps(){let o=await api('/api/operations');ops.innerHTML='<tr><th>ID</th><th>Дата</th><th>Машина</th><th>Тип</th><th>Описание</th><th>Сумма</th><th>Сообщение</th><th>Удалить</th></tr>'+o.map(x=>`<tr><td>${x.id}</td><td>${x.date}</td><td>${x.car_code}</td><td>${x.type}</td><td>${x.description||''}</td><td>${rub(x.amount)}</td><td>${x.raw||''}</td><td><button class="danger small" onclick="deleteOperation(${x.id})">Удалить</button></td></tr>`).join('')}
 async function add(){let m=msg.value;try{let r=await api('/api/add',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:m})});res.innerText=r.message||JSON.stringify(r);if(r.ok)msg.value='';load()}catch(e){res.innerText='Ошибка: '+e}}
+
+
+function toggleWarehousePanel(){
+  const panel=document.getElementById('warehousePanel');
+  const button=document.getElementById('warehouseToggleButton');
+
+  panel.classList.toggle('open');
+  button.innerText=panel.classList.contains('open')
+    ? 'Скрыть'
+    : 'Открыть';
+
+  if(panel.classList.contains('open')){
+    loadWarehouse();
+  }
+}
+
+async function loadWarehouse(){
+  const items=await api('/api/warehouse');
+
+  if(!Array.isArray(items)){
+    warehouseItems.innerHTML='<p class="bad">Не удалось загрузить склад</p>';
+    return;
+  }
+
+  warehouse_restock_item.innerHTML=
+    '<option value="">Выбери деталь</option>'+
+    items.map(i=>`
+      <option value="${i.id}">
+        ${i.part_name} ${i.brand||''} — ${i.quantity} шт.
+      </option>
+    `).join('');
+
+  if(!items.length){
+    warehouseItems.innerHTML='<p class="raw">Склад пока пуст.</p>';
+    return;
+  }
+
+  warehouseItems.innerHTML=items.map(i=>`
+    <div class="warehouse-item ${i.low_stock?'low':''}">
+      <div class="warehouse-name">
+        ${i.part_name} ${i.brand||''}
+      </div>
+      <div class="warehouse-stock">${i.quantity} шт.</div>
+      <div class="raw">
+        Минимум: ${i.min_quantity} шт.
+        ${i.shelf?` · Полка: ${i.shelf}`:''}
+      </div>
+      ${i.low_stock?'<p class="bad">⚠️ Нужно пополнить</p>':''}
+    </div>
+  `).join('');
+}
+
+async function addWarehouseItem(){
+  const payload={
+    part_name:warehouse_part.value,
+    brand:warehouse_brand.value,
+    quantity:Number(warehouse_quantity.value||0),
+    min_quantity:Number(warehouse_min.value||0),
+    shelf:warehouse_shelf.value
+  };
+
+  const r=await api('/api/warehouse/add-item',{
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify(payload)
+  });
+
+  warehouseRes.innerText=r.message||'';
+
+  if(r.ok){
+    warehouse_part.value='';
+    warehouse_brand.value='';
+    warehouse_quantity.value='';
+    warehouse_min.value='';
+    warehouse_shelf.value='';
+    await loadWarehouse();
+  }
+}
+
+async function restockWarehouse(){
+  const payload={
+    item_id:Number(warehouse_restock_item.value||0),
+    quantity:Number(warehouse_restock_quantity.value||0),
+    comment:warehouse_restock_comment.value
+  };
+
+  const r=await api('/api/warehouse/restock',{
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify(payload)
+  });
+
+  warehouseRes.innerText=r.message||'';
+
+  if(r.ok){
+    warehouse_restock_quantity.value='';
+    warehouse_restock_comment.value='';
+    await loadWarehouse();
+  }
+}
 
 function togglePaymentsPanel(){
   const panel=document.getElementById('paymentsPanel');
