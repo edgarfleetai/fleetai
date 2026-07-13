@@ -995,7 +995,15 @@ def deduct_from_warehouse(session, op, car, data):
     Цена расхода берётся из команды и уже записывается в Expense.
     Склад хранит только количество.
     """
-    if not data.get("from_warehouse"):
+    raw_text = (data.get("raw") or "").lower().replace("ё", "е")
+
+    from_warehouse = (
+        bool(data.get("from_warehouse"))
+        or "со склада" in raw_text
+        or "из склада" in raw_text
+    )
+
+    if not from_warehouse:
         return {
             "used": False,
             "message": "",
