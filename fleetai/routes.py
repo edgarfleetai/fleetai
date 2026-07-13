@@ -888,55 +888,103 @@ def create_dependencies_from_parsed(session, op, car, data):
 
 
 def normalize_warehouse_text(value):
+    """
+    Приводит разные названия одной детали к единому виду.
+
+    Например:
+    - стойка стаба
+    - стойка стабилизатора
+    - стойки стабилизатора
+
+    превращаются в:
+    - стойка стабилизатора
+    """
     value = (value or "").strip().lower().replace("ё", "е")
+    value = re.sub(r"[^0-9a-zа-я]+", " ", value)
+    value = re.sub(r"\s+", " ", value).strip()
 
-    aliases = {
-        "стойка стаба": "стойка стабилизатора",
+    replacements = {
         "стойки стаба": "стойка стабилизатора",
-        "стойка стабилизатора": "стойка стабилизатора",
+        "стойка стаба": "стойка стабилизатора",
         "стойки стабилизатора": "стойка стабилизатора",
+        "линка стабилизатора": "стойка стабилизатора",
+        "линк стабилизатора": "стойка стабилизатора",
 
-        "втулка стаба": "втулка стабилизатора",
         "втулки стаба": "втулка стабилизатора",
-        "втулка стабилизатора": "втулка стабилизатора",
+        "втулка стаба": "втулка стабилизатора",
+        "втулки стабилизатора": "втулка стабилизатора",
 
         "передние колодки": "тормозные колодки передние",
         "колодки передние": "тормозные колодки передние",
-
         "задние колодки": "тормозные колодки задние",
         "колодки задние": "тормозные колодки задние",
+
+        "подшипники ступицы передние": "подшипник ступицы передний",
+        "передний подшипник ступицы": "подшипник ступицы передний",
+        "подшипники ступицы задние": "подшипник ступицы задний",
+        "задний подшипник ступицы": "подшипник ступицы задний",
     }
 
-    value = re.sub(r"\s+", " ", value).strip()
+    return replacements.get(value, value)
 
-    return aliases.get(value, value)
+
+def warehouse_name_matches(stored_name, parsed_name):
+    stored = normalize_warehouse_text(stored_name)
+    parsed = normalize_warehouse_text(parsed_name)
+
+    if not stored or not parsed:
+        return False
+
+    if stored == parsed:
+        return True
+
+    # Подстраховка для похожих формулировок.
+    stored_tokens = set(stored.split())
+    parsed_tokens = set(parsed.split())
+
+    if stored_tokens and parsed_tokens:
+        common = stored_tokens & parsed_tokens
+        shorter = min(len(stored_tokens), len(parsed_tokens))
+
+        if shorter and len(common) / shorter >= 0.75:
+            return True
+
+    return stored in parsed or parsed in stored
 
 
 def find_warehouse_item(session, part_name, brand=""):
-    part_key = normalize_warehouse_text(part_name)
+    """
+    Ищет деталь сначала по названию и бренду,
+    затем по названию без строгой привязки к бренду.
+    """
     brand_key = normalize_warehouse_text(brand)
 
-    exact_brand_match = None
-    no_brand_match = None
+    matching_name = []
 
     for item in session.query(WarehouseItem).all():
-        if normalize_warehouse_text(item.part_name) != part_key:
-            continue
+        if warehouse_name_matches(item.part_name, part_name):
+            matching_name.append(item)
 
-        item_brand = normalize_warehouse_text(item.brand)
+    if not matching_name:
+        return None
 
-        if brand_key and item_brand == brand_key:
-            exact_brand_match = item
-            break
+    if brand_key:
+        for item in matching_name:
+            if normalize_warehouse_text(item.brand) == brand_key:
+                return item
 
-        if not item_brand:
-            no_brand_match = item
+    # Если бренд у складской позиции не заполнен,
+    # разрешаем использовать её для любого бренда.
+    for item in matching_name:
+        if not normalize_warehouse_text(item.brand):
+            return item
 
-        if not brand_key and item_brand == "":
-            exact_brand_match = item
-            break
+    # Если название совпало и на складе только одна такая позиция,
+    # используем её даже при различии регистра/написания бренда.
+    if len(matching_name) == 1:
+        return matching_name[0]
 
-    return exact_brand_match or no_brand_match
+    return None
 
 
 def deduct_from_warehouse(session, op, car, data):
@@ -1784,6 +1832,44 @@ def api_investors():
     finally:
         session.close()
 
+
+
+@bp.route("/api/warehouse/check-match", methods=["POST"])
+def api_warehouse_check_match():
+    payload = request.get_json(silent=True) or {}
+
+    part_name = (payload.get("part_name") or "").strip()
+    brand = (payload.get("brand") or "").strip()
+
+    session = Session()
+
+    try:
+        item = find_warehouse_item(
+            session,
+            part_name,
+            brand,
+        )
+
+        return jsonify({
+            "ok": bool(item),
+            "searched_part": part_name,
+            "searched_brand": brand,
+            "normalized_part": normalize_warehouse_text(part_name),
+            "normalized_brand": normalize_warehouse_text(brand),
+            "matched_item": (
+                {
+                    "id": item.id,
+                    "part_name": item.part_name,
+                    "brand": item.brand or "",
+                    "quantity": item.quantity or 0,
+                }
+                if item
+                else None
+            ),
+        })
+
+    finally:
+        session.close()
 
 
 @bp.route("/api/warehouse")
