@@ -96,6 +96,188 @@ def parse_downtime_period(text):
     return None, None, 0, "", 0
 
 
+
+def _number_tokens(text, car_code=None, mileage=None):
+    result = []
+
+    for match in re.finditer(r"\b(\d{1,9})\b", text):
+        value = int(match.group(1))
+
+        if car_code and str(value) == str(car_code):
+            continue
+        if mileage and value == mileage:
+            continue
+
+        result.append({
+            "value": value,
+            "start": match.start(),
+            "end": match.end(),
+        })
+
+    return result
+
+
+def _detect_all_parts(text):
+    """
+    Находит все разные детали из PARTS вместе с их позициями в строке.
+
+    Длинные алиасы имеют приоритет, чтобы «масляный фильтр»
+    не превращался одновременно в «масло» и «фильтр».
+    """
+    candidates = []
+
+    for alias, value in sorted(
+        PARTS.items(),
+        key=lambda item: len(item[0]),
+        reverse=True,
+    ):
+        start = 0
+
+        while True:
+            position = text.find(alias, start)
+            if position < 0:
+                break
+
+            end = position + len(alias)
+
+            overlaps = any(
+                not (end <= item["start"] or position >= item["end"])
+                for item in candidates
+            )
+
+            if not overlaps:
+                part_name, category = value
+                candidates.append({
+                    "alias": alias,
+                    "part": part_name,
+                    "category": category,
+                    "start": position,
+                    "end": end,
+                })
+
+            start = end
+
+    candidates.sort(key=lambda item: item["start"])
+
+    # Убираем повтор одного и того же нормального названия подряд.
+    unique = []
+    seen_ranges = set()
+
+    for item in candidates:
+        key = (
+            item["part"].strip().lower(),
+            item["start"],
+            item["end"],
+        )
+        if key not in seen_ranges:
+            unique.append(item)
+            seen_ranges.add(key)
+
+    return unique
+
+
+def _extract_multiple_repair_parts(
+    text,
+    car_code=None,
+    mileage=None,
+    default_brand="",
+    default_position="",
+):
+    """
+    Разбирает команды с несколькими деталями.
+
+    Пример:
+    «621 замена масла 2500 фильтра 500 ремонт 700»
+
+    Результат:
+    - масло — 2500;
+    - фильтр — 500;
+    - работа — 700;
+    - всего — 3700.
+    """
+    detected = _detect_all_parts(text)
+
+    if not detected:
+        return [], 0
+
+    numbers = _number_tokens(
+        text,
+        car_code=car_code,
+        mileage=mileage,
+    )
+
+    labor_match = re.search(
+        r"\b(?:работа|работы|ремонт)\s*(\d{1,9})\b",
+        text,
+    )
+    labor = int(labor_match.group(1)) if labor_match else 0
+    labor_span = (
+        (labor_match.start(1), labor_match.end(1))
+        if labor_match
+        else None
+    )
+
+    explicit_price_matches = list(
+        re.finditer(
+            r"\b(?:цена|стоимость)\s*(\d{1,9})\b",
+            text,
+        )
+    )
+
+    used_number_spans = set()
+    if labor_span:
+        used_number_spans.add(labor_span)
+
+    result = []
+
+    for index, item in enumerate(detected):
+        segment_end = (
+            detected[index + 1]["start"]
+            if index + 1 < len(detected)
+            else len(text)
+        )
+
+        price = 0
+
+        # Сначала ищем «цена 1000» внутри участка этой детали.
+        for match in explicit_price_matches:
+            if item["end"] <= match.start() < segment_end:
+                price = int(match.group(1))
+                used_number_spans.add(
+                    (match.start(1), match.end(1))
+                )
+                break
+
+        # Затем берём ближайшее число после названия детали,
+        # но не сумму работы и не число следующей детали.
+        if price == 0:
+            for number in numbers:
+                span = (number["start"], number["end"])
+
+                if span in used_number_spans:
+                    continue
+
+                if item["end"] <= number["start"] < segment_end:
+                    price = number["value"]
+                    used_number_spans.add(span)
+                    break
+
+        result.append({
+            "part": item["part"],
+            "category": item["category"],
+            "brand": default_brand,
+            "position": default_position,
+            "price": price,
+            "labor": 0,
+        })
+
+    # Работу прикрепляем к первой детали только для совместимости
+    # со старой таблицей Part. В общей сумме она учитывается один раз.
+    if result and labor:
+        result[0]["labor"] = labor
+
+    return result, labor
+
 def parse_message(message):
     raw = (message or "").strip()
     text = raw.lower().replace(",", " ").replace(".", " ")
@@ -103,6 +285,7 @@ def parse_message(message):
     data = {
         "raw": raw, "car_code": None, "type": "unknown", "category": "", "description": "",
         "part": "", "brand": "", "position": "", "part_price": 0, "labor": 0,
+        "parts": [], "from_warehouse": False,
         "total": 0, "income": 0, "mileage": None, "share_type": "shared",
         "investor_name": "", "investor_percent": 0, "days": 0,
         "start_date": None, "end_date": None, "active": 0,
@@ -113,6 +296,9 @@ def parse_message(message):
     car = re.match(r"^\s*(\d{3})\b", text)
     if car:
         data["car_code"] = car.group(1).strip()
+
+    if "со склада" in text or "из склада" in text:
+        data["from_warehouse"] = True
 
     mileage = re.search(r"пробег\s*(\d{4,7})", text)
     if mileage:
@@ -252,35 +438,127 @@ def parse_message(message):
             data["total"] = nums[-1] if nums else 0
             return data
 
-    # Сначала ищем конкретную деталь, и только потом применяем общий ремонт.
-    # Иначе фраза "замена петли капота" превращалась бы в безымянный ремонт.
-    for key, val in sorted(PARTS.items(), key=lambda x: len(x[0]), reverse=True):
+    # Сначала пытаемся распознать сразу несколько деталей.
+    repair_words_present = any(
+        word in text
+        for word in [
+            "замена",
+            "поменял",
+            "поменяли",
+            "ремонт",
+            "починил",
+            "починили",
+            "купил",
+            "установил",
+        ]
+    )
+
+    detected_parts, detected_labor = _extract_multiple_repair_parts(
+        text,
+        car_code=data["car_code"],
+        mileage=data["mileage"],
+        default_brand=data["brand"],
+        default_position=data["position"],
+    )
+
+    if detected_parts and repair_words_present:
+        data["parts"] = detected_parts
+        data["part"] = detected_parts[0]["part"]
+        data["category"] = detected_parts[0]["category"]
+        data["part_price"] = sum(
+            item["price"] or 0
+            for item in detected_parts
+        )
+        data["labor"] = detected_labor
+        data["total"] = data["part_price"] + data["labor"]
+
+        if len(detected_parts) == 1:
+            data["description"] = (
+                "Замена "
+                + detected_parts[0]["part"].lower()
+            )
+        else:
+            names = ", ".join(
+                item["part"].lower()
+                for item in detected_parts
+            )
+            data["description"] = (
+                f"Ремонт / замена: {names}"
+            )
+
+        data["type"] = (
+            "service"
+            if all(
+                item["category"] == "ТО"
+                for item in detected_parts
+            )
+            else "repair"
+        )
+
+        return data
+
+    # Одиночная известная деталь.
+    for key, val in sorted(
+        PARTS.items(),
+        key=lambda item: len(item[0]),
+        reverse=True,
+    ):
         if key in text:
             data["part"], data["category"] = val
-            data["description"] = "Замена " + data["part"].lower()
-            data["type"] = "service" if data["category"] == "ТО" else "repair"
+            data["description"] = (
+                "Замена " + data["part"].lower()
+            )
+            data["type"] = (
+                "service"
+                if data["category"] == "ТО"
+                else "repair"
+            )
             break
 
-    if not data["part"] and any(word in text for word in ["замена", "поменял", "поменяли", "ремонт", "починил", "починили"]):
+    if not data["part"] and repair_words_present:
         data["type"] = "repair"
         data["category"] = "Ремонт"
 
-        # Умный запасной вариант: незнакомую деталь все равно сохраняем.
-        # Например: "703 замена редкой детали 2500 работа 700".
         candidate = text
         if data["car_code"]:
-            candidate = re.sub(r"^\s*" + re.escape(data["car_code"]) + r"\b", "", candidate).strip()
-        candidate = re.sub(r"\b(замена|поменял|поменяли|ремонт|починил|починили)\b", "", candidate).strip()
-        candidate = re.sub(r"\b(цена|стоимость|работа|пробег)\s*\d+\b", "", candidate).strip()
-        candidate = re.sub(r"\b\d{2,9}\b", "", candidate).strip(" -—.,")
+            candidate = re.sub(
+                r"^\s*" + re.escape(data["car_code"]) + r"\b",
+                "",
+                candidate,
+            ).strip()
+
+        candidate = re.sub(
+            r"\b(замена|поменял|поменяли|ремонт|починил|починили)\b",
+            "",
+            candidate,
+        ).strip()
+        candidate = re.sub(
+            r"\b(цена|стоимость|работа|пробег)\s*\d+\b",
+            "",
+            candidate,
+        ).strip()
+        candidate = re.sub(
+            r"\b\d{2,9}\b",
+            "",
+            candidate,
+        ).strip(" -—.,")
+
         if candidate:
             data["part"] = candidate[:120].capitalize()
-            data["description"] = "Ремонт / замена: " + data["part"].lower()
+            data["description"] = (
+                "Ремонт / замена: " + data["part"].lower()
+            )
         else:
             data["description"] = "Ремонт / замена"
 
-    price = re.search(r"(стоимость|цена)\s*(\d+)", text)
-    labor = re.search(r"(работа|ремонт)\s*(\d+)", text)
+    price = re.search(
+        r"(стоимость|цена)\s*(\d+)",
+        text,
+    )
+    labor = re.search(
+        r"(работа|ремонт)\s*(\d+)",
+        text,
+    )
 
     if price:
         data["part_price"] = int(price.group(2))
@@ -288,13 +566,46 @@ def parse_message(message):
         data["labor"] = int(labor.group(2))
 
     if data["part"] and data["part_price"] == 0:
-        nums = parse_amounts(text, data["car_code"])
+        nums = parse_amounts(
+            text,
+            data["car_code"],
+        )
         if data["mileage"]:
-            nums = [n for n in nums if n != data["mileage"]]
+            nums = [
+                number
+                for number in nums
+                if number != data["mileage"]
+            ]
+
+        if data["labor"]:
+            removed = False
+            filtered = []
+            for number in nums:
+                if (
+                    not removed
+                    and number == data["labor"]
+                ):
+                    removed = True
+                    continue
+                filtered.append(number)
+            nums = filtered
+
         if nums:
             data["part_price"] = nums[0]
-        if len(nums) > 1 and data["labor"] == 0:
-            data["labor"] = nums[1]
 
-    data["total"] = data["part_price"] + data["labor"]
+    data["total"] = (
+        data["part_price"]
+        + data["labor"]
+    )
+
+    if data["part"]:
+        data["parts"] = [{
+            "part": data["part"],
+            "category": data["category"],
+            "brand": data["brand"],
+            "position": data["position"],
+            "price": data["part_price"],
+            "labor": data["labor"],
+        }]
+
     return data
