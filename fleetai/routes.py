@@ -828,6 +828,42 @@ def split_message_parts(message):
     return parts or [message]
 
 
+
+def add_part_rows_from_parsed(session, op, car, data):
+    """
+    Сохраняет одну или несколько деталей одной операции.
+    """
+    parts = data.get("parts") or []
+
+    if not parts and data.get("part"):
+        parts = [{
+            "part": data.get("part") or "",
+            "brand": data.get("brand") or "",
+            "position": data.get("position") or "",
+            "price": data.get("part_price") or 0,
+            "labor": data.get("labor") or 0,
+        }]
+
+    for item in parts:
+        session.add(
+            Part(
+                car_code=car.code,
+                operation_id=op.id,
+                part_name=item.get("part") or "",
+                brand=item.get("brand") or data.get("brand") or "",
+                position=(
+                    item.get("position")
+                    or data.get("position")
+                    or ""
+                ),
+                price=item.get("price") or 0,
+                labor=item.get("labor") or 0,
+                install_mileage=data.get("mileage"),
+            )
+        )
+
+
+
 def create_dependencies_from_parsed(session, op, car, data):
     """Создает связанные записи для уже существующей операции.
 
@@ -934,17 +970,12 @@ def create_dependencies_from_parsed(session, op, car, data):
 
         car.status = "Простой" if is_active else "Работает"
 
-    if data.get("part"):
-        session.add(Part(
-            car_code=car.code,
-            operation_id=op.id,
-            part_name=data["part"],
-            brand=data["brand"],
-            position=data["position"],
-            price=data["part_price"],
-            labor=data["labor"],
-            install_mileage=data["mileage"],
-        ))
+    add_part_rows_from_parsed(
+        session,
+        op,
+        car,
+        data,
+    )
 
     if data.get("mileage"):
         car.current_mileage = data["mileage"]
@@ -1054,13 +1085,13 @@ def find_warehouse_item(session, part_name, brand=""):
 
 def deduct_from_warehouse(session, op, car, data):
     """
-    Списывает одну деталь со склада, когда в сообщении есть
-    «со склада» или «из склада».
+    Списывает все распознанные детали, если в команде есть «со склада».
 
-    Цена расхода берётся из команды и уже записывается в Expense.
-    Склад хранит только количество.
+    Цена ремонта остаётся в Expense, склад хранит только количество.
     """
-    raw_text = (data.get("raw") or "").lower().replace("ё", "е")
+    raw_text = (
+        data.get("raw") or ""
+    ).lower().replace("ё", "е")
 
     from_warehouse = (
         bool(data.get("from_warehouse"))
@@ -1075,85 +1106,104 @@ def deduct_from_warehouse(session, op, car, data):
             "low_stock_text": "",
         }
 
-    part_name = (data.get("part") or "").strip()
-    brand = (data.get("brand") or "").strip()
+    parsed_parts = data.get("parts") or []
 
-    if not part_name:
+    if not parsed_parts and data.get("part"):
+        parsed_parts = [{
+            "part": data.get("part"),
+            "brand": data.get("brand") or "",
+        }]
+
+    if not parsed_parts:
         return {
             "used": False,
             "message": (
                 "Расход записан, но склад не списан: "
-                "не удалось распознать деталь."
+                "не удалось распознать детали."
             ),
             "low_stock_text": "",
         }
 
-    item = find_warehouse_item(
-        session,
-        part_name=part_name,
-        brand=brand,
-    )
+    messages = []
+    low_messages = []
+    used_any = False
 
-    display_name = (
-        f"{part_name} {brand}".strip()
-    )
+    for parsed_part in parsed_parts:
+        part_name = (
+            parsed_part.get("part") or ""
+        ).strip()
+        brand = (
+            parsed_part.get("brand")
+            or data.get("brand")
+            or ""
+        ).strip()
 
-    if not item:
-        return {
-            "used": False,
-            "message": (
-                f"Расход записан, но на складе не найдена "
-                f"деталь «{display_name}»."
-            ),
-            "low_stock_text": "",
-        }
+        if not part_name:
+            continue
 
-    if (item.quantity or 0) <= 0:
-        return {
-            "used": False,
-            "message": (
-                f"Расход записан, но «{display_name}» "
-                f"закончилась на складе."
-            ),
-            "low_stock_text": "",
-        }
-
-    item.quantity = (item.quantity or 0) - 1
-
-    session.add(
-        WarehouseMovement(
-            operation_id=op.id,
-            car_code=car.code,
-            part_name=item.part_name,
-            brand=item.brand or "",
-            quantity=1,
-            movement_type="out",
-            comment=data.get("raw") or "",
+        item = find_warehouse_item(
+            session,
+            part_name=part_name,
+            brand=brand,
         )
-    )
 
-    remaining = item.quantity or 0
-    minimum = item.min_quantity or 0
+        display_name = f"{part_name} {brand}".strip()
 
-    low_stock_text = ""
+        if not item:
+            messages.append(
+                f"не найдена «{display_name}»"
+            )
+            continue
 
-    if remaining <= minimum:
-        low_stock_text = (
-            "⚠️ <b>Заканчивается деталь</b>\n"
-            f"Деталь: {item.part_name}"
-            f"{' ' + item.brand if item.brand else ''}\n"
-            f"Осталось: {remaining} шт.\n"
-            f"Минимум: {minimum} шт."
+        if (item.quantity or 0) <= 0:
+            messages.append(
+                f"«{display_name}» закончилась"
+            )
+            continue
+
+        item.quantity = (item.quantity or 0) - 1
+        used_any = True
+
+        session.add(
+            WarehouseMovement(
+                operation_id=op.id,
+                car_code=car.code,
+                part_name=item.part_name,
+                brand=item.brand or "",
+                quantity=1,
+                movement_type="out",
+                comment=data.get("raw") or "",
+            )
         )
+
+        remaining = item.quantity or 0
+        minimum = item.min_quantity or 0
+
+        messages.append(
+            f"{item.part_name}"
+            f"{' ' + item.brand if item.brand else ''} — "
+            f"1 шт., остаток {remaining}"
+        )
+
+        if remaining <= minimum:
+            low_messages.append(
+                "⚠️ <b>Заканчивается деталь</b>\n"
+                f"Деталь: {item.part_name}"
+                f"{' ' + item.brand if item.brand else ''}\n"
+                f"Осталось: {remaining} шт.\n"
+                f"Минимум: {minimum} шт."
+            )
+
+    prefix = (
+        "Со склада списано: "
+        if used_any
+        else "Склад не списан: "
+    )
 
     return {
-        "used": True,
-        "message": (
-            f"Со склада списано: {item.part_name}"
-            f"{' ' + item.brand if item.brand else ''} — 1 шт. "
-            f"Остаток: {remaining} шт."
-        ),
-        "low_stock_text": low_stock_text,
+        "used": used_any,
+        "message": prefix + "; ".join(messages),
+        "low_stock_text": "\n\n".join(low_messages),
     }
 
 
@@ -1278,12 +1328,12 @@ def save_operation(data):
 
         car.status = "Простой" if is_active else "Работает"
 
-    if data.get("part"):
-        session.add(Part(
-            car_code=car.code, operation_id=op.id, part_name=data["part"],
-            brand=data["brand"], position=data["position"], price=data["part_price"],
-            labor=data["labor"], install_mileage=data["mileage"],
-        ))
+    add_part_rows_from_parsed(
+        session,
+        op,
+        car,
+        data,
+    )
 
     if data.get("mileage"):
         car.current_mileage = data["mileage"]
@@ -2835,7 +2885,7 @@ def test_investor_report(investor_name):
 
             for expense in expenses:
                 operation = None
-                part = None
+                parts = []
 
                 if expense.operation_id:
                     operation = (
@@ -2843,10 +2893,11 @@ def test_investor_report(investor_name):
                         .filter_by(id=expense.operation_id)
                         .first()
                     )
-                    part = (
+                    parts = (
                         session.query(Part)
                         .filter_by(operation_id=expense.operation_id)
-                        .first()
+                        .order_by(Part.id.asc())
+                        .all()
                     )
 
                 expense_type = (
@@ -2878,8 +2929,9 @@ def test_investor_report(investor_name):
 
                 details = []
 
-                if part:
+                for part in parts:
                     part_text = part.part_name or "Деталь"
+
                     if part.brand:
                         part_text += f", фирма {part.brand}"
                     if part.position:
