@@ -2312,39 +2312,283 @@ def api_fix_investor_data():
     return jsonify({"ok": True, "message": "Ошибочные инвесторы и взаиморасчеты исправлены" if changed else "Исправлять нечего"})
 
 
+
+def apply_investor_portfolio_netting(car_rows):
+    """
+    Объединяет взаиморасчёт по всем машинам одного инвестора.
+
+    Правила:
+    1. Долг одной машины сначала закрывается суммой к выплате
+       по другим машинам этого же инвестора.
+    2. Пока общей суммы к выплате хватает, долг не показывается.
+    3. Удержание долга распределяется максимально равномерно
+       между машинами, у которых есть сумма к выплате.
+    4. Только если общий долг больше общей суммы к выплате,
+       остаток долга делится поровну между всеми машинами.
+    """
+    if not car_rows:
+        return {
+            "gross_available": 0,
+            "gross_debt": 0,
+            "net_available": 0,
+            "net_debt": 0,
+            "portfolio_withheld": 0,
+        }
+
+    gross_available = sum(
+        max(int(row.get("available_to_pay", 0) or 0), 0)
+        for row in car_rows
+    )
+    gross_debt = sum(
+        max(int(row.get("investor_debt_to_park", 0) or 0), 0)
+        for row in car_rows
+    )
+
+    debt_to_offset = min(gross_available, gross_debt)
+
+    # Сначала обнуляем отображаемый долг: он будет рассчитан заново
+    # только если после взаимозачёта действительно останется.
+    for row in car_rows:
+        row["original_available_to_pay"] = max(
+            int(row.get("available_to_pay", 0) or 0),
+            0,
+        )
+        row["original_investor_debt"] = max(
+            int(row.get("investor_debt_to_park", 0) or 0),
+            0,
+        )
+        row["portfolio_debt_withheld"] = 0
+        row["investor_debt_to_park"] = 0
+
+    # Равномерно удерживаем долг с машин, по которым есть выплата.
+    remaining = debt_to_offset
+    active_indexes = [
+        index
+        for index, row in enumerate(car_rows)
+        if row["original_available_to_pay"] > 0
+    ]
+
+    while remaining > 0 and active_indexes:
+        equal_part = max(
+            remaining // len(active_indexes),
+            1,
+        )
+        next_indexes = []
+        deducted_this_round = 0
+
+        for index in active_indexes:
+            row = car_rows[index]
+            current_available = max(
+                int(row.get("available_to_pay", 0) or 0),
+                0,
+            )
+
+            deduction = min(
+                equal_part,
+                current_available,
+                remaining - deducted_this_round,
+            )
+
+            row["available_to_pay"] = (
+                current_available - deduction
+            )
+            row["portfolio_debt_withheld"] += deduction
+            deducted_this_round += deduction
+
+            if row["available_to_pay"] > 0:
+                next_indexes.append(index)
+
+            if deducted_this_round >= remaining:
+                break
+
+        if deducted_this_round <= 0:
+            break
+
+        remaining -= deducted_this_round
+        active_indexes = next_indexes
+
+    net_available = max(gross_available - gross_debt, 0)
+    net_debt = max(gross_debt - gross_available, 0)
+
+    # Если выплаты не хватило, оставшийся долг распределяем поровну
+    # между всеми машинами инвестора.
+    if net_debt > 0:
+        count = len(car_rows)
+        base = net_debt // count
+        remainder = net_debt % count
+
+        for index, row in enumerate(car_rows):
+            row["available_to_pay"] = 0
+            row["investor_debt_to_park"] = (
+                base + (1 if index < remainder else 0)
+            )
+
+    for row in car_rows:
+        # Общее удержание включает старые удержания конкретной машины
+        # и новый взаимозачёт между машинами.
+        row["withheld"] = (
+            int(row.get("withheld", 0) or 0)
+            + int(row.get("portfolio_debt_withheld", 0) or 0)
+        )
+
+    return {
+        "gross_available": gross_available,
+        "gross_debt": gross_debt,
+        "net_available": net_available,
+        "net_debt": net_debt,
+        "portfolio_withheld": debt_to_offset,
+    }
+
+
 @bp.route("/api/investors-summary")
 def api_investors_summary():
     session = Session()
-    cleanup_legacy_investor_mess(session)
-    names = [r[0] for r in session.query(Car.investor_name).filter(Car.owner_type == "investor", Car.investor_name != "").distinct().all()]
-    investors = []
-    totals = dict(total_invested=0, total_payouts=0, income=0, expenses=0, profit=0, investor_share=0, owner_share=0, investor_debt_to_park=0, park_debt_to_investor=0, available_to_pay=0)
-    for name in names:
-        cars = session.query(Car).filter_by(owner_type="investor", investor_name=name).all()
-        total_payouts = session.query(func.coalesce(func.sum(InvestorPayout.amount), 0)).filter_by(investor_name=name).scalar()
-        row = dict(name=name, cars_count=len(cars), total_invested=0, total_payouts=total_payouts, income=0, expenses=0, profit=0, investor_share=0, owner_share=0, investor_debt_to_park=0, park_debt_to_investor=0, available_to_pay=0)
-        for car in cars:
-            row["total_invested"] += investor_total_invested_for_car(session, car)
-            income, expenses, investments, payouts, investor_invested, downtime_days = car_finance(session, car.code)
-            profit = income - expenses
-            bal = investor_balance_for_car(session, car)
-            # Для инвесторского расчета показываем прибыль, которая реально делится,
-            # то есть доход минус обычные расходы. Доп. расходы запуска уходят в долг.
-            split_profit = bal.get("normal_profit_for_split", profit)
-            share = bal["investor_share_total"]
-            row["income"] += income
-            row["expenses"] += expenses
-            row["profit"] += split_profit
-            row["investor_share"] += share
-            row["owner_share"] += bal.get("park_share_total", max(split_profit - share, 0))
-            row["investor_debt_to_park"] += bal["investor_debt_to_park"]
-            row["park_debt_to_investor"] += bal["park_debt_to_investor"]
-            row["available_to_pay"] += bal["available_to_pay"]
-        investors.append(row)
-        for k in totals:
-            totals[k] += row.get(k, 0)
-    session.close()
-    return jsonify({"investors_count": len(investors), "investors": investors, **totals})
+
+    try:
+        cleanup_legacy_investor_mess(session)
+
+        names = [
+            row[0]
+            for row in (
+                session.query(Car.investor_name)
+                .filter(
+                    Car.owner_type == "investor",
+                    Car.investor_name != "",
+                )
+                .distinct()
+                .all()
+            )
+        ]
+
+        investors = []
+
+        totals = {
+            "total_invested": 0,
+            "total_payouts": 0,
+            "income": 0,
+            "expenses": 0,
+            "profit": 0,
+            "investor_share": 0,
+            "owner_share": 0,
+            "investor_debt_to_park": 0,
+            "park_debt_to_investor": 0,
+            "available_to_pay": 0,
+            "portfolio_debt_offset": 0,
+        }
+
+        for name in names:
+            cars = (
+                session.query(Car)
+                .filter_by(
+                    owner_type="investor",
+                    investor_name=name,
+                )
+                .all()
+            )
+
+            car_rows = []
+
+            row = {
+                "name": name,
+                "cars_count": len(cars),
+                "total_invested": 0,
+                "total_payouts": (
+                    session.query(
+                        func.coalesce(
+                            func.sum(InvestorPayout.amount),
+                            0,
+                        )
+                    )
+                    .filter_by(investor_name=name)
+                    .scalar()
+                    or 0
+                ),
+                "income": 0,
+                "expenses": 0,
+                "profit": 0,
+                "investor_share": 0,
+                "owner_share": 0,
+                "investor_debt_to_park": 0,
+                "park_debt_to_investor": 0,
+                "available_to_pay": 0,
+                "portfolio_debt_offset": 0,
+            }
+
+            for car in cars:
+                row["total_invested"] += (
+                    investor_total_invested_for_car(session, car)
+                )
+
+                (
+                    income,
+                    expenses,
+                    investments,
+                    payouts,
+                    investor_invested,
+                    downtime_days,
+                ) = car_finance(session, car.code)
+
+                balance = investor_balance_for_car(session, car)
+
+                split_profit = balance.get(
+                    "normal_profit_for_split",
+                    income - expenses,
+                )
+                investor_share = (
+                    balance.get("investor_share_total", 0) or 0
+                )
+                available = (
+                    balance.get("available_to_pay", 0) or 0
+                )
+                debt = (
+                    balance.get("investor_debt_to_park", 0) or 0
+                )
+
+                car_rows.append({
+                    "available_to_pay": available,
+                    "investor_debt_to_park": debt,
+                    "withheld": max(
+                        investor_share
+                        + (balance.get("park_debt_to_investor", 0) or 0)
+                        - payouts
+                        - available,
+                        0,
+                    ),
+                })
+
+                row["income"] += income
+                row["expenses"] += expenses
+                row["profit"] += split_profit
+                row["investor_share"] += investor_share
+                row["owner_share"] += balance.get(
+                    "park_share_total",
+                    max(split_profit - investor_share, 0),
+                )
+                row["park_debt_to_investor"] += (
+                    balance.get("park_debt_to_investor", 0) or 0
+                )
+
+            portfolio = apply_investor_portfolio_netting(car_rows)
+
+            row["available_to_pay"] = portfolio["net_available"]
+            row["investor_debt_to_park"] = portfolio["net_debt"]
+            row["portfolio_debt_offset"] = (
+                portfolio["portfolio_withheld"]
+            )
+
+            investors.append(row)
+
+            for key in totals:
+                totals[key] += row.get(key, 0)
+
+        return jsonify({
+            "investors_count": len(investors),
+            "investors": investors,
+            **totals,
+        })
+
+    finally:
+        session.close()
 
 
 @bp.route("/api/investors")
@@ -2555,6 +2799,24 @@ def api_investors():
                     "available_to_pay": available_to_pay,
                     "investor_debt_to_park": investor_debt,
                 })
+
+            portfolio = apply_investor_portfolio_netting(details)
+
+            totals["available_to_pay"] = portfolio["net_available"]
+            totals["investor_debt_to_park"] = portfolio["net_debt"]
+            totals["total_withheld"] = sum(
+                int(row.get("withheld", 0) or 0)
+                for row in details
+            )
+            totals["portfolio_debt_offset"] = (
+                portfolio["portfolio_withheld"]
+            )
+            totals["gross_available_before_offset"] = (
+                portfolio["gross_available"]
+            )
+            totals["gross_debt_before_offset"] = (
+                portfolio["gross_debt"]
+            )
 
             result.append({
                 "name": name,
