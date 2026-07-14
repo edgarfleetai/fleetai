@@ -1341,47 +1341,201 @@ def api_add_car():
     return jsonify({"ok": True, "message": f"Машина {code} добавлена"})
 
 
+
+
+def current_downtime_for_car(session, car_code):
+    """
+    Возвращает текущий активный простой машины.
+
+    Источником истины является последняя строка Downtime с active=1.
+    """
+    row = (
+        session.query(Downtime)
+        .filter(
+            func.trim(Downtime.car_code) == normalize_code(car_code),
+            Downtime.active == 1,
+        )
+        .order_by(Downtime.id.desc())
+        .first()
+    )
+
+    if not row:
+        return None
+
+    start_date = row.start_date or datetime.now()
+    days = max(
+        (datetime.now().date() - start_date.date()).days,
+        1,
+    )
+
+    return {
+        "id": row.id,
+        "start_date": start_date.strftime("%d.%m.%Y"),
+        "days": days,
+        "reason": row.reason or "",
+        "comment": row.comment or "",
+    }
+
+
+
 @bp.route("/api/summary")
 def api_summary():
     session = Session()
-    cleanup_legacy_investor_mess(session)
-    income = session.query(func.coalesce(func.sum(Income.amount), 0)).scalar()
-    expenses = session.query(func.coalesce(func.sum(Expense.amount), 0)).scalar()
-    investments = session.query(func.coalesce(func.sum(CarInvestment.amount), 0)).scalar()
-    downtime_days = session.query(func.coalesce(func.sum(Downtime.days), 0)).scalar()
-    result = {
-        "cars": session.query(Car).count(),
-        "own_cars": session.query(Car).filter(Car.owner_type != "investor").count(),
-        "investor_cars": session.query(Car).filter_by(owner_type="investor").count(),
-        "income": income, "expenses": expenses, "investments": investments,
-        "profit": income - expenses, "downtime_days": downtime_days,
-    }
-    session.close()
-    return jsonify(result)
+
+    try:
+        cleanup_legacy_investor_mess(session)
+
+        income = (
+            session.query(func.coalesce(func.sum(Income.amount), 0))
+            .scalar()
+            or 0
+        )
+        expenses = (
+            session.query(func.coalesce(func.sum(Expense.amount), 0))
+            .scalar()
+            or 0
+        )
+        investments = (
+            session.query(
+                func.coalesce(func.sum(CarInvestment.amount), 0)
+            )
+            .scalar()
+            or 0
+        )
+
+        cars = session.query(Car).order_by(Car.code).all()
+        downtime_cars = []
+        working_cars = []
+
+        for car in cars:
+            active_downtime = current_downtime_for_car(
+                session,
+                car.code,
+            )
+
+            car_status = {
+                "code": car.code,
+                "brand": car.brand or "",
+                "model": car.model or "",
+                "plate": car.plate or "",
+            }
+
+            if active_downtime:
+                car_status.update(active_downtime)
+                downtime_cars.append(car_status)
+            else:
+                working_cars.append(car_status)
+
+        total_downtime_days = sum(
+            item["days"] for item in downtime_cars
+        )
+
+        return jsonify({
+            "cars": len(cars),
+            "own_cars": sum(
+                1 for car in cars
+                if car.owner_type != "investor"
+            ),
+            "investor_cars": sum(
+                1 for car in cars
+                if car.owner_type == "investor"
+            ),
+            "working_cars": len(working_cars),
+            "downtime_cars": len(downtime_cars),
+            "working_list": working_cars,
+            "downtime_list": downtime_cars,
+            "income": income,
+            "expenses": expenses,
+            "investments": investments,
+            "profit": income - expenses,
+            "downtime_days": total_downtime_days,
+        })
+
+    finally:
+        session.close()
+
 
 
 @bp.route("/api/cars")
 def api_cars():
     session = Session()
-    cleanup_legacy_investor_mess(session)
-    rows = []
-    for car in session.query(Car).order_by(Car.code).all():
-        income, expenses, investments, payouts, investor_invested, downtime_days = car_finance(session, car.code)
-        rows.append({
-            "code": car.code, "brand": car.brand, "model": car.model, "plate": car.plate,
-            "mileage": car.current_mileage, "income": income, "expenses": expenses,
-            "profit": income - expenses, "purchase_price": car.purchase_price or 0,
-            "full_cost": (car.purchase_price or 0) + investments,
-            "owner_type": car.owner_type or "own", "investor_name": car.investor_name or "",
-            "investor_percent": car.investor_percent or 0, "downtime_days": downtime_days,
-            "settlement_day": car.settlement_day or 15,"driver": car.driver or "",
-            "weekly_payment": car.weekly_payment or 0,
-            "payment_weekday": car.payment_weekday or 0,
-            "next_payment_date": car.next_payment_date or "",
-            "payment_notifications": car.payment_notifications or 0,
-        })
-    session.close()
-    return jsonify(rows)
+
+    try:
+        cleanup_legacy_investor_mess(session)
+        rows = []
+
+        for car in session.query(Car).order_by(Car.code).all():
+            (
+                income,
+                expenses,
+                investments,
+                payouts,
+                investor_invested,
+                downtime_days,
+            ) = car_finance(session, car.code)
+
+            active_downtime = current_downtime_for_car(
+                session,
+                car.code,
+            )
+
+            rows.append({
+                "code": car.code,
+                "brand": car.brand,
+                "model": car.model,
+                "plate": car.plate,
+                "mileage": car.current_mileage,
+                "income": income,
+                "expenses": expenses,
+                "profit": income - expenses,
+                "purchase_price": car.purchase_price or 0,
+                "full_cost": (
+                    (car.purchase_price or 0) + investments
+                ),
+                "owner_type": car.owner_type or "own",
+                "investor_name": car.investor_name or "",
+                "investor_percent": car.investor_percent or 0,
+                "downtime_days": downtime_days,
+                "is_in_downtime": bool(active_downtime),
+                "current_status": (
+                    "Простой"
+                    if active_downtime
+                    else "Работает"
+                ),
+                "downtime_start": (
+                    active_downtime["start_date"]
+                    if active_downtime
+                    else ""
+                ),
+                "current_downtime_days": (
+                    active_downtime["days"]
+                    if active_downtime
+                    else 0
+                ),
+                "downtime_reason": (
+                    active_downtime["reason"]
+                    if active_downtime
+                    else ""
+                ),
+                "downtime_comment": (
+                    active_downtime["comment"]
+                    if active_downtime
+                    else ""
+                ),
+                "settlement_day": car.settlement_day or 15,
+                "driver": car.driver or "",
+                "weekly_payment": car.weekly_payment or 0,
+                "payment_weekday": car.payment_weekday or 0,
+                "next_payment_date": car.next_payment_date or "",
+                "payment_notifications": (
+                    car.payment_notifications or 0
+                ),
+            })
+
+        return jsonify(rows)
+
+    finally:
+        session.close()
 
 
 @bp.route("/api/car/<code>")
@@ -1393,6 +1547,7 @@ def api_car(code):
         return jsonify({"ok": False, "message": "Машина не найдена"})
 
     income, expenses, investments, payouts, investor_invested, downtime_days = car_finance(session, car.code)
+    active_downtime = current_downtime_for_car(session, car.code)
     ops = [{
         "id": op.id, "date": op.date.strftime("%d.%m.%Y %H:%M"),
         "type": op.type, "category": op.category, "description": op.description,
@@ -1406,7 +1561,14 @@ def api_car(code):
         "expenses": expenses, "investments": investments, "profit": income - expenses,
         "full_cost": (car.purchase_price or 0) + investments,
         "owner_type": car.owner_type or "own", "investor_name": car.investor_name or "",
-        "investor_percent": car.investor_percent or 0, "downtime_days": downtime_days,
+        "investor_percent": car.investor_percent or 0,
+        "downtime_days": downtime_days,
+        "is_in_downtime": bool(active_downtime),
+        "current_status": "Простой" if active_downtime else "Работает",
+        "downtime_start": active_downtime["start_date"] if active_downtime else "",
+        "current_downtime_days": active_downtime["days"] if active_downtime else 0,
+        "downtime_reason": active_downtime["reason"] if active_downtime else "",
+        "downtime_comment": active_downtime["comment"] if active_downtime else "",
     }, "operations": ops})
 
 
