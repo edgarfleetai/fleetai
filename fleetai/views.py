@@ -660,6 +660,7 @@ async function loadCars(){
       <th>Код</th>
       <th>Авто</th>
       <th>Госномер</th>
+      <th>Пробег</th>
       <th>Инвестор</th>
       <th>%</th>
       <th>Доход</th>
@@ -688,6 +689,7 @@ async function loadCars(){
         <td>${x.code}</td>
         <td>${x.brand||''} ${x.model||''}</td>
         <td>${x.plate||''}</td>
+        <td>${x.mileage?Number(x.mileage).toLocaleString('ru-RU')+' км':'—'}</td>
         <td>${x.investor_name||''}</td>
         <td>${x.investor_percent||0}</td>
         <td>${rub(x.income)}</td>
@@ -706,7 +708,35 @@ async function loadCars(){
 }
 
 function groupByDate(ops){let g={};ops.forEach(o=>{let d=(o.date||'').split(' ')[0]||'Без даты';if(!g[d])g[d]=[];g[d].push(o)});return g}
-function renderCalendar(ops){let g=groupByDate(ops);return `<div class="calendar">${Object.keys(g).map(day=>`<div class="daycard"><h4>${day}</h4>${g[day].map(o=>`<div class="event ${o.type}"><b>${o.type}</b><div>${o.description||''}</div><div><b>${rub(o.amount)}</b></div><div class="raw">${o.raw||''}</div><button class="danger small" onclick="deleteOperation(${o.id})">Удалить запись</button></div>`).join('')}</div>`).join('')}</div>`}
+function renderCalendar(ops){
+  let g=groupByDate(ops);
+  return `<div class="calendar">${
+    Object.keys(g).map(day=>`
+      <div class="daycard">
+        <h4>${day}</h4>
+        ${g[day].map(o=>`
+          <div class="event ${o.type}">
+            <b>${o.type}</b>
+            <div>${o.description||''}</div>
+            <div><b>${rub(o.amount)}</b></div>
+            ${o.mileage?`
+              <div class="raw">
+                Пробег: ${Number(o.mileage).toLocaleString('ru-RU')} км
+              </div>
+            `:''}
+            <div class="raw">${o.raw||''}</div>
+            <button
+              class="danger small"
+              onclick="deleteOperation(${o.id})"
+            >
+              Удалить запись
+            </button>
+          </div>
+        `).join('')}
+      </div>
+    `).join('')
+  }</div>`;
+}
 
 async function openCar(code){
   let d=await api('/api/car/'+code);
@@ -738,6 +768,10 @@ async function openCar(code){
     ${statusBlock}
     <div class="card">
       <h2>${c.code} ${c.brand||''} ${c.model||''}</h2>
+      <p>
+        <b>Текущий пробег:</b>
+        ${c.mileage?Number(c.mileage).toLocaleString('ru-RU')+' км':'не указан'}
+      </p>
       <p>
         <b>Доход:</b> ${rub(c.income)}
         | <b>Расход:</b> ${rub(c.expenses)}
@@ -850,7 +884,48 @@ async function reopenPeriod(code){
     await openPeriod(code);
   }
 }
-async function loadOps(){let o=await api('/api/operations');ops.innerHTML='<tr><th>ID</th><th>Дата</th><th>Машина</th><th>Тип</th><th>Описание</th><th>Сумма</th><th>Сообщение</th><th>Удалить</th></tr>'+o.map(x=>`<tr><td>${x.id}</td><td>${x.date}</td><td>${x.car_code}</td><td>${x.type}</td><td>${x.description||''}</td><td>${rub(x.amount)}</td><td>${x.raw||''}</td><td><button class="danger small" onclick="deleteOperation(${x.id})">Удалить</button></td></tr>`).join('')}
+async function loadOps(){
+  let o=await api('/api/operations');
+
+  ops.innerHTML=`
+    <tr>
+      <th>ID</th>
+      <th>Дата</th>
+      <th>Машина</th>
+      <th>Тип</th>
+      <th>Описание</th>
+      <th>Сумма</th>
+      <th>Пробег</th>
+      <th>Сообщение</th>
+      <th>Удалить</th>
+    </tr>
+    ${o.map(x=>`
+      <tr>
+        <td>${x.id}</td>
+        <td>${x.date}</td>
+        <td>${x.car_code}</td>
+        <td>${x.type}</td>
+        <td>${x.description||''}</td>
+        <td>${rub(x.amount)}</td>
+        <td>
+          ${x.mileage
+            ? Number(x.mileage).toLocaleString('ru-RU')+' км'
+            : '—'
+          }
+        </td>
+        <td>${x.raw||''}</td>
+        <td>
+          <button
+            class="danger small"
+            onclick="deleteOperation(${x.id})"
+          >
+            Удалить
+          </button>
+        </td>
+      </tr>
+    `).join('')}
+  `;
+}
 async function add(){let m=msg.value;try{let r=await api('/api/add',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:m})});res.innerText=r.message||JSON.stringify(r);if(r.ok)msg.value='';load()}catch(e){res.innerText='Ошибка: '+e}}
 
 
