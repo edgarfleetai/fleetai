@@ -1301,7 +1301,11 @@ def enforce_repair_total_from_raw(data):
         cleaned = re.sub(r"[^\d]", "", raw_number or "")
         return int(cleaned) if cleaned else 0
 
-    number_pattern = r"(\d{1,3}(?:[ \u00a0]\d{3})*|\d{1,9})"
+    # Сначала вариант с разделителями тысяч, затем обычное число.
+    # Важно: старый порядок мог прочитать 1000 как 100.
+    number_pattern = (
+        r"(\d{1,3}(?:[ \u00a0]\d{3})+|\d{1,9})(?!\d)"
+    )
 
     # Цена деталей: поддерживаем несколько упоминаний цены.
     part_price_matches = re.findall(
