@@ -988,6 +988,7 @@ async function loadOps(){
 let warehouseAutocompleteItems=[];
 let warehouseSuggestionIndex=-1;
 let warehouseAutocompleteTimer=null;
+let selectedWarehouseItemId=null;
 
 function normalizeWarehouseSearch(value){
   let text=String(value||'')
@@ -1153,17 +1154,30 @@ function selectWarehouseSuggestion(itemId){
     return;
   }
 
+  selectedWarehouseItemId=Number(item.id);
+
   const input=document.getElementById('msg');
   let value=input.value.trim();
 
+  const exactPart=item.part_name.trim();
   const brandText=item.brand
-    ? ` фирма ${item.brand}`
+    ? ` фирма ${item.brand.trim()}`
     : '';
 
-  const normalizedValue=normalizeWarehouseSearch(value);
-  const normalizedBrand=normalizeWarehouseSearch(item.brand);
+  // Не пытаемся угадать сокращённое название.
+  // Добавляем точное складское название отдельной меткой.
+  if(!normalizeWarehouseSearch(value).includes(
+    normalizeWarehouseSearch(exactPart)
+  )){
+    value+=` деталь ${exactPart}`;
+  }
 
-  if(item.brand && !normalizedValue.includes(normalizedBrand)){
+  if(
+    item.brand &&
+    !normalizeWarehouseSearch(value).includes(
+      normalizeWarehouseSearch(item.brand)
+    )
+  ){
     value+=brandText;
   }
 
@@ -1172,10 +1186,13 @@ function selectWarehouseSuggestion(itemId){
   }
 
   input.value=value.replace(/\s+/g,' ').trim()+' ';
-  document.getElementById('warehouseSuggestions').classList.remove('open');
+
+  document
+    .getElementById('warehouseSuggestions')
+    .classList.remove('open');
+
   input.focus();
 }
-
 function moveWarehouseSuggestion(direction){
   const box=document.getElementById('warehouseSuggestions');
   const rows=[...box.querySelectorAll('.warehouse-suggestion')];
@@ -1227,6 +1244,10 @@ function setupWarehouseAutocomplete(){
   const input=document.getElementById('msg');
 
   input.addEventListener('input',()=>{
+    if(!input.value.trim()){
+      selectedWarehouseItemId=null;
+    }
+
     clearTimeout(warehouseAutocompleteTimer);
     warehouseAutocompleteTimer=setTimeout(
       renderWarehouseSuggestions,
@@ -1265,7 +1286,32 @@ function setupWarehouseAutocomplete(){
   });
 }
 
-async function add(){let m=msg.value;try{let r=await api('/api/add',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:m})});res.innerText=r.message||JSON.stringify(r);if(r.ok){msg.value='';await preloadWarehouseAutocomplete();}load()}catch(e){res.innerText='Ошибка: '+e}}
+async function add(){
+  let m=msg.value;
+
+  try{
+    let r=await api('/api/add',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({
+        message:m,
+        warehouse_item_id:selectedWarehouseItemId
+      })
+    });
+
+    res.innerText=r.message||JSON.stringify(r);
+
+    if(r.ok){
+      msg.value='';
+      selectedWarehouseItemId=null;
+      await preloadWarehouseAutocomplete();
+    }
+
+    load();
+  }catch(e){
+    res.innerText='Ошибка: '+e;
+  }
+}
 
 
 function toggleWarehousePanel(){
