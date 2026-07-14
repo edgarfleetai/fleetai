@@ -234,34 +234,65 @@ def build_investor_report_pdf(
             f"{datetime.now().strftime('%d.%m.%Y %H:%M')}",
             normal_style,
         ),
-        Spacer(1, 8 * mm),
+        Spacer(1, 7 * mm),
     ]
 
-    total_income = 0
-    total_shared = 0
-    total_extra = 0
-    total_park_only = 0
-    total_investor_paid = 0
-    total_available = 0
-    total_owner = 0
-    total_debt = 0
-    total_downtime_days = 0
+    total = {
+        "income": 0,
+        "shared": 0,
+        "profit_for_split": 0,
+        "accrued": 0,
+        "previous_debt": 0,
+        "extra": 0,
+        "investor_paid": 0,
+        "debt_repaid": 0,
+        "payouts": 0,
+        "available": 0,
+        "owner": 0,
+        "debt": 0,
+        "park_only": 0,
+        "downtime": 0,
+        "closed": 0,
+        "open": 0,
+    }
 
     for item in car_rows:
-        total_income += item["income"]
-        total_shared += item["shared_expenses"]
-        total_extra += item["investor_only_expenses"]
-        total_park_only += item["park_only_expenses"]
-        total_investor_paid += item["investor_extra_paid"]
-        total_available += item["available_to_pay"]
-        total_owner += item["owner_amount"]
-        total_debt += item["investor_debt_to_park"]
-        total_downtime_days += item["downtime_days"]
+        total["income"] += item["income"]
+        total["shared"] += item["shared_expenses"]
+        total["profit_for_split"] += item["profit_for_split"]
+        total["accrued"] += item["accrued_to_investor"]
+        total["previous_debt"] += item["previous_investor_debt"]
+        total["extra"] += item["investor_only_expenses"]
+        total["investor_paid"] += item["investor_paid_in_period"]
+        total["debt_repaid"] += item["debt_repaid_by_profit"]
+        total["payouts"] += item["payouts_in_period"]
+        total["available"] += item["available_to_pay"]
+        total["owner"] += item["owner_amount"]
+        total["debt"] += item["investor_debt_to_park"]
+        total["park_only"] += item["park_only_expenses"]
+        total["downtime"] += item["downtime_days"]
+
+        if item["period_closed"]:
+            total["closed"] += 1
+        else:
+            total["open"] += 1
+
+        status_text = (
+            "Период закрыт"
+            if item["period_closed"]
+            else "Период ещё не закрыт — показан текущий расчёт"
+        )
 
         story.append(
             Paragraph(
                 f"Машина {item['code']} — {item['car_name']}",
                 heading_style,
+            )
+        )
+        story.append(
+            Paragraph(
+                f"<b>Статус:</b> {status_text}",
+                normal_style,
             )
         )
 
@@ -272,13 +303,17 @@ def build_investor_report_pdf(
             ],
             [Paragraph("Доход", normal_style), Paragraph(money(item["income"]), normal_style)],
             [Paragraph("Обычные расходы", normal_style), Paragraph(money(item["shared_expenses"]), normal_style)],
+            [Paragraph("Прибыль до разделения", normal_style), Paragraph(money(item["profit_for_split"]), normal_style)],
+            [Paragraph(f"Начислено инвестору ({item['percent']}%)", normal_style), Paragraph(money(item["accrued_to_investor"]), normal_style)],
+            [Paragraph("Долг с прошлого периода", normal_style), Paragraph(money(item["previous_investor_debt"]), normal_style)],
             [Paragraph("Допрасходы инвестора", normal_style), Paragraph(money(item["investor_only_expenses"]), normal_style)],
+            [Paragraph("Инвестор внёс в этом периоде", normal_style), Paragraph(money(item["investor_paid_in_period"]), normal_style)],
+            [Paragraph("Погашено долга из прибыли", normal_style), Paragraph(money(item["debt_repaid_by_profit"]), normal_style)],
+            [Paragraph("Выплачено инвестору", normal_style), Paragraph(money(item["payouts_in_period"]), normal_style)],
+            [Paragraph("Осталось выплатить", normal_style), Paragraph(money(item["available_to_pay"]), normal_style)],
+            [Paragraph("Остаток долга инвестора", normal_style), Paragraph(money(item["investor_debt_to_park"]), normal_style)],
             [Paragraph("Расходы только парка", normal_style), Paragraph(money(item["park_only_expenses"]), normal_style)],
-            [Paragraph("Инвестор внёс", normal_style), Paragraph(money(item["investor_extra_paid"]), normal_style)],
-            [Paragraph(f"Доля инвестора ({item['percent']}%)", normal_style), Paragraph(money(item["investor_share_total"]), normal_style)],
-            [Paragraph("К выплате инвестору", normal_style), Paragraph(money(item["available_to_pay"]), normal_style)],
             [Paragraph("Доля парка", normal_style), Paragraph(money(item["owner_amount"]), normal_style)],
-            [Paragraph("Долг инвестора", normal_style), Paragraph(money(item["investor_debt_to_park"]), normal_style)],
             [Paragraph("Дней простоя", normal_style), Paragraph(str(item["downtime_days"]), normal_style)],
         ]
 
@@ -303,15 +338,15 @@ def build_investor_report_pdf(
         story.append(Paragraph("Куда ушли деньги", subheading_style))
 
         if item["expense_rows"]:
-            expense_table_data = [[
+            expense_data = [[
                 Paragraph("<b>Дата</b>", small_style),
                 Paragraph("<b>Тип</b>", small_style),
-                Paragraph("<b>Описание</b>", small_style),
+                Paragraph("<b>Подробности / комментарий</b>", small_style),
                 Paragraph("<b>Сумма</b>", small_style),
             ]]
 
             for expense in item["expense_rows"]:
-                expense_table_data.append([
+                expense_data.append([
                     Paragraph(expense["date"], small_style),
                     Paragraph(expense["type_label"], small_style),
                     Paragraph(expense["description"], small_style),
@@ -319,8 +354,8 @@ def build_investor_report_pdf(
                 ])
 
             expense_table = Table(
-                expense_table_data,
-                colWidths=[25 * mm, 35 * mm, 85 * mm, 25 * mm],
+                expense_data,
+                colWidths=[24 * mm, 33 * mm, 88 * mm, 25 * mm],
                 repeatRows=1,
             )
             expense_table.setStyle(
@@ -346,15 +381,15 @@ def build_investor_report_pdf(
         story.append(Paragraph("Простой", subheading_style))
 
         if item["downtime_rows"]:
-            downtime_table_data = [[
+            downtime_data = [[
                 Paragraph("<b>Начало</b>", small_style),
                 Paragraph("<b>Окончание</b>", small_style),
                 Paragraph("<b>Дней</b>", small_style),
-                Paragraph("<b>Причина</b>", small_style),
+                Paragraph("<b>Причина / комментарий</b>", small_style),
             ]]
 
             for downtime in item["downtime_rows"]:
-                downtime_table_data.append([
+                downtime_data.append([
                     Paragraph(downtime["start"], small_style),
                     Paragraph(downtime["end"], small_style),
                     Paragraph(str(downtime["days"]), small_style),
@@ -362,7 +397,7 @@ def build_investor_report_pdf(
                 ])
 
             downtime_table = Table(
-                downtime_table_data,
+                downtime_data,
                 colWidths=[30 * mm, 38 * mm, 18 * mm, 84 * mm],
                 repeatRows=1,
             )
@@ -391,21 +426,26 @@ def build_investor_report_pdf(
     story.append(Paragraph("Общий итог по инвестору", heading_style))
 
     totals_data = [
-        [Paragraph("<b>Всего доход</b>", normal_style), Paragraph(money(total_income), normal_style)],
-        [Paragraph("<b>Обычные расходы</b>", normal_style), Paragraph(money(total_shared), normal_style)],
-        [Paragraph("<b>Допрасходы инвестора</b>", normal_style), Paragraph(money(total_extra), normal_style)],
-        [Paragraph("<b>Расходы только парка</b>", normal_style), Paragraph(money(total_park_only), normal_style)],
-        [Paragraph("<b>Инвестор внёс</b>", normal_style), Paragraph(money(total_investor_paid), normal_style)],
-        [Paragraph("<b>К выплате инвестору</b>", normal_style), Paragraph(money(total_available), normal_style)],
-        [Paragraph("<b>Доля парка</b>", normal_style), Paragraph(money(total_owner), normal_style)],
-        [Paragraph("<b>Долг инвестора</b>", normal_style), Paragraph(money(total_debt), normal_style)],
-        [Paragraph("<b>Всего дней простоя</b>", normal_style), Paragraph(str(total_downtime_days), normal_style)],
+        [Paragraph("<b>Машин в отчёте</b>", normal_style), Paragraph(str(len(car_rows)), normal_style)],
+        [Paragraph("<b>Закрытых периодов</b>", normal_style), Paragraph(str(total["closed"]), normal_style)],
+        [Paragraph("<b>Незакрытых периодов</b>", normal_style), Paragraph(str(total["open"]), normal_style)],
+        [Paragraph("<b>Всего доход</b>", normal_style), Paragraph(money(total["income"]), normal_style)],
+        [Paragraph("<b>Обычные расходы</b>", normal_style), Paragraph(money(total["shared"]), normal_style)],
+        [Paragraph("<b>Прибыль до разделения</b>", normal_style), Paragraph(money(total["profit_for_split"]), normal_style)],
+        [Paragraph("<b>Начислено инвестору</b>", normal_style), Paragraph(money(total["accrued"]), normal_style)],
+        [Paragraph("<b>Долг с прошлых периодов</b>", normal_style), Paragraph(money(total["previous_debt"]), normal_style)],
+        [Paragraph("<b>Допрасходы инвестора</b>", normal_style), Paragraph(money(total["extra"]), normal_style)],
+        [Paragraph("<b>Инвестор внёс</b>", normal_style), Paragraph(money(total["investor_paid"]), normal_style)],
+        [Paragraph("<b>Погашено долга из прибыли</b>", normal_style), Paragraph(money(total["debt_repaid"]), normal_style)],
+        [Paragraph("<b>Выплачено инвестору</b>", normal_style), Paragraph(money(total["payouts"]), normal_style)],
+        [Paragraph("<b>Осталось выплатить</b>", normal_style), Paragraph(money(total["available"]), normal_style)],
+        [Paragraph("<b>Остаток долга инвестора</b>", normal_style), Paragraph(money(total["debt"]), normal_style)],
+        [Paragraph("<b>Расходы только парка</b>", normal_style), Paragraph(money(total["park_only"]), normal_style)],
+        [Paragraph("<b>Доля парка</b>", normal_style), Paragraph(money(total["owner"]), normal_style)],
+        [Paragraph("<b>Всего дней простоя</b>", normal_style), Paragraph(str(total["downtime"]), normal_style)],
     ]
 
-    totals_table = Table(
-        totals_data,
-        colWidths=[115 * mm, 55 * mm],
-    )
+    totals_table = Table(totals_data, colWidths=[115 * mm, 55 * mm])
     totals_table.setStyle(
         TableStyle([
             ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#F3F4F6")),
@@ -2341,17 +2381,14 @@ def test_investor_report(investor_name):
             .first()
         )
 
-        if not latest_period:
-            return jsonify({
-                "ok": False,
-                "message": (
-                    "У этого инвестора пока нет "
-                    "закрытых расчётных периодов"
-                ),
-            }), 404
+        if latest_period:
+            period_start = latest_period.start_date
+            period_end = latest_period.end_date
+        else:
+            # Если ещё ничего не закрывали, формируем текущий период
+            # по расчётному дню первой машины.
+            period_start, period_end = period_bounds_for_car(cars[0])
 
-        period_start = latest_period.start_date
-        period_end = latest_period.end_date
         report_rows = []
 
         for car in cars:
@@ -2366,20 +2403,16 @@ def test_investor_report(investor_name):
                 .first()
             )
 
-            if not period:
-                continue
-
             calc = calculate_period_for_car(
                 session,
                 car,
                 period_start,
                 period_end,
             )
-            balance = investor_balance_for_car(session, car)
 
             expense_rows = []
 
-            for expense in (
+            expenses = (
                 session.query(Expense)
                 .filter(
                     func.trim(Expense.car_code)
@@ -2389,13 +2422,21 @@ def test_investor_report(investor_name):
                 )
                 .order_by(Expense.date.asc(), Expense.id.asc())
                 .all()
-            ):
+            )
+
+            for expense in expenses:
                 operation = None
+                part = None
 
                 if expense.operation_id:
                     operation = (
                         session.query(Operation)
                         .filter_by(id=expense.operation_id)
+                        .first()
+                    )
+                    part = (
+                        session.query(Part)
+                        .filter_by(operation_id=expense.operation_id)
                         .first()
                     )
 
@@ -2426,12 +2467,38 @@ def test_investor_report(investor_name):
                 else:
                     type_label = "Обычный расход"
 
-                description = (
-                    (operation.description if operation else "")
-                    or expense.category
-                    or (operation.raw_message if operation else "")
-                    or "Расход"
-                )
+                details = []
+
+                if part:
+                    part_text = part.part_name or "Деталь"
+                    if part.brand:
+                        part_text += f", фирма {part.brand}"
+                    if part.position:
+                        part_text += f", {part.position}"
+                    if part.price:
+                        part_text += f", деталь {money(part.price)}"
+                    if part.labor:
+                        part_text += f", работа {money(part.labor)}"
+                    if part.install_mileage:
+                        part_text += (
+                            f", пробег "
+                            f"{int(part.install_mileage):,} км"
+                        ).replace(",", " ")
+
+                    details.append(part_text)
+
+                if operation and operation.description:
+                    description = operation.description.strip()
+                    if description and description not in details:
+                        details.append(description)
+
+                if operation and operation.raw_message:
+                    details.append(
+                        f"Комментарий: {operation.raw_message.strip()}"
+                    )
+
+                if not details:
+                    details.append(expense.category or "Расход")
 
                 expense_rows.append({
                     "date": (
@@ -2440,7 +2507,7 @@ def test_investor_report(investor_name):
                         else ""
                     ),
                     "type_label": type_label,
-                    "description": description,
+                    "description": "<br/>".join(details),
                     "amount": expense.amount or 0,
                 })
 
@@ -2448,7 +2515,10 @@ def test_investor_report(investor_name):
             downtime_days = 0
 
             for downtime in session.query(Downtime).all():
-                if normalize_code(downtime.car_code) != normalize_code(car.code):
+                if (
+                    normalize_code(downtime.car_code)
+                    != normalize_code(car.code)
+                ):
                     continue
 
                 downtime_start = downtime.start_date or period_start
@@ -2470,21 +2540,29 @@ def test_investor_report(investor_name):
                 )
                 downtime_days += days
 
-                reason = (
-                    downtime.reason
-                    or downtime.comment
-                    or "Причина не указана"
-                )
+                reason_parts = []
+                if downtime.reason:
+                    reason_parts.append(downtime.reason)
+                if (
+                    downtime.comment
+                    and downtime.comment not in reason_parts
+                ):
+                    reason_parts.append(
+                        f"Комментарий: {downtime.comment}"
+                    )
 
                 downtime_rows.append({
                     "start": overlap_start.strftime("%d.%m.%Y"),
                     "end": (
                         "по настоящее время"
-                        if downtime.active and downtime_end >= datetime.now()
+                        if downtime.active
                         else overlap_end.strftime("%d.%m.%Y")
                     ),
                     "days": days,
-                    "reason": reason,
+                    "reason": (
+                        "<br/>".join(reason_parts)
+                        or "Причина не указана"
+                    ),
                 })
 
             report_rows.append({
@@ -2493,39 +2571,49 @@ def test_investor_report(investor_name):
                     f"{car.brand or ''} {car.model or ''}"
                 ).strip(),
                 "percent": car.investor_percent or 0,
-                "income": period.income or calc.get("income", 0) or 0,
-                "shared_expenses": calc.get("shared_expenses", 0) or 0,
+                "period_closed": period is not None,
+
+                "income": calc.get("income", 0) or 0,
+                "shared_expenses": (
+                    calc.get("shared_expenses", 0) or 0
+                ),
+                "profit_for_split": (
+                    calc.get("profit_for_split", 0) or 0
+                ),
+                "accrued_to_investor": (
+                    calc.get("accrued_to_investor", 0) or 0
+                ),
+                "previous_investor_debt": (
+                    calc.get("previous_investor_debt", 0) or 0
+                ),
                 "investor_only_expenses": (
                     calc.get("investor_only_expenses", 0) or 0
+                ),
+                "investor_paid_in_period": (
+                    calc.get("investor_paid_in_period", 0) or 0
+                ),
+                "debt_repaid_by_profit": (
+                    calc.get("debt_repaid_by_profit", 0) or 0
+                ),
+                "payouts_in_period": (
+                    calc.get("payouts_in_period", 0) or 0
+                ),
+                "available_to_pay": (
+                    calc.get("available_to_pay", 0) or 0
+                ),
+                "investor_debt_to_park": (
+                    calc.get("investor_debt_to_park", 0) or 0
                 ),
                 "park_only_expenses": (
                     calc.get("park_only_expenses", 0) or 0
                 ),
-                "investor_extra_paid": (
-                    balance.get("investor_extra_paid", 0) or 0
-                ),
-                "investor_share_total": (
-                    balance.get("investor_share_total", 0) or 0
-                ),
-                "available_to_pay": max(period.investor_amount or 0, 0),
-                "owner_amount": period.owner_amount or 0,
-                "investor_debt_to_park": max(
-                    -(period.investor_amount or 0),
-                    0,
+                "owner_amount": (
+                    calc.get("owner_amount", 0) or 0
                 ),
                 "expense_rows": expense_rows,
                 "downtime_rows": downtime_rows,
                 "downtime_days": downtime_days,
             })
-
-        if not report_rows:
-            return jsonify({
-                "ok": False,
-                "message": (
-                    "За последний закрытый период "
-                    "не найдено машин"
-                ),
-            }), 404
 
         pdf_bytes = build_investor_report_pdf(
             investor_name=investor_name,
@@ -2544,11 +2632,12 @@ def test_investor_report(investor_name):
             pdf_bytes,
             filename,
             caption=(
-                "📄 <b>Тестовый отчёт инвестора</b>\n"
+                "📄 <b>Отчёт инвестора</b>\n"
                 f"Инвестор: {investor_name}\n"
                 f"Период: "
                 f"{period_start.strftime('%d.%m.%Y')} — "
-                f"{period_end.strftime('%d.%m.%Y')}"
+                f"{period_end.strftime('%d.%m.%Y')}\n"
+                f"Машин в отчёте: {len(report_rows)}"
             ),
         )
 
@@ -2565,12 +2654,20 @@ def test_investor_report(investor_name):
             "ok": True,
             "message": (
                 "Подробный отчёт сформирован "
-                "и отправлен в твой Telegram"
+                "и отправлен в Telegram"
             ),
             "investor": investor_name,
             "period_start": period_start.isoformat(),
             "period_end": period_end.isoformat(),
             "cars": len(report_rows),
+            "closed_periods": sum(
+                1 for row in report_rows
+                if row["period_closed"]
+            ),
+            "open_periods": sum(
+                1 for row in report_rows
+                if not row["period_closed"]
+            ),
         })
 
     except Exception as error:
