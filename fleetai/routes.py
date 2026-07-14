@@ -878,36 +878,61 @@ def create_dependencies_from_parsed(session, op, car, data):
         session.add(Expense(operation_id=op.id, car_code=car.code, category="Доп. расходы", amount=data["total_cost"], share_type="investor_only"))
 
     elif data["type"] == "downtime_end":
+        # Ищем любую незакрытую строку, а не только active=1.
+        # Это исправляет старые записи, где active сохранился неверно.
         downtime = (
             session.query(Downtime)
             .filter(
                 func.trim(Downtime.car_code) == normalize_code(car.code),
-                Downtime.active == 1,
+                Downtime.end_date.is_(None),
             )
             .order_by(Downtime.id.desc())
             .first()
         )
+
         if downtime:
             downtime.end_date = op.date or datetime.now()
             downtime.active = 0
+
             if downtime.start_date:
                 downtime.days = max(
-                    (downtime.end_date.date() - downtime.start_date.date()).days,
+                    (
+                        downtime.end_date.date()
+                        - downtime.start_date.date()
+                    ).days,
                     1,
                 )
-            car.status = "Работает"
+
+        # Выключаем все случайно оставшиеся активные простои машины.
+        for old_row in (
+            session.query(Downtime)
+            .filter(
+                func.trim(Downtime.car_code)
+                == normalize_code(car.code),
+                Downtime.active == 1,
+            )
+            .all()
+        ):
+            old_row.active = 0
+
+        car.status = "Работает"
 
     elif data["type"] == "downtime":
+        downtime_end = data.get("end_date")
+        is_active = 0 if downtime_end else 1
+
         session.add(Downtime(
             operation_id=op.id,
             car_code=car.code,
             start_date=data.get("start_date") or datetime.now(),
-            end_date=data.get("end_date"),
+            end_date=downtime_end,
             days=data.get("days", 0),
             reason=data["description"],
-            active=data.get("active", 0),
+            active=is_active,
             comment=data["raw"],
         ))
+
+        car.status = "Простой" if is_active else "Работает"
 
     if data.get("part"):
         session.add(Part(
@@ -1197,31 +1222,61 @@ def save_operation(data):
         session.add(Expense(operation_id=op.id, car_code=car.code, category="Доп. расходы", amount=data["total_cost"], share_type="investor_only"))
 
     elif data["type"] == "downtime_end":
+        # Ищем любую незакрытую строку, а не только active=1.
+        # Это исправляет старые записи, где active сохранился неверно.
         downtime = (
             session.query(Downtime)
             .filter(
                 func.trim(Downtime.car_code) == normalize_code(car.code),
-                Downtime.active == 1,
+                Downtime.end_date.is_(None),
             )
             .order_by(Downtime.id.desc())
             .first()
         )
+
         if downtime:
             downtime.end_date = op.date or datetime.now()
             downtime.active = 0
+
             if downtime.start_date:
                 downtime.days = max(
-                    (downtime.end_date.date() - downtime.start_date.date()).days,
+                    (
+                        downtime.end_date.date()
+                        - downtime.start_date.date()
+                    ).days,
                     1,
                 )
-            car.status = "Работает"
+
+        # Выключаем все случайно оставшиеся активные простои машины.
+        for old_row in (
+            session.query(Downtime)
+            .filter(
+                func.trim(Downtime.car_code)
+                == normalize_code(car.code),
+                Downtime.active == 1,
+            )
+            .all()
+        ):
+            old_row.active = 0
+
+        car.status = "Работает"
 
     elif data["type"] == "downtime":
+        downtime_end = data.get("end_date")
+        is_active = 0 if downtime_end else 1
+
         session.add(Downtime(
-            operation_id=op.id, car_code=car.code, start_date=data.get("start_date") or datetime.now(),
-            end_date=data.get("end_date"), days=data.get("days", 0),
-            reason=data["description"], active=data.get("active", 0), comment=data["raw"],
+            operation_id=op.id,
+            car_code=car.code,
+            start_date=data.get("start_date") or datetime.now(),
+            end_date=downtime_end,
+            days=data.get("days", 0),
+            reason=data["description"],
+            active=is_active,
+            comment=data["raw"],
         ))
+
+        car.status = "Простой" if is_active else "Работает"
 
     if data.get("part"):
         session.add(Part(
@@ -1343,20 +1398,208 @@ def api_add_car():
 
 
 
-def current_downtime_for_car(session, car_code):
-    """
-    Возвращает текущий активный простой машины.
 
-    Источником истины является последняя строка Downtime с active=1.
+def reconcile_downtime_for_car(session, car_code, commit=False):
     """
+    Исправляет рассинхронизацию между Operation и Downtime.
+
+    Источник текущего статуса:
+    - последняя операция downtime без даты окончания => машина в простое;
+    - последняя операция downtime_end => машина работает;
+    - простой с заранее указанной end_date не считается активным.
+    """
+    code = normalize_code(car_code)
+
+    relevant_operations = (
+        session.query(Operation)
+        .filter(
+            func.trim(Operation.car_code) == code,
+            Operation.type.in_(("downtime", "downtime_end")),
+        )
+        .order_by(Operation.date.asc(), Operation.id.asc())
+        .all()
+    )
+
+    car = find_car(session, code)
+    changed = False
+
+    if not relevant_operations:
+        # Если операций нет, используем таблицу Downtime как запасной источник.
+        active_row = (
+            session.query(Downtime)
+            .filter(
+                func.trim(Downtime.car_code) == code,
+                Downtime.end_date.is_(None),
+            )
+            .order_by(Downtime.id.desc())
+            .first()
+        )
+
+        if active_row and not active_row.active:
+            active_row.active = 1
+            changed = True
+
+        if car:
+            expected = "Простой" if active_row else "Работает"
+            if car.status != expected:
+                car.status = expected
+                changed = True
+
+        if changed and commit:
+            session.commit()
+
+        return active_row
+
+    latest_operation = relevant_operations[-1]
+
+    if latest_operation.type == "downtime_end":
+        # Закрываем все незакрытые строки, даже если active раньше сохранился как 0.
+        open_rows = (
+            session.query(Downtime)
+            .filter(
+                func.trim(Downtime.car_code) == code,
+                Downtime.end_date.is_(None),
+            )
+            .order_by(Downtime.id.asc())
+            .all()
+        )
+
+        end_time = latest_operation.date or datetime.now()
+
+        for row in open_rows:
+            row.end_date = end_time
+            row.active = 0
+
+            if row.start_date:
+                row.days = max(
+                    (end_time.date() - row.start_date.date()).days,
+                    1,
+                )
+
+            changed = True
+
+        # На всякий случай выключаем старые ошибочные active-флаги.
+        for row in (
+            session.query(Downtime)
+            .filter(
+                func.trim(Downtime.car_code) == code,
+                Downtime.active == 1,
+            )
+            .all()
+        ):
+            row.active = 0
+            changed = True
+
+        if car and car.status != "Работает":
+            car.status = "Работает"
+            changed = True
+
+        if changed and commit:
+            session.commit()
+
+        return None
+
+    # Последняя операция открывает простой.
     row = (
         session.query(Downtime)
+        .filter_by(operation_id=latest_operation.id)
+        .first()
+    )
+
+    if not row:
+        row = (
+            session.query(Downtime)
+            .filter(
+                func.trim(Downtime.car_code) == code,
+            )
+            .order_by(Downtime.id.desc())
+            .first()
+        )
+
+    if not row:
+        return None
+
+    # Если в команде был конечный диапазон, это исторический простой.
+    if row.end_date is not None:
+        if row.active:
+            row.active = 0
+            changed = True
+
+        if car and car.status != "Работает":
+            car.status = "Работает"
+            changed = True
+
+        if changed and commit:
+            session.commit()
+
+        return None
+
+    if row.active != 1:
+        row.active = 1
+        changed = True
+
+    # Только последняя незакрытая строка может быть активной.
+    for other in (
+        session.query(Downtime)
         .filter(
-            func.trim(Downtime.car_code) == normalize_code(car_code),
+            func.trim(Downtime.car_code) == code,
+            Downtime.id != row.id,
             Downtime.active == 1,
         )
-        .order_by(Downtime.id.desc())
-        .first()
+        .all()
+    ):
+        other.active = 0
+        changed = True
+
+    if car and car.status != "Простой":
+        car.status = "Простой"
+        changed = True
+
+    if changed and commit:
+        session.commit()
+
+    return row
+
+
+def reconcile_all_downtimes(session, commit=False):
+    for car in session.query(Car).all():
+        reconcile_downtime_for_car(
+            session,
+            car.code,
+            commit=False,
+        )
+
+    if commit:
+        session.commit()
+
+
+def clean_downtime_comment(row):
+    """
+    Не даёт закрытому простою выглядеть активным из-за старого текста
+    «по настоящее время» в исходной команде.
+    """
+    comment = (row.comment or "").strip()
+
+    if not comment:
+        return ""
+
+    if row.end_date and (
+        "по настоящее время" in comment.lower()
+        or "по наст" in comment.lower()
+    ):
+        return ""
+
+    return comment
+
+
+def current_downtime_for_car(session, car_code):
+    """
+    Возвращает фактический текущий простой после автоматической сверки.
+    """
+    row = reconcile_downtime_for_car(
+        session,
+        car_code,
+        commit=False,
     )
 
     if not row:
@@ -1373,9 +1616,8 @@ def current_downtime_for_car(session, car_code):
         "start_date": start_date.strftime("%d.%m.%Y"),
         "days": days,
         "reason": row.reason or "",
-        "comment": row.comment or "",
+        "comment": clean_downtime_comment(row),
     }
-
 
 
 @bp.route("/api/summary")
@@ -1384,6 +1626,7 @@ def api_summary():
 
     try:
         cleanup_legacy_investor_mess(session)
+        reconcile_all_downtimes(session, commit=True)
 
         income = (
             session.query(func.coalesce(func.sum(Income.amount), 0))
@@ -1462,6 +1705,7 @@ def api_cars():
 
     try:
         cleanup_legacy_investor_mess(session)
+        reconcile_all_downtimes(session, commit=True)
         rows = []
 
         for car in session.query(Car).order_by(Car.code).all():
@@ -1545,6 +1789,8 @@ def api_car(code):
     if not car:
         session.close()
         return jsonify({"ok": False, "message": "Машина не найдена"})
+
+    reconcile_downtime_for_car(session, car.code, commit=True)
 
     income, expenses, investments, payouts, investor_invested, downtime_days = car_finance(session, car.code)
     active_downtime = current_downtime_for_car(session, car.code)
@@ -2511,6 +2757,7 @@ def test_investor_report(investor_name):
 
     try:
         cleanup_legacy_investor_mess(session)
+        reconcile_all_downtimes(session, commit=True)
 
         cars = (
             session.query(Car)
@@ -2705,12 +2952,13 @@ def test_investor_report(investor_name):
                 reason_parts = []
                 if downtime.reason:
                     reason_parts.append(downtime.reason)
+                clean_comment = clean_downtime_comment(downtime)
                 if (
-                    downtime.comment
-                    and downtime.comment not in reason_parts
+                    clean_comment
+                    and clean_comment not in reason_parts
                 ):
                     reason_parts.append(
-                        f"Комментарий: {downtime.comment}"
+                        f"Комментарий: {clean_comment}"
                     )
 
                 downtime_rows.append({
@@ -2843,6 +3091,46 @@ def test_investor_report(investor_name):
 
     finally:
         session.close()
+
+
+@bp.route("/api/repair-downtime-statuses", methods=["POST", "GET"])
+def api_repair_downtime_statuses():
+    """
+    Однократно исправляет старые рассинхронизированные простои.
+    Безопасно запускать повторно.
+    """
+    session = Session()
+
+    try:
+        reconcile_all_downtimes(session, commit=True)
+
+        result = []
+        for car in session.query(Car).order_by(Car.code).all():
+            active = current_downtime_for_car(session, car.code)
+            result.append({
+                "code": car.code,
+                "status": "Простой" if active else "Работает",
+                "start_date": active["start_date"] if active else "",
+                "days": active["days"] if active else 0,
+                "reason": active["reason"] if active else "",
+            })
+
+        return jsonify({
+            "ok": True,
+            "message": "Статусы простоев проверены и исправлены",
+            "cars": result,
+        })
+
+    except Exception as error:
+        session.rollback()
+        return jsonify({
+            "ok": False,
+            "message": f"Ошибка исправления простоев: {error}",
+        }), 500
+
+    finally:
+        session.close()
+
 
 @bp.route("/api/operations")
 def api_operations():
