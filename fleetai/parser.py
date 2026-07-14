@@ -518,15 +518,225 @@ def parse_message(message):
         data["description"] = "Доход"
         return data
 
-    expense_words = {"штраф": "Штраф", "страховка": "Страховка", "осаго": "Страховка", "мойка": "Мойка", "бензин": "Топливо", "газ": "Топливо", "эвакуатор": "Эвакуатор", "шиномонтаж": "Шиномонтаж", "расход": "Расход"}
-    for word, cat in expense_words.items():
-        if word in text:
-            data["type"] = "expense"
-            data["category"] = cat
-            data["description"] = cat
-            nums = parse_amounts(text, data["car_code"])
-            data["total"] = nums[-1] if nums else 0
-            return data
+    # Обычные эксплуатационные расходы, не связанные с ремонтом.
+    # Этот блок расположен раньше ремонта, чтобы фразы вроде
+    # «затраты на дорогу 1500» не превращались в ремонт.
+    expense_categories = [
+        (
+            [
+                "затраты на дорогу",
+                "расходы на дорогу",
+                "расход на дорогу",
+                "дорога",
+                "проезд",
+                "платная дорога",
+                "платная трасса",
+                "трасса",
+            ],
+            "Дорожные расходы",
+        ),
+        (
+            [
+                "парковка",
+                "паркинг",
+                "стоянка",
+            ],
+            "Парковка",
+        ),
+        (
+            [
+                "доставка",
+                "курьер",
+                "перевозка детали",
+            ],
+            "Доставка",
+        ),
+        (
+            [
+                "диагностика",
+                "компьютерная диагностика",
+            ],
+            "Диагностика",
+        ),
+        (
+            [
+                "мойка",
+                "химчистка",
+            ],
+            "Мойка и уход",
+        ),
+        (
+            [
+                "бензин",
+                "дизель",
+                "топливо",
+                "заправка",
+                "газ",
+                "метан",
+                "пропан",
+            ],
+            "Топливо",
+        ),
+        (
+            [
+                "эвакуатор",
+                "буксировка",
+            ],
+            "Эвакуатор",
+        ),
+        (
+            [
+                "шиномонтаж",
+                "балансировка",
+            ],
+            "Шиномонтаж",
+        ),
+        (
+            [
+                "страховка",
+                "осаго",
+                "каско",
+            ],
+            "Страховка",
+        ),
+        (
+            [
+                "штраф",
+                "гибдд",
+            ],
+            "Штраф",
+        ),
+        (
+            [
+                "комиссия",
+                "комиссия банка",
+                "комиссия сервиса",
+            ],
+            "Комиссия",
+        ),
+        (
+            [
+                "оформление",
+                "документы",
+                "госпошлина",
+                "регистрация",
+            ],
+            "Документы",
+        ),
+        (
+            [
+                "телефон",
+                "связь",
+                "сим карта",
+                "интернет",
+            ],
+            "Связь",
+        ),
+        (
+            [
+                "аренда места",
+                "аренда гаража",
+                "гараж",
+            ],
+            "Аренда",
+        ),
+    ]
+
+    matched_expense_category = None
+    matched_expense_phrase = None
+
+    for phrases, category in expense_categories:
+        for phrase in sorted(phrases, key=len, reverse=True):
+            if phrase in text:
+                matched_expense_category = category
+                matched_expense_phrase = phrase
+                break
+
+        if matched_expense_category:
+            break
+
+    # Универсальная форма:
+    # «расход 1500 на ...», «затраты 1500 на ...»,
+    # «потратил 1500 на ...», если это не ремонт и не допрасход инвестора.
+    generic_expense_match = re.search(
+        r"\b(?:расходы?|затраты?|потратил|потратили|оплатил|оплатили)\b",
+        text,
+    )
+
+    repair_context = any(
+        word in text
+        for word in [
+            "ремонт",
+            "замена",
+            "поменял",
+            "поменяли",
+            "починил",
+            "починили",
+            "деталь",
+            "запчаст",
+        ]
+    )
+
+    if matched_expense_category or (
+        generic_expense_match
+        and not repair_context
+        and "инвестор" not in text
+    ):
+        data["type"] = "expense"
+        data["category"] = (
+            matched_expense_category
+            or "Прочие расходы"
+        )
+
+        nums = parse_amounts(
+            text,
+            data["car_code"],
+        )
+
+        if data.get("mileage"):
+            nums = [
+                number
+                for number in nums
+                if number != data["mileage"]
+            ]
+
+        data["total"] = nums[-1] if nums else 0
+
+        # Сохраняем понятное назначение расхода.
+        description = text
+
+        if data["car_code"]:
+            description = re.sub(
+                r"^\s*" + re.escape(data["car_code"]) + r"\b",
+                "",
+                description,
+            ).strip()
+
+        description = re.sub(
+            r"\b(?:цена|стоимость|сумма)\s*\d+\s*(?:р|руб|рублей)?\b",
+            "",
+            description,
+        )
+        description = re.sub(
+            r"\b\d+\s*(?:р|руб|рублей)\b",
+            "",
+            description,
+        )
+        description = re.sub(
+            r"\s+",
+            " ",
+            description,
+        ).strip(" ,.-")
+
+        if description:
+            data["description"] = (
+                f"{data['category']}: {description}"
+            )
+        else:
+            data["description"] = data["category"]
+
+        return data
+
 
     # Сначала пытаемся распознать сразу несколько деталей.
     repair_words_present = any(
