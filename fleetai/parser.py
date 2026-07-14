@@ -370,9 +370,29 @@ def parse_message(message):
     if "со склада" in text or "из склада" in text:
         data["from_warehouse"] = True
 
-    mileage = re.search(r"пробег\s*(\d{4,7})", text)
-    if mileage:
-        data["mileage"] = int(mileage.group(1))
+    # Пробег можно писать разными способами:
+    # "пробег 400234", "на пробеге 400234", "пробег: 400 234",
+    # "пр 400234", "400234 км пробег".
+    mileage_patterns = [
+        r"\b(?:на\s+)?пробег(?:е)?\s*[:№-]?\s*(\d[\d\s]{3,8})\b",
+        r"\bпр\.?\s*[:№-]?\s*(\d[\d\s]{3,8})\b",
+        r"\b(\d[\d\s]{3,8})\s*км\s*(?:пробег)?\b",
+    ]
+
+    mileage = None
+
+    for pattern in mileage_patterns:
+        match = re.search(pattern, text)
+        if match:
+            raw_mileage = re.sub(r"\s+", "", match.group(1))
+            if raw_mileage.isdigit():
+                value = int(raw_mileage)
+                if 1000 <= value <= 9999999:
+                    mileage = value
+                    break
+
+    if mileage is not None:
+        data["mileage"] = mileage
 
     if "справа" in text or "правая" in text:
         data["position"] = "Правая"
