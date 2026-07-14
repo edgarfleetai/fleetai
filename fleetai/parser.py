@@ -551,7 +551,50 @@ def parse_message(message):
             for item in detected_parts
         )
         data["labor"] = detected_labor
-        data["total"] = data["part_price"] + data["labor"]
+
+        # Контрольная сумма по исходной команде.
+        # Для ремонта все денежные значения складываются:
+        # детали + работа. Код машины и пробег исключаются.
+        repair_numbers = _number_tokens(
+            text,
+            car_code=data["car_code"],
+            mileage=data["mileage"],
+        )
+        command_total = sum(
+            number["value"]
+            for number in repair_numbers
+        )
+
+        parsed_total = data["part_price"] + data["labor"]
+
+        # Если часть цены детали не привязалась, общий расход всё равно
+        # должен совпасть с числами, которые пользователь написал.
+        data["total"] = max(parsed_total, command_total)
+
+        missing_part_amount = max(
+            data["total"] - data["labor"] - data["part_price"],
+            0,
+        )
+
+        if missing_part_amount:
+            empty_part = next(
+                (
+                    item
+                    for item in detected_parts
+                    if not (item.get("price") or 0)
+                ),
+                None,
+            )
+
+            if empty_part:
+                empty_part["price"] = missing_part_amount
+            else:
+                detected_parts[0]["price"] = (
+                    (detected_parts[0].get("price") or 0)
+                    + missing_part_amount
+                )
+
+            data["part_price"] += missing_part_amount
 
         if len(detected_parts) == 1:
             data["description"] = (
