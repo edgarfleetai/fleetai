@@ -1207,7 +1207,115 @@ def deduct_from_warehouse(session, op, car, data):
     }
 
 
+
+def enforce_repair_total_from_raw(data):
+    """
+    Финальная серверная проверка суммы ремонта.
+
+    Работает независимо от parser.py. Поэтому даже если парсер
+    не привязал цену ко второй детали, Expense и Operation получат
+    полную сумму из исходной команды.
+
+    Не учитывает:
+    - код машины;
+    - пробег;
+    - даты;
+    - количество перед «шт».
+    """
+    if data.get("type") not in ("repair", "service", "expense"):
+        return data
+
+    raw = (data.get("raw") or "").lower().replace("ё", "е")
+
+    if not raw:
+        return data
+
+    car_code = normalize_code(data.get("car_code"))
+    mileage = data.get("mileage")
+
+    # Удаляем даты, чтобы день/месяц/год не попали в расход.
+    cleaned = re.sub(
+        r"\b\d{1,2}[./-]\d{1,2}(?:[./-]\d{2,4})?\b",
+        " ",
+        raw,
+    )
+    cleaned = re.sub(
+        r"\b\d{1,2}\s+"
+        r"(?:января|февраля|марта|апреля|мая|июня|июля|"
+        r"августа|сентября|октября|ноября|декабря)\b",
+        " ",
+        cleaned,
+    )
+
+    values = []
+
+    for match in re.finditer(r"\b(\d{1,9})\b", cleaned):
+        value = int(match.group(1))
+        start = match.start()
+        end = match.end()
+
+        if car_code and str(value) == str(car_code):
+            continue
+
+        if mileage and value == int(mileage):
+            continue
+
+        after = cleaned[end:end + 12]
+        before = cleaned[max(0, start - 15):start]
+
+        # Количество товара, а не деньги.
+        if re.match(r"\s*(?:шт|штук|штуки|штука)\b", after):
+            continue
+
+        # День простоя / номер месяца.
+        if re.search(r"(?:с|по)\s*$", before) and value <= 31:
+            continue
+
+        values.append(value)
+
+    if not values:
+        return data
+
+    raw_total = sum(values)
+    parsed_total = int(data.get("total") or 0)
+
+    # Сервер исправляет только потерянные суммы, но не уменьшает
+    # уже рассчитанный парсером итог.
+    if raw_total <= parsed_total:
+        return data
+
+    missing = raw_total - parsed_total
+
+    data["total"] = raw_total
+    data["part_price"] = int(data.get("part_price") or 0) + missing
+
+    parts = data.get("parts") or []
+
+    if parts:
+        empty_part = next(
+            (
+                item for item in parts
+                if not int(item.get("price") or 0)
+            ),
+            None,
+        )
+
+        if empty_part:
+            empty_part["price"] = missing
+        else:
+            parts[-1]["price"] = (
+                int(parts[-1].get("price") or 0)
+                + missing
+            )
+
+        data["parts"] = parts
+
+    return data
+
+
+
 def save_operation(data):
+    data = enforce_repair_total_from_raw(data)
     session = Session()
     car = find_car(session, data.get("car_code"))
 
@@ -1374,6 +1482,21 @@ def index():
 @bp.route("/healthz")
 def healthz():
     return "ok"
+
+
+
+@bp.route("/api/debug-parse", methods=["GET"])
+def api_debug_parse():
+    message = (request.args.get("message") or "").strip()
+
+    parsed = parse_message(message)
+    parsed = enforce_repair_total_from_raw(parsed)
+
+    return jsonify({
+        "ok": True,
+        "message": message,
+        "parsed": parsed,
+    })
 
 
 @bp.route("/api/add", methods=["POST"])
