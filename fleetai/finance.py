@@ -379,6 +379,20 @@ def _previous_period_debt(session, car_code, before_date):
 
 
 def calculate_period_for_car(session, car, start, end):
+    """
+    Прозрачный расчёт строго за выбранный период.
+
+    Логика:
+    1. Обычные расходы уменьшают прибыль до разделения.
+    2. Из прибыли до разделения рассчитывается процент инвестора.
+    3. Допрасходы инвестора и старый долг уменьшаются на деньги,
+       которые инвестор внёс в этом периоде.
+    4. Оставшийся долг погашается начисленной долей инвестора.
+    5. Реальные выплаты инвестору за период вычитаются отдельно.
+
+    Благодаря этому в отчёте видно каждую причину разницы между
+    «начислено инвестору» и «осталось выплатить».
+    """
     car_code = normalize_code(car.code)
 
     income = sum(
@@ -406,18 +420,19 @@ def calculate_period_for_car(session, car, start, end):
     )
 
     investor_percent = car.investor_percent or 0
-    normal_profit_for_split = income - shared_expenses
+    profit_for_split = income - shared_expenses
 
     if car.owner_type == "investor":
         investor_share_raw = round(
-            normal_profit_for_split * investor_percent / 100
+            profit_for_split * investor_percent / 100
         )
-        owner_share_raw = (
-            normal_profit_for_split - investor_share_raw
-        )
+        owner_share_raw = profit_for_split - investor_share_raw
     else:
         investor_share_raw = 0
-        owner_share_raw = normal_profit_for_split
+        owner_share_raw = profit_for_split
+
+    accrued_to_investor = max(investor_share_raw, 0)
+    investor_shared_loss = max(-investor_share_raw, 0)
 
     previous_debt = (
         _previous_period_debt(session, car.code, start)
@@ -425,40 +440,105 @@ def calculate_period_for_car(session, car, start, end):
         else 0
     )
 
-    investor_positive_share = max(investor_share_raw, 0)
-    investor_shared_loss = max(-investor_share_raw, 0)
+    # Явные взаиморасчёты за период.
+    settlement_operation_ids = set()
+    settlement_investor_paid = 0
+    park_debt_to_investor = 0
 
-    total_investor_debt = (
+    for row in session.query(InvestorSettlement).all():
+        if not _same_car(row, car_code):
+            continue
+        if not row.date or not (start <= row.date < end):
+            continue
+
+        settlement_investor_paid += row.investor_paid or 0
+        park_debt_to_investor += row.park_debt_to_investor or 0
+
+        if row.operation_id:
+            settlement_operation_ids.add(row.operation_id)
+
+    # Отдельные внесения инвестора за период, без двойного учёта
+    # суммы, уже записанной внутри InvestorSettlement.
+    separate_investor_paid = 0
+
+    for row in session.query(InvestorInvestment).all():
+        if not _same_car(row, car_code):
+            continue
+        if not row.date or not (start <= row.date < end):
+            continue
+        if row.operation_id and row.operation_id in settlement_operation_ids:
+            continue
+
+        separate_investor_paid += row.amount or 0
+
+    investor_paid_in_period = (
+        settlement_investor_paid
+        + separate_investor_paid
+    )
+
+    payouts_in_period = sum(
+        (row.amount or 0)
+        for row in session.query(InvestorPayout).all()
+        if (
+            _same_car(row, car_code)
+            and row.date
+            and start <= row.date < end
+        )
+    )
+
+    # Общая обязанность инвестора до учёта его внесений.
+    debt_before_payments = (
         previous_debt
         + investor_only_expenses
         + investor_shared_loss
     )
 
-    debt_repaid = min(
-        investor_positive_share,
-        total_investor_debt,
-    )
-
-    remaining_debt = max(
-        total_investor_debt - investor_positive_share,
+    # Внесённые инвестором деньги сначала уменьшают его долг.
+    debt_after_investor_payments = max(
+        debt_before_payments - investor_paid_in_period,
         0,
     )
 
-    investor_payout = max(
-        investor_positive_share - total_investor_debt,
+    investor_overpayment = max(
+        investor_paid_in_period - debt_before_payments,
+        0,
+    )
+
+    # Затем оставшийся долг погашается начисленной долей инвестора.
+    debt_repaid_by_profit = min(
+        accrued_to_investor,
+        debt_after_investor_payments,
+    )
+
+    remaining_debt = max(
+        debt_after_investor_payments - accrued_to_investor,
+        0,
+    )
+
+    available_before_payouts = (
+        max(
+            accrued_to_investor - debt_after_investor_payments,
+            0,
+        )
+        + investor_overpayment
+        + park_debt_to_investor
+    )
+
+    available_to_pay = max(
+        available_before_payouts - payouts_in_period,
         0,
     )
 
     investor_amount = (
         -remaining_debt
         if remaining_debt > 0
-        else investor_payout
+        else available_to_pay
     )
 
     owner_amount = (
         owner_share_raw
         - park_only_expenses
-        + debt_repaid
+        + debt_repaid_by_profit
     )
 
     total_expenses = (
@@ -483,13 +563,30 @@ def calculate_period_for_car(session, car, start, end):
         "park_only_expenses": park_only_expenses,
         "investments": investments,
         "profit": profit,
+        "profit_for_split": profit_for_split,
+        "normal_profit_for_split": profit_for_split,
+
         "investor_name": car.investor_name or "",
         "investor_percent": investor_percent,
+        "accrued_to_investor": accrued_to_investor,
+        "investor_share_total": accrued_to_investor,
+
+        "previous_investor_debt": previous_debt,
+        "investor_shared_loss": investor_shared_loss,
+        "debt_before_payments": debt_before_payments,
+        "investor_paid_in_period": investor_paid_in_period,
+        "investor_overpayment": investor_overpayment,
+        "debt_after_investor_payments": debt_after_investor_payments,
+        "debt_repaid_by_profit": debt_repaid_by_profit,
+        "investor_debt_to_park": remaining_debt,
+
+        "park_debt_to_investor": park_debt_to_investor,
+        "payouts_in_period": payouts_in_period,
+        "available_before_payouts": available_before_payouts,
+        "available_to_pay": available_to_pay,
+
         "investor_amount": investor_amount,
         "owner_amount": owner_amount,
-        "previous_investor_debt": previous_debt,
-        "investor_debt_to_park": remaining_debt,
-        "debt_repaid_by_profit": debt_repaid,
         "downtime_days": downtime_days,
     }
 
