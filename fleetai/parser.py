@@ -184,16 +184,13 @@ def _extract_multiple_repair_parts(
     default_position="",
 ):
     """
-    Разбирает команды с несколькими деталями.
+    Разбирает одну команду с несколькими деталями и отдельной работой.
 
     Пример:
-    «621 замена масла 2500 фильтра 500 ремонт 700»
+    621 замена масла 2500 фильтра 500 ремонт 700
 
     Результат:
-    - масло — 2500;
-    - фильтр — 500;
-    - работа — 700;
-    - всего — 3700.
+    масло 2500 + фильтр 500 + работа 700 = 3700.
     """
     detected = _detect_all_parts(text)
 
@@ -207,31 +204,27 @@ def _extract_multiple_repair_parts(
     )
 
     labor_match = re.search(
-        r"\b(?:работа|работы|ремонт)\s*(\d{1,9})\b",
+        r"\b(?:работа|работы|ремонт|за работу)\s*(?:цена|стоимость)?\s*(\d{1,9})\b",
         text,
     )
     labor = int(labor_match.group(1)) if labor_match else 0
+
     labor_span = (
         (labor_match.start(1), labor_match.end(1))
         if labor_match
         else None
     )
 
-    explicit_price_matches = list(
-        re.finditer(
-            r"\b(?:цена|стоимость)\s*(\d{1,9})\b",
-            text,
-        )
-    )
+    used_spans = set()
 
-    used_number_spans = set()
     if labor_span:
-        used_number_spans.add(labor_span)
+        used_spans.add(labor_span)
 
     result = []
 
+    # Первый проход: цена рядом с каждой конкретной деталью.
     for index, item in enumerate(detected):
-        segment_end = (
+        next_part_start = (
             detected[index + 1]["start"]
             if index + 1 < len(detected)
             else len(text)
@@ -239,27 +232,30 @@ def _extract_multiple_repair_parts(
 
         price = 0
 
-        # Сначала ищем «цена 1000» внутри участка этой детали.
-        for match in explicit_price_matches:
-            if item["end"] <= match.start() < segment_end:
-                price = int(match.group(1))
-                used_number_spans.add(
-                    (match.start(1), match.end(1))
-                )
-                break
+        explicit_match = re.search(
+            r"\b(?:цена|стоимость|за)\s*(\d{1,9})\b",
+            text[item["end"]:next_part_start],
+        )
 
-        # Затем берём ближайшее число после названия детали,
-        # но не сумму работы и не число следующей детали.
+        if explicit_match:
+            absolute_start = item["end"] + explicit_match.start(1)
+            absolute_end = item["end"] + explicit_match.end(1)
+            span = (absolute_start, absolute_end)
+
+            if span not in used_spans:
+                price = int(explicit_match.group(1))
+                used_spans.add(span)
+
         if price == 0:
             for number in numbers:
                 span = (number["start"], number["end"])
 
-                if span in used_number_spans:
+                if span in used_spans:
                     continue
 
-                if item["end"] <= number["start"] < segment_end:
+                if item["end"] <= number["start"] < next_part_start:
                     price = number["value"]
-                    used_number_spans.add(span)
+                    used_spans.add(span)
                     break
 
         result.append({
@@ -271,12 +267,86 @@ def _extract_multiple_repair_parts(
             "labor": 0,
         })
 
-    # Работу прикрепляем к первой детали только для совместимости
-    # со старой таблицей Part. В общей сумме она учитывается один раз.
+    # Второй проход: если из-за сложного алиаса цена одной детали
+    # не привязалась, распределяем оставшиеся числа по пустым деталям.
+    remaining_numbers = [
+        number
+        for number in numbers
+        if (number["start"], number["end"]) not in used_spans
+    ]
+
+    for item in result:
+        if item["price"] == 0 and remaining_numbers:
+            number = remaining_numbers.pop(0)
+            item["price"] = number["value"]
+            used_spans.add((number["start"], number["end"]))
+
+    # Работа учитывается один раз.
     if result and labor:
         result[0]["labor"] = labor
 
     return result, labor
+
+
+def _repair_amount_fallback(
+    text,
+    parts,
+    labor,
+    car_code=None,
+    mileage=None,
+):
+    """
+    Страховка от потери сумм.
+
+    Если в команде есть несколько денежных значений, а часть не была
+    привязана к деталям, добавляет их к первой детали, чтобы общий расход
+    совпадал с исходной командой.
+    """
+    numbers = _number_tokens(
+        text,
+        car_code=car_code,
+        mileage=mileage,
+    )
+
+    labor_removed = False
+    money_values = []
+
+    for number in numbers:
+        value = number["value"]
+
+        if labor and not labor_removed and value == labor:
+            labor_removed = True
+            continue
+
+        money_values.append(value)
+
+    expected_parts_total = sum(money_values)
+    parsed_parts_total = sum(
+        item.get("price", 0) or 0
+        for item in parts
+    )
+
+    missing = max(expected_parts_total - parsed_parts_total, 0)
+
+    if missing and parts:
+        empty_part = next(
+            (
+                item
+                for item in parts
+                if not (item.get("price") or 0)
+            ),
+            None,
+        )
+
+        if empty_part:
+            empty_part["price"] = missing
+        else:
+            parts[0]["price"] = (
+                (parts[0].get("price") or 0)
+                + missing
+            )
+
+    return parts
 
 def parse_message(message):
     raw = (message or "").strip()
@@ -450,6 +520,9 @@ def parse_message(message):
             "починили",
             "купил",
             "установил",
+            "затраты",
+            "затратил",
+            "стоило",
         ]
     )
 
@@ -459,6 +532,14 @@ def parse_message(message):
         mileage=data["mileage"],
         default_brand=data["brand"],
         default_position=data["position"],
+    )
+
+    detected_parts = _repair_amount_fallback(
+        text,
+        detected_parts,
+        detected_labor,
+        car_code=data["car_code"],
+        mileage=data["mileage"],
     )
 
     if detected_parts and repair_words_present:
