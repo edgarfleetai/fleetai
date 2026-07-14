@@ -1106,6 +1106,76 @@ def deduct_from_warehouse(session, op, car, data):
             "low_stock_text": "",
         }
 
+    selected_item_id = data.get("warehouse_item_id")
+
+    # Если пользователь выбрал позицию из всплывающего списка,
+    # списываем именно её. Название, сокращения и парсер уже не влияют.
+    if selected_item_id:
+        item = (
+            session.query(WarehouseItem)
+            .filter_by(id=int(selected_item_id))
+            .first()
+        )
+
+        if not item:
+            return {
+                "used": False,
+                "message": (
+                    "Расход записан, но выбранная позиция "
+                    "склада больше не найдена."
+                ),
+                "low_stock_text": "",
+            }
+
+        if (item.quantity or 0) <= 0:
+            return {
+                "used": False,
+                "message": (
+                    f"Расход записан, но «{item.part_name}"
+                    f"{' ' + item.brand if item.brand else ''}» "
+                    "закончилась на складе."
+                ),
+                "low_stock_text": "",
+            }
+
+        item.quantity = (item.quantity or 0) - 1
+
+        session.add(
+            WarehouseMovement(
+                operation_id=op.id,
+                car_code=car.code,
+                part_name=item.part_name,
+                brand=item.brand or "",
+                quantity=1,
+                movement_type="out",
+                comment=data.get("raw") or "",
+            )
+        )
+
+        remaining = item.quantity or 0
+        minimum = item.min_quantity or 0
+
+        low_stock_text = ""
+
+        if remaining <= minimum:
+            low_stock_text = (
+                "⚠️ <b>Заканчивается деталь</b>\n"
+                f"Деталь: {item.part_name}"
+                f"{' ' + item.brand if item.brand else ''}\n"
+                f"Осталось: {remaining} шт.\n"
+                f"Минимум: {minimum} шт."
+            )
+
+        return {
+            "used": True,
+            "message": (
+                f"Со склада списано: {item.part_name}"
+                f"{' ' + item.brand if item.brand else ''} — "
+                f"1 шт. Остаток: {remaining} шт."
+            ),
+            "low_stock_text": low_stock_text,
+        }
+
     parsed_parts = data.get("parts") or []
 
     if not parsed_parts and data.get("part"):
@@ -1503,20 +1573,26 @@ def api_debug_parse():
 def api_add():
     payload = request.json or {}
     message = (payload.get("message", "") or "").strip()
+    warehouse_item_id = payload.get("warehouse_item_id")
 
     # Поддержка нескольких записей в одной строке:
     # 703 получил 13000 / 703 доп расходы 41700 инвестор оплатил 25000
     parts = [p.strip() for p in message.split("/") if p.strip()]
 
     if len(parts) <= 1:
-        return jsonify(save_operation(parse_message(message)))
+        parsed = parse_message(message)
+        parsed["warehouse_item_id"] = warehouse_item_id
+        return jsonify(save_operation(parsed))
 
     results = []
     ok = True
     first_code = None
 
-    for part in parts:
+    for index, part in enumerate(parts):
         parsed = parse_message(part)
+
+        if index == 0 and warehouse_item_id:
+            parsed["warehouse_item_id"] = warehouse_item_id
 
         if parsed.get("car_code"):
             first_code = parsed.get("car_code")
