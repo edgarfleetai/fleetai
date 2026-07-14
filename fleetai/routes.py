@@ -1319,10 +1319,18 @@ def enforce_repair_total_from_raw(data):
 
     values = []
 
-    for match in re.finditer(r"\b(\d{1,9})\b", cleaned):
-        value = int(match.group(1))
-        start = match.start()
-        end = match.end()
+    # Не используем \\b после числа: в строке «1000р» буква «р»
+    # считается частью слова, поэтому старое выражение не видело сумму.
+    # Теперь распознаются: 1000, 1000р, 1 000 руб., 1000₽.
+    for match in re.finditer(
+        r"(?<!\\d)(\\d{1,3}(?:[ \\u00a0]\\d{3})*|\\d{1,9})"
+        r"(?=\\s*(?:₽|р\\.?|руб\\.?|рублей)?(?:\\s|$|[.,;/]))",
+        cleaned,
+    ):
+        raw_value = re.sub(r"[ \\u00a0]", "", match.group(1))
+        value = int(raw_value)
+        start = match.start(1)
+        end = match.end(1)
 
         if car_code and str(value) == str(car_code):
             continue
@@ -1566,6 +1574,10 @@ def api_debug_parse():
         "ok": True,
         "message": message,
         "parsed": parsed,
+        "final_total": parsed.get("total", 0),
+        "part_price": parsed.get("part_price", 0),
+        "labor": parsed.get("labor", 0),
+        "warehouse_item_id": parsed.get("warehouse_item_id"),
     })
 
 
