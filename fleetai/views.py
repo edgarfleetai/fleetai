@@ -96,6 +96,54 @@ td,th{padding:9px;border-bottom:1px solid #eee;text-align:left}
 .status-off{color:#c2410c}
 .badge-working{background:#dcfce7;color:#166534}
 .badge-downtime{background:#ffedd5;color:#9a3412}
+
+.command-box{position:relative;display:flex;gap:8px;align-items:flex-start}
+.command-box .msg{flex:1}
+.warehouse-suggestions{
+  position:absolute;
+  left:0;
+  right:100px;
+  top:48px;
+  z-index:50;
+  display:none;
+  max-height:300px;
+  overflow:auto;
+  border:1px solid #d1d5db;
+  border-radius:14px;
+  background:#fff;
+  box-shadow:0 12px 30px rgba(15,23,42,.16);
+}
+.warehouse-suggestions.open{display:block}
+.warehouse-suggestion{
+  display:flex;
+  justify-content:space-between;
+  gap:12px;
+  padding:12px 14px;
+  border-bottom:1px solid #f1f5f9;
+  cursor:pointer;
+}
+.warehouse-suggestion:last-child{border-bottom:0}
+.warehouse-suggestion:hover,
+.warehouse-suggestion.active{background:#f8fafc}
+.warehouse-suggestion-name{font-weight:700}
+.warehouse-suggestion-meta{font-size:12px;color:#64748b;margin-top:3px}
+.warehouse-suggestion-stock{
+  white-space:nowrap;
+  font-weight:800;
+}
+.warehouse-suggestion-stock.low{color:#c2410c}
+.warehouse-hint{
+  padding:10px 14px;
+  font-size:12px;
+  color:#64748b;
+  background:#f8fafc;
+}
+@media(max-width:800px){
+  .command-box{display:block}
+  .command-box button{width:100%;margin-top:8px}
+  .warehouse-suggestions{right:0;top:46px}
+}
+
 @media(max-width:800px){
   .status-board{grid-template-columns:1fr}
 }
@@ -144,8 +192,18 @@ td,th{padding:9px;border-bottom:1px solid #eee;text-align:left}
 <div id="fleetStatus"></div>
 
 <div class="card">
-  <input class="msg" id="msg" placeholder="703 получил 13000 / 703 доп расходы 41700 инвестор оплатил 25000">
-  <button onclick="add()">Записать</button>
+  <div class="command-box">
+    <input
+      class="msg"
+      id="msg"
+      autocomplete="off"
+      placeholder="703 получил 13000 / 665 замена стойки стаба цена 1000"
+    >
+    <button onclick="add()">Записать</button>
+
+    <div id="warehouseSuggestions" class="warehouse-suggestions"></div>
+  </div>
+
   <p id="res"></p>
 </div>
 
@@ -926,7 +984,288 @@ async function loadOps(){
     `).join('')}
   `;
 }
-async function add(){let m=msg.value;try{let r=await api('/api/add',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:m})});res.innerText=r.message||JSON.stringify(r);if(r.ok)msg.value='';load()}catch(e){res.innerText='Ошибка: '+e}}
+
+let warehouseAutocompleteItems=[];
+let warehouseSuggestionIndex=-1;
+let warehouseAutocompleteTimer=null;
+
+function normalizeWarehouseSearch(value){
+  let text=String(value||'')
+    .toLowerCase()
+    .replaceAll('ё','е')
+    .replace(/[^0-9a-zа-я]+/g,' ')
+    .replace(/\s+/g,' ')
+    .trim();
+
+  const aliases=[
+    ['стойки стаба','стойка стабилизатора'],
+    ['стойка стаба','стойка стабилизатора'],
+    ['стойки стабилизатора','стойка стабилизатора'],
+    ['линка стабилизатора','стойка стабилизатора'],
+    ['линк стабилизатора','стойка стабилизатора'],
+    ['втулки стаба','втулка стабилизатора'],
+    ['втулка стаба','втулка стабилизатора'],
+    ['втулки стабилизатора','втулка стабилизатора'],
+    ['передние колодки','тормозные колодки передние'],
+    ['задние колодки','тормозные колодки задние']
+  ];
+
+  for(const [from,to] of aliases){
+    text=text.replaceAll(from,to);
+  }
+
+  return text;
+}
+
+function warehouseSearchTokens(value){
+  return normalizeWarehouseSearch(value)
+    .split(' ')
+    .filter(token=>
+      token.length>=3 &&
+      ![
+        'замена','поменял','поменяли','ремонт','цена','стоимость',
+        'работа','пробег','справа','слева','фирма','машина',
+        'получил','расход','затраты'
+      ].includes(token) &&
+      !/^\d+$/.test(token)
+    );
+}
+
+async function preloadWarehouseAutocomplete(){
+  try{
+    const data=await api('/api/warehouse');
+    warehouseAutocompleteItems=Array.isArray(data)
+      ? data.filter(item=>(item.quantity||0)>0)
+      : [];
+  }catch(error){
+    warehouseAutocompleteItems=[];
+  }
+}
+
+function warehouseItemScore(item,input){
+  const query=normalizeWarehouseSearch(input);
+  const queryTokens=warehouseSearchTokens(input);
+
+  const name=normalizeWarehouseSearch(item.part_name);
+  const brand=normalizeWarehouseSearch(item.brand);
+  const haystack=(name+' '+brand).trim();
+
+  let score=0;
+
+  if(query.includes(name) || name.includes(query)){
+    score+=100;
+  }
+
+  for(const token of queryTokens){
+    if(haystack.includes(token)){
+      score+=20;
+    }else if(
+      token.length>=4 &&
+      haystack.split(' ').some(word=>
+        word.startsWith(token.slice(0,Math.max(3,token.length-2))) ||
+        token.startsWith(word.slice(0,Math.max(3,word.length-2)))
+      )
+    ){
+      score+=10;
+    }
+  }
+
+  if(brand && query.includes(brand)){
+    score+=30;
+  }
+
+  return score;
+}
+
+function findWarehouseSuggestions(input){
+  const tokens=warehouseSearchTokens(input);
+
+  if(!tokens.length){
+    return [];
+  }
+
+  return warehouseAutocompleteItems
+    .map(item=>({
+      ...item,
+      score:warehouseItemScore(item,input)
+    }))
+    .filter(item=>item.score>0)
+    .sort((a,b)=>
+      b.score-a.score ||
+      (b.quantity||0)-(a.quantity||0) ||
+      String(a.part_name).localeCompare(String(b.part_name),'ru')
+    )
+    .slice(0,8);
+}
+
+function renderWarehouseSuggestions(){
+  const box=document.getElementById('warehouseSuggestions');
+  const input=document.getElementById('msg');
+  const suggestions=findWarehouseSuggestions(input.value);
+
+  warehouseSuggestionIndex=-1;
+
+  if(!suggestions.length){
+    box.classList.remove('open');
+    box.innerHTML='';
+    return;
+  }
+
+  box.innerHTML=`
+    <div class="warehouse-hint">
+      Есть на складе — нажми на нужную деталь
+    </div>
+    ${suggestions.map((item,index)=>`
+      <div
+        class="warehouse-suggestion"
+        data-index="${index}"
+        onmousedown="event.preventDefault();selectWarehouseSuggestion(${item.id})"
+      >
+        <div>
+          <div class="warehouse-suggestion-name">
+            ${item.part_name}${item.brand?' · '+item.brand:''}
+          </div>
+          <div class="warehouse-suggestion-meta">
+            ${item.shelf?'Полка: '+item.shelf+' · ':''}
+            Минимум: ${item.min_quantity||0} шт.
+          </div>
+        </div>
+
+        <div class="warehouse-suggestion-stock ${(item.quantity||0)<=(item.min_quantity||0)?'low':''}">
+          ${item.quantity||0} шт.
+        </div>
+      </div>
+    `).join('')}
+  `;
+
+  box.dataset.items=JSON.stringify(
+    suggestions.map(item=>item.id)
+  );
+  box.classList.add('open');
+}
+
+function selectWarehouseSuggestion(itemId){
+  const item=warehouseAutocompleteItems.find(
+    value=>Number(value.id)===Number(itemId)
+  );
+
+  if(!item){
+    return;
+  }
+
+  const input=document.getElementById('msg');
+  let value=input.value.trim();
+
+  const brandText=item.brand
+    ? ` фирма ${item.brand}`
+    : '';
+
+  const normalizedValue=normalizeWarehouseSearch(value);
+  const normalizedBrand=normalizeWarehouseSearch(item.brand);
+
+  if(item.brand && !normalizedValue.includes(normalizedBrand)){
+    value+=brandText;
+  }
+
+  if(!normalizeWarehouseSearch(value).includes('со склада')){
+    value+=' со склада';
+  }
+
+  input.value=value.replace(/\s+/g,' ').trim()+' ';
+  document.getElementById('warehouseSuggestions').classList.remove('open');
+  input.focus();
+}
+
+function moveWarehouseSuggestion(direction){
+  const box=document.getElementById('warehouseSuggestions');
+  const rows=[...box.querySelectorAll('.warehouse-suggestion')];
+
+  if(!rows.length || !box.classList.contains('open')){
+    return false;
+  }
+
+  warehouseSuggestionIndex+=direction;
+
+  if(warehouseSuggestionIndex<0){
+    warehouseSuggestionIndex=rows.length-1;
+  }
+  if(warehouseSuggestionIndex>=rows.length){
+    warehouseSuggestionIndex=0;
+  }
+
+  rows.forEach((row,index)=>{
+    row.classList.toggle(
+      'active',
+      index===warehouseSuggestionIndex
+    );
+  });
+
+  rows[warehouseSuggestionIndex].scrollIntoView({
+    block:'nearest'
+  });
+
+  return true;
+}
+
+function chooseActiveWarehouseSuggestion(){
+  const box=document.getElementById('warehouseSuggestions');
+  const rows=[...box.querySelectorAll('.warehouse-suggestion')];
+
+  if(
+    warehouseSuggestionIndex<0 ||
+    warehouseSuggestionIndex>=rows.length
+  ){
+    return false;
+  }
+
+  const ids=JSON.parse(box.dataset.items||'[]');
+  selectWarehouseSuggestion(ids[warehouseSuggestionIndex]);
+  return true;
+}
+
+function setupWarehouseAutocomplete(){
+  const input=document.getElementById('msg');
+
+  input.addEventListener('input',()=>{
+    clearTimeout(warehouseAutocompleteTimer);
+    warehouseAutocompleteTimer=setTimeout(
+      renderWarehouseSuggestions,
+      120
+    );
+  });
+
+  input.addEventListener('focus',renderWarehouseSuggestions);
+
+  input.addEventListener('keydown',event=>{
+    if(event.key==='ArrowDown'){
+      if(moveWarehouseSuggestion(1)){
+        event.preventDefault();
+      }
+    }else if(event.key==='ArrowUp'){
+      if(moveWarehouseSuggestion(-1)){
+        event.preventDefault();
+      }
+    }else if(event.key==='Enter'){
+      if(chooseActiveWarehouseSuggestion()){
+        event.preventDefault();
+      }
+    }else if(event.key==='Escape'){
+      document
+        .getElementById('warehouseSuggestions')
+        .classList.remove('open');
+    }
+  });
+
+  document.addEventListener('click',event=>{
+    if(!event.target.closest('.command-box')){
+      document
+        .getElementById('warehouseSuggestions')
+        .classList.remove('open');
+    }
+  });
+}
+
+async function add(){let m=msg.value;try{let r=await api('/api/add',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:m})});res.innerText=r.message||JSON.stringify(r);if(r.ok){msg.value='';await preloadWarehouseAutocomplete();}load()}catch(e){res.innerText='Ошибка: '+e}}
 
 
 function toggleWarehousePanel(){
@@ -1003,6 +1342,7 @@ async function addWarehouseItem(){
     warehouse_min.value='';
     warehouse_shelf.value='';
     await loadWarehouse();
+    await preloadWarehouseAutocomplete();
   }
 }
 
@@ -1094,6 +1434,8 @@ async function addCar(){
 async function load(){await loadSummary();await loadInvestorsSummary();await loadInvestors();await loadCars();await loadOps()}
 
 msg.addEventListener('keydown',e=>{if(e.key==='Enter')add()});
+preloadWarehouseAutocomplete();
+setupWarehouseAutocomplete();
 load();
 </script>
 </body>
