@@ -1316,6 +1316,42 @@ body > *{
   font-weight:700;
 }
 
+
+.overdue-period-list{
+  display:flex;
+  flex-direction:column;
+  gap:7px;
+  min-width:230px;
+}
+
+.overdue-period-row{
+  display:flex;
+  justify-content:space-between;
+  gap:12px;
+  padding:8px 10px;
+  border:1px solid #efcfcc;
+  border-radius:10px;
+  background:#fff5f4;
+}
+
+.overdue-period-row strong{
+  color:#a33e3e;
+  white-space:nowrap;
+}
+
+
+.overdue-period-payment{
+  display:flex;
+  flex-direction:column;
+  align-items:flex-end;
+  gap:6px;
+}
+
+.overdue-period-payment button{
+  padding:6px 9px;
+  font-size:11px;
+}
+
 </style>
 </head>
 
@@ -2081,6 +2117,40 @@ async function saveDriverPayment(){
   if(result.ok)await loadCars();
 }
 
+
+async function markDriverPeriodPaid(
+  carCode,
+  periodStart,
+  periodEnd
+){
+  if(!confirm(
+    `Закрыть период ${periodStart} — ${periodEnd}?`
+  )){
+    return;
+  }
+
+  try{
+    const result=await api('/api/mark-driver-period-paid',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({
+        car_code:carCode,
+        period_start:periodStart,
+        period_end:periodEnd
+      })
+    });
+
+    paymentRes.innerText=result.message||'';
+
+    if(result.ok){
+      await loadCars();
+    }
+  }catch(error){
+    paymentRes.innerText=
+      'Не удалось закрыть период: '+error;
+  }
+}
+
 async function markPaymentPaid(code){
   if(!confirm(`Подтвердить получение оплаты от машины ${code}?`))return;
   const result=await api('/api/mark-driver-payment-paid',{
@@ -2096,6 +2166,56 @@ async function checkPaymentsNow(){
   paymentRes.innerText='Проверяем платежи...';
   const result=await api('/api/check-driver-payments');
   paymentRes.innerText=result.message||'Проверка завершена';
+}
+
+function overduePeriodsHtml(carCode,calc){
+  const periods=calc.overdue_periods||[];
+
+  if(!periods.length){
+    return '<span class="raw">Нет долга</span>';
+  }
+
+  return `
+    <div class="overdue-period-list">
+      ${periods.map((period,index)=>`
+        <div class="overdue-period-row">
+          <div>
+            <b>Неделя ${index+1}</b>
+            <div class="raw">${period.label||''}</div>
+            <div class="raw">
+              ${period.payable_days||0} оплачиваемых дней ·
+              простой ${period.downtime_days||0} дн.
+            </div>
+          </div>
+
+          <div class="overdue-period-payment">
+            <strong>${rub(period.amount||0)}</strong>
+
+            ${
+              index===0
+                ? `
+                  <button
+                    class="small"
+                    onclick="markDriverPeriodPaid(
+                      '${carCode}',
+                      '${period.period_start}',
+                      '${period.period_end}'
+                    )"
+                  >
+                    Оплачено
+                  </button>
+                `
+                : `
+                  <span class="raw">
+                    Сначала предыдущая
+                  </span>
+                `
+            }
+          </div>
+        </div>
+      `).join('')}
+    </div>
+  `;
 }
 
 function renderDriverPayments(carsList){
@@ -2116,12 +2236,9 @@ function renderDriverPayments(carsList){
       <th>Машина</th>
       <th>Водитель</th>
       <th>Ставка</th>
+      <th>Просроченные недели</th>
       <th>Текущий период</th>
-      <th>Начислено дней</th>
-      <th>Простой</th>
-      <th>Долг прошлых периодов</th>
-      <th>Новый период</th>
-      <th>Всего к оплате</th>
+      <th>Начислено сейчас</th>
       <th>Дата расчёта</th>
       <th>Статус</th>
       <th>Действие</th>
@@ -2129,6 +2246,8 @@ function renderDriverPayments(carsList){
 
     ${configured.map(car=>{
       const calc=car.driver_payment||{};
+      const current=calc.current_period||{};
+
       const rate=Number(
         calc.effective_daily_rent ||
         car.effective_daily_rent ||
@@ -2152,35 +2271,17 @@ function renderDriverPayments(carsList){
           </td>
 
           <td>
-            ${calc.period_start||'—'} —
-            ${calc.scheduled_period_end||'—'}
+            ${overduePeriodsHtml(car.code,calc)}
           </td>
 
           <td>
-            ${calc.payable_days||0} дн.
-            <div class="raw">
-              прошло ${calc.total_days||0} дн.
+            <div>
+              <b>${current.label||'—'}</b>
             </div>
-          </td>
-
-          <td>${calc.downtime_days||0} дн.</td>
-
-          <td>
-            <span class="${
-              Number(calc.previous_debt||0)>0
-                ? 'driver-debt'
-                : 'raw'
-            }">
-              ${rub(calc.previous_debt||0)}
-            </span>
-            ${
-              Number(calc.completed_unpaid_periods||0)>0
-                ? `<div class="raw">
-                    ${calc.completed_unpaid_periods}
-                    просроч. период(а)
-                  </div>`
-                : ''
-            }
+            <div class="raw">
+              ${current.payable_days||0} оплачиваемых дней ·
+              простой ${current.downtime_days||0} дн.
+            </div>
           </td>
 
           <td>
@@ -2191,16 +2292,15 @@ function renderDriverPayments(carsList){
           </td>
 
           <td>
-            <b>${rub(calc.amount_due||0)}</b>
+            ${calc.next_payment_date||car.next_payment_date||'—'}
           </td>
-
-          <td>${calc.next_payment_date||car.next_payment_date||'—'}</td>
 
           <td>
             ${
-              Number(calc.previous_debt||0)>0
+              Number(calc.overdue_periods_count||0)>0
                 ? `<span class="driver-status-overdue">
-                    Долг + новый период
+                    ${calc.overdue_periods_count}
+                    просроч. нед.
                   </span>`
                 : paymentStatus(
                     calc.next_payment_date ||
@@ -2210,9 +2310,15 @@ function renderDriverPayments(carsList){
           </td>
 
           <td>
-            <button onclick="markPaymentPaid('${car.code}')">
-              Оплачено
-            </button>
+            ${
+              Number(calc.overdue_periods_count||0)>0
+                ? '<span class="raw">Закрой недели по очереди</span>'
+                : `
+                  <button onclick="markPaymentPaid('${car.code}')">
+                    Оплачено
+                  </button>
+                `
+            }
           </td>
         </tr>
       `;
