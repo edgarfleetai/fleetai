@@ -234,6 +234,12 @@ def build_investor_report_pdf(
             f"{datetime.now().strftime('%d.%m.%Y %H:%M')}",
             normal_style,
         ),
+        Paragraph(
+            "Долги и выплаты рассчитаны по всему автопарку инвестора: "
+            "долг одной машины сначала погашается суммами к выплате "
+            "по другим машинам.",
+            small_style,
+        ),
         Spacer(1, 7 * mm),
     ]
 
@@ -247,6 +253,7 @@ def build_investor_report_pdf(
         "investor_paid": 0,
         "debt_repaid": 0,
         "payouts": 0,
+        "portfolio_withheld": 0,
         "available": 0,
         "owner": 0,
         "debt": 0,
@@ -266,6 +273,9 @@ def build_investor_report_pdf(
         total["investor_paid"] += item["investor_paid_in_period"]
         total["debt_repaid"] += item["debt_repaid_by_profit"]
         total["payouts"] += item["payouts_in_period"]
+        total["portfolio_withheld"] += int(
+            item.get("portfolio_debt_withheld", 0) or 0
+        )
         total["available"] += item["available_to_pay"]
         total["owner"] += item["owner_amount"]
         total["debt"] += item["investor_debt_to_park"]
@@ -310,6 +320,7 @@ def build_investor_report_pdf(
             [Paragraph("Инвестор внёс в этом периоде", normal_style), Paragraph(money(item["investor_paid_in_period"]), normal_style)],
             [Paragraph("Погашено долга из прибыли", normal_style), Paragraph(money(item["debt_repaid_by_profit"]), normal_style)],
             [Paragraph("Выплачено инвестору", normal_style), Paragraph(money(item["payouts_in_period"]), normal_style)],
+            [Paragraph("Удержано для погашения долга других машин", normal_style), Paragraph(money(item.get("portfolio_debt_withheld", 0)), normal_style)],
             [Paragraph("Осталось выплатить", normal_style), Paragraph(money(item["available_to_pay"]), normal_style)],
             [Paragraph("Остаток долга инвестора", normal_style), Paragraph(money(item["investor_debt_to_park"]), normal_style)],
             [Paragraph("Расходы только парка", normal_style), Paragraph(money(item["park_only_expenses"]), normal_style)],
@@ -438,8 +449,9 @@ def build_investor_report_pdf(
         [Paragraph("<b>Инвестор внёс</b>", normal_style), Paragraph(money(total["investor_paid"]), normal_style)],
         [Paragraph("<b>Погашено долга из прибыли</b>", normal_style), Paragraph(money(total["debt_repaid"]), normal_style)],
         [Paragraph("<b>Выплачено инвестору</b>", normal_style), Paragraph(money(total["payouts"]), normal_style)],
-        [Paragraph("<b>Осталось выплатить</b>", normal_style), Paragraph(money(total["available"]), normal_style)],
-        [Paragraph("<b>Остаток долга инвестора</b>", normal_style), Paragraph(money(total["debt"]), normal_style)],
+        [Paragraph("<b>Взаимозачёт долга между машинами</b>", normal_style), Paragraph(money(total["portfolio_withheld"]), normal_style)],
+        [Paragraph("<b>Осталось выплатить после взаимозачёта</b>", normal_style), Paragraph(money(total["available"]), normal_style)],
+        [Paragraph("<b>Остаток долга после взаимозачёта</b>", normal_style), Paragraph(money(total["debt"]), normal_style)],
         [Paragraph("<b>Расходы только парка</b>", normal_style), Paragraph(money(total["park_only"]), normal_style)],
         [Paragraph("<b>Доля парка</b>", normal_style), Paragraph(money(total["owner"]), normal_style)],
         [Paragraph("<b>Всего дней простоя</b>", normal_style), Paragraph(str(total["downtime"]), normal_style)],
@@ -4593,6 +4605,13 @@ def test_investor_report(investor_name):
                 "downtime_days": downtime_days,
             })
 
+        # Применяем к PDF ту же логику взаимозачёта, что и на сайте:
+        # долг одной машины сначала закрывается выплатами по другим машинам
+        # того же инвестора. Пока общей выплаты хватает, долг не показывается.
+        portfolio_result = apply_investor_portfolio_netting(
+            report_rows
+        )
+
         pdf_bytes = build_investor_report_pdf(
             investor_name=investor_name,
             period_start=period_start,
@@ -4645,6 +4664,13 @@ def test_investor_report(investor_name):
             "open_periods": sum(
                 1 for row in report_rows
                 if not row["period_closed"]
+            ),
+            "portfolio_available_to_pay": (
+                portfolio_result["net_available"]
+            ),
+            "portfolio_debt": portfolio_result["net_debt"],
+            "portfolio_debt_offset": (
+                portfolio_result["portfolio_withheld"]
             ),
         })
 
