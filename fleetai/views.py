@@ -2368,7 +2368,68 @@ function renderDriverPayments(carsList){
   `;
 }
 
+
+let monthlyMileageByCar =
+  typeof monthlyMileageByCar !== 'undefined'
+    ? monthlyMileageByCar
+    : {};
+
+function mileageIncreaseClass(status){
+  if(status==='green')return 'mileage-green';
+  if(status==='yellow')return 'mileage-yellow';
+  if(status==='red')return 'mileage-red';
+  return 'mileage-neutral';
+}
+
+function mileageCell(car){
+  const current=Number(car.mileage||0);
+  const data=monthlyMileageByCar[String(car.code)]||{};
+  const increase=Number(data.month_increase||0);
+  const status=data.status||'neutral';
+
+  return `
+    <div class="mileage-cell">
+      <div class="mileage-increase ${mileageIncreaseClass(status)}">
+        +${increase.toLocaleString('ru-RU')} км за месяц
+      </div>
+      <div class="mileage-current">
+        ${
+          current
+            ? current.toLocaleString('ru-RU')+' км'
+            : '—'
+        }
+      </div>
+    </div>
+  `;
+}
+
+async function loadMonthlyMileage(){
+  try{
+    const data=await api('/api/cars-monthly-mileage');
+
+    monthlyMileageByCar={};
+
+    if(!data || !data.ok || !Array.isArray(data.items)){
+      return;
+    }
+
+    for(const item of data.items){
+      monthlyMileageByCar[String(item.car_code)]=item;
+    }
+  }catch(error){
+    monthlyMileageByCar={};
+    console.error(
+      'Не удалось загрузить месячный пробег:',
+      error
+    );
+  }
+}
+
 async function loadCars(){
+  if(!Object.keys(monthlyMileageByCar||{}).length){
+    await loadMonthlyMileage();
+  }
+
   const carsTable=document.getElementById('cars');
   const paymentSelect=document.getElementById('paymentCar');
   const paymentsTable=document.getElementById('driverPayments');
