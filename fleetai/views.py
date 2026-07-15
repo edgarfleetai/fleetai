@@ -1352,6 +1352,15 @@ body > *{
   font-size:11px;
 }
 
+
+.app-page{
+  display:none !important;
+}
+
+.app-page.active{
+  display:block !important;
+}
+
 </style>
 </head>
 
@@ -1752,41 +1761,74 @@ body > *{
 <script>
 
 function showAppPage(page,button){
-  document.querySelectorAll('.app-page').forEach(section=>{
+  const pages=document.querySelectorAll('.app-page');
+
+  pages.forEach(section=>{
     section.classList.remove('active');
+    section.style.display='none';
   });
+
+  const sectionsToOpen=[];
 
   const mainPage=document.getElementById(`page-${page}`);
   if(mainPage){
-    mainPage.classList.add('active');
+    sectionsToOpen.push(mainPage);
   }
 
   document.querySelectorAll(
     `.app-page-linked[data-linked-page="${page}"]`
   ).forEach(section=>{
+    sectionsToOpen.push(section);
+  });
+
+  sectionsToOpen.forEach(section=>{
     section.classList.add('active');
+    section.style.display='block';
   });
 
   document.querySelectorAll('.nav-item').forEach(item=>{
     item.classList.remove('active');
   });
 
-  const navButton=button || document.querySelector(
-    `.nav-item[data-page="${page}"]`
-  );
+  const navButton=
+    button ||
+    document.querySelector(`.nav-item[data-page="${page}"]`);
 
   if(navButton){
     navButton.classList.add('active');
   }
 
-  document.querySelector('.app-sidebar')?.classList.remove('open');
-  window.scrollTo({top:0,behavior:'smooth'});
+  const sidebar=document.querySelector('.app-sidebar');
+  if(sidebar){
+    sidebar.classList.remove('open');
+  }
+
+  window.scrollTo(0,0);
 
   if(page==='warehouse'){
-    loadWarehouse();
+    safeLoadSection('склад',loadWarehouse);
+  }
+
+  if(page==='fleet'){
+    safeLoadSection('месячный пробег',loadMonthlyMileage)
+      .then(()=>safeLoadSection('машины',loadCars));
+    safeLoadSection('сравнение месяцев',loadMonthlyFleetFinance);
+    safeLoadSection('операции',loadOps);
+  }
+
+  if(page==='drivers'){
+    safeLoadSection('водители',loadCars);
+  }
+
+  if(page==='investors'){
+    safeLoadSection('итоги инвесторов',loadInvestorsSummary);
+    safeLoadSection('инвесторы',loadInvestors);
+  }
+
+  if(page==='dashboard'){
+    safeLoadSection('главные показатели',loadSummary);
   }
 }
-
 function toggleMobileSidebar(){
   document.querySelector('.app-sidebar')?.classList.toggle('open');
 }
@@ -3303,18 +3345,34 @@ async function load(){
 }
 
 
-if(document.getElementById('driverPayments')){
-  driverPayments.innerHTML=`
-    <tr>
-      <td class="raw">Загрузка расчётов водителей…</td>
-    </tr>
-  `;
-}
+document.addEventListener('DOMContentLoaded',()=>{
+  const driverTable=document.getElementById('driverPayments');
 
-msg.addEventListener('keydown',e=>{if(e.key==='Enter')add()});
-preloadWarehouseAutocomplete();
-setupWarehouseAutocomplete();
-load();
+  if(driverTable){
+    driverTable.innerHTML=`
+      <tr>
+        <td class="raw">Загрузка расчётов водителей…</td>
+      </tr>
+    `;
+  }
+
+  const messageInput=document.getElementById('msg');
+
+  if(messageInput){
+    messageInput.addEventListener('keydown',event=>{
+      if(event.key==='Enter'){
+        add();
+      }
+    });
+
+    preloadWarehouseAutocomplete();
+    setupWarehouseAutocomplete();
+  }
+
+  // Принудительно открываем главную страницу после загрузки.
+  showAppPage('dashboard');
+  load();
+});
 </script>
 </body>
 </html>
