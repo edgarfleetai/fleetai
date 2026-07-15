@@ -1344,8 +1344,8 @@ body > *{
         <input id="payment_driver" placeholder="Имя водителя">
       </label>
 
-      <label>Сумма за неделю
-        <input id="payment_amount" type="number" min="0" placeholder="13000">
+      <label>Аренда в сутки
+        <input id="payment_daily_rent" type="number" min="0" placeholder="2000">
       </label>
 
       <label>День расчёта
@@ -1879,26 +1879,26 @@ payment_car.addEventListener('change',()=>{
   const car=paymentCars.find(item=>item.code===payment_car.value);
   if(!car){
     payment_driver.value='';
-    payment_amount.value='';
+    payment_daily_rent.value='';
     payment_date.value='';
     payment_weekday.value='0';
     return;
   }
   payment_driver.value=car.driver||'';
-  payment_amount.value=car.weekly_payment||'';
+  payment_daily_rent.value=car.daily_rent||'';
   payment_date.value=car.next_payment_date||'';
   payment_weekday.value=String(car.payment_weekday||0);
 });
 
 async function saveDriverPayment(){
   if(!payment_car.value){paymentRes.innerText='Сначала выбери машину';return}
-  if(!payment_amount.value){paymentRes.innerText='Укажи сумму недельного платежа';return}
+  if(!payment_daily_rent.value){paymentRes.innerText='Укажи стоимость аренды в сутки';return}
   if(!payment_date.value){paymentRes.innerText='Укажи ближайшую дату оплаты';return}
 
   const payload={
     car_code:payment_car.value,
     driver:payment_driver.value,
-    weekly_payment:Number(payment_amount.value),
+    daily_rent:Number(payment_daily_rent.value),
     payment_weekday:Number(payment_weekday.value),
     next_payment_date:payment_date.value
   };
@@ -1931,12 +1931,56 @@ async function checkPaymentsNow(){
 }
 
 function renderDriverPayments(carsList){
-  const configured=carsList.filter(car=>Number(car.weekly_payment)>0);
+  const configured=carsList.filter(
+    car=>Number(car.daily_rent)>0 || Number(car.weekly_payment)>0
+  );
+
   if(!configured.length){
     driverPayments.innerHTML='<tr><td>Расчёты водителей пока не настроены</td></tr>';
     return;
   }
-  driverPayments.innerHTML=`<tr><th>Машина</th><th>Водитель</th><th>Сумма</th><th>Следующая оплата</th><th>Статус</th><th>Действие</th></tr>${configured.map(car=>`<tr><td>${car.code}</td><td>${car.driver||'Не указан'}</td><td>${rub(car.weekly_payment)}</td><td>${car.next_payment_date||'—'}</td><td>${paymentStatus(car.next_payment_date)}</td><td><button onclick="markPaymentPaid('${car.code}')">Оплачено</button></td></tr>`).join('')}`;
+
+  driverPayments.innerHTML=`
+    <tr>
+      <th>Машина</th>
+      <th>Водитель</th>
+      <th>Ставка</th>
+      <th>Период</th>
+      <th>Дней</th>
+      <th>Простой</th>
+      <th>К оплате</th>
+      <th>Дата расчёта</th>
+      <th>Статус</th>
+      <th>Действие</th>
+    </tr>
+    ${configured.map(car=>{
+      const calc=car.driver_payment||{};
+      return `
+        <tr>
+          <td>${car.code}</td>
+          <td>${car.driver||'Не указан'}</td>
+          <td>${rub(car.daily_rent)} / сутки</td>
+          <td>
+            ${calc.period_start||'—'} —
+            ${calc.period_end||'—'}
+          </td>
+          <td>
+            ${calc.payable_days||0}
+            из ${calc.total_days||0}
+          </td>
+          <td>${calc.downtime_days||0} дн.</td>
+          <td><b>${rub(calc.amount_due||0)}</b></td>
+          <td>${car.next_payment_date||'—'}</td>
+          <td>${paymentStatus(car.next_payment_date)}</td>
+          <td>
+            <button onclick="markPaymentPaid('${car.code}')">
+              Оплачено
+            </button>
+          </td>
+        </tr>
+      `;
+    }).join('')}
+  `;
 }
 
 async function loadCars(){
