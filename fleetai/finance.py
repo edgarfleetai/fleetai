@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from sqlalchemy import func
 
@@ -314,24 +314,69 @@ def investor_balance_for_car(session, car):
 
 
 def period_bounds_for_car(car, now=None):
+    """
+    Расчётный период идёт с 16-го числа по 15-е включительно.
+
+    Внутри программы период хранится как:
+        [16-е 00:00, 16-е следующего месяца 00:00)
+
+    Поэтому все операции 15-го числа входят в старый период,
+    а новый период начинается 16-го числа.
+    """
     now = now or datetime.now()
-    day = max(1, min(int(car.settlement_day or 15), 28))
-    current_start = datetime(now.year, now.month, day)
+
+    closing_day = max(
+        1,
+        min(int(car.settlement_day or 15), 27),
+    )
+    start_day = closing_day + 1
+
+    current_start = datetime(
+        now.year,
+        now.month,
+        start_day,
+    )
 
     if now < current_start:
         if now.month == 1:
-            start = datetime(now.year - 1, 12, day)
+            start = datetime(
+                now.year - 1,
+                12,
+                start_day,
+            )
         else:
-            start = datetime(now.year, now.month - 1, day)
+            start = datetime(
+                now.year,
+                now.month - 1,
+                start_day,
+            )
+
         end = current_start
     else:
         start = current_start
+
         if now.month == 12:
-            end = datetime(now.year + 1, 1, day)
+            end = datetime(
+                now.year + 1,
+                1,
+                start_day,
+            )
         else:
-            end = datetime(now.year, now.month + 1, day)
+            end = datetime(
+                now.year,
+                now.month + 1,
+                start_day,
+            )
 
     return start, end
+
+
+def period_display_end(end):
+    """
+    Техническое окончание 16-го числа отображает
+    как последний включённый день — 15-е число.
+    """
+    return end - timedelta(days=1)
 
 
 def period_bounds_for_investor(cars, now=None):
@@ -362,8 +407,8 @@ def previous_period_bounds_for_car(car, now=None):
     """
     Возвращает полностью завершённый период перед текущим.
 
-    Например, если текущий период 15.07–15.08,
-    предыдущий будет 15.06–15.07.
+    Например, если текущий период 16.07–15.08,
+    предыдущий будет 16.06–15.07.
     """
     current_start, _current_end = period_bounds_for_car(
         car,
@@ -431,7 +476,7 @@ def save_period_snapshot(session, car, start, end, auto=False):
         comment=(
             f"{'Автоматически сохранённый' if auto else 'Расчётный'} "
             f"период {start.strftime('%d.%m.%Y')} - "
-            f"{end.strftime('%d.%m.%Y')}"
+            f"{period_display_end(end).strftime('%d.%m.%Y')}"
         ),
     )
 
