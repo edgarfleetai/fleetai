@@ -1649,11 +1649,339 @@ def api_debug_parse():
     })
 
 
+
+def normalize_history_question_text(value):
+    value = (value or "").lower().replace("ё", "е")
+    value = re.sub(r"[^0-9a-zа-я]+", " ", value)
+    value = re.sub(r"\s+", " ", value).strip()
+    return value
+
+
+def history_word_stem(word):
+    """
+    Простая нормализация русских окончаний для поиска по истории.
+
+    Нужна, чтобы:
+    - наконечник / наконечника / наконечники;
+    - рулевой / рулевого;
+    - колодка / колодки / колодок
+
+    находились как одна деталь.
+    """
+    word = normalize_history_question_text(word)
+
+    endings = (
+        "иями", "ями", "ами", "ого", "ему", "ому",
+        "ыми", "ими", "его", "ая", "яя", "ое", "ее",
+        "ую", "юю", "ов", "ев", "ей", "ам", "ям",
+        "ах", "ях", "ом", "ем", "ы", "и", "а", "я",
+        "у", "ю", "е", "о",
+    )
+
+    for ending in endings:
+        if word.endswith(ending) and len(word) - len(ending) >= 4:
+            return word[:-len(ending)]
+
+    return word
+
+
+def history_tokens(value):
+    stop_words = {
+        "кому", "мы", "меняли", "менял", "заменили", "замена",
+        "ставили", "ставил", "устанавливали", "установили",
+        "последний", "последняя", "последнее", "последние",
+        "раз", "когда", "где", "какой", "какая", "какую",
+        "машина", "машине", "машину", "авто", "было", "был",
+        "была", "кто", "покажи", "найди", "скажи",
+    }
+
+    result = []
+
+    for word in normalize_history_question_text(value).split():
+        if word in stop_words or word.isdigit() or len(word) < 3:
+            continue
+
+        stem = history_word_stem(word)
+
+        if stem and stem not in result:
+            result.append(stem)
+
+    return result
+
+
+def part_history_score(question, part, operation):
+    query_tokens = history_tokens(question)
+
+    searchable = " ".join([
+        part.part_name or "",
+        part.brand or "",
+        part.position or "",
+        operation.description if operation else "",
+        operation.raw_message if operation else "",
+    ])
+
+    searchable_tokens = {
+        history_word_stem(word)
+        for word in normalize_history_question_text(searchable).split()
+        if len(word) >= 3
+    }
+
+    score = 0
+
+    for token in query_tokens:
+        if token in searchable_tokens:
+            score += 25
+            continue
+
+        if any(
+            stored.startswith(token) or token.startswith(stored)
+            for stored in searchable_tokens
+            if len(stored) >= 4
+        ):
+            score += 12
+
+    normalized_question = normalize_history_question_text(question)
+    normalized_part = normalize_history_question_text(part.part_name)
+
+    if normalized_part and normalized_part in normalized_question:
+        score += 100
+
+    return score
+
+
+def answer_history_question(session, message):
+    """
+    Отвечает на вопросы по истории ремонта.
+
+    Примеры:
+    - кому мы меняли рулевой наконечник последний раз;
+    - когда последний раз ставили стойку стаба;
+    - на какой машине меняли компрессор кондиционера;
+    - покажи последние замены колодок.
+    """
+    normalized = normalize_history_question_text(message)
+
+    question_signals = (
+        "кому ",
+        "когда ",
+        "где ",
+        "на какой машине",
+        "последний раз",
+        "последняя замена",
+        "покажи последние",
+        "кто ",
+    )
+
+    if not any(signal in normalized for signal in question_signals):
+        return None
+
+    limit = 1
+
+    if any(
+        phrase in normalized
+        for phrase in (
+            "последние 3",
+            "три последние",
+            "3 последних",
+        )
+    ):
+        limit = 3
+    elif any(
+        phrase in normalized
+        for phrase in (
+            "последние 5",
+            "пять последних",
+            "5 последних",
+        )
+    ):
+        limit = 5
+    elif "последние" in normalized:
+        limit = 5
+
+    candidates = []
+
+    for part in session.query(Part).all():
+        operation = None
+
+        if part.operation_id:
+            operation = (
+                session.query(Operation)
+                .filter_by(id=part.operation_id)
+                .first()
+            )
+
+        score = part_history_score(
+            message,
+            part,
+            operation,
+        )
+
+        if score <= 0:
+            continue
+
+        event_date = (
+            operation.date
+            if operation and operation.date
+            else getattr(part, "date", None)
+        )
+
+        candidates.append({
+            "score": score,
+            "part": part,
+            "operation": operation,
+            "date": event_date or datetime.min,
+        })
+
+    candidates.sort(
+        key=lambda item: (
+            item["score"],
+            item["date"],
+            item["operation"].id if item["operation"] else 0,
+        ),
+        reverse=True,
+    )
+
+    if not candidates:
+        return {
+            "ok": True,
+            "is_answer": True,
+            "message": (
+                "В истории не нашёл подходящую замену. "
+                "Попробуй написать точнее название детали."
+            ),
+        }
+
+    best_score = candidates[0]["score"]
+
+    # Не смешиваем явно нерелевантные результаты.
+    selected = [
+        item
+        for item in candidates
+        if item["score"] >= max(best_score - 20, 10)
+    ][:limit]
+
+    lines = []
+
+    if limit == 1:
+        lines.append("Последняя найденная замена:")
+    else:
+        lines.append(f"Последние найденные замены: {len(selected)}")
+
+    for index, item in enumerate(selected, start=1):
+        part = item["part"]
+        operation = item["operation"]
+
+        car = find_car(session, part.car_code)
+        car_name = (
+            f"{car.brand or ''} {car.model or ''}".strip()
+            if car
+            else ""
+        )
+
+        date_text = (
+            item["date"].strftime("%d.%m.%Y")
+            if item["date"] != datetime.min
+            else "дата не указана"
+        )
+
+        detail_name = part.part_name or "Деталь"
+
+        if part.brand:
+            detail_name += f", фирма {part.brand}"
+
+        if part.position:
+            detail_name += f", {part.position}"
+
+        amount_parts = []
+
+        if part.price:
+            amount_parts.append(f"деталь {int(part.price):,} ₽".replace(",", " "))
+
+        if part.labor:
+            amount_parts.append(f"работа {int(part.labor):,} ₽".replace(",", " "))
+
+        amount_text = (
+            ", ".join(amount_parts)
+            if amount_parts
+            else "стоимость не указана"
+        )
+
+        mileage_text = (
+            f"{int(part.install_mileage):,} км".replace(",", " ")
+            if part.install_mileage
+            else "не указан"
+        )
+
+        raw_text = (
+            operation.raw_message.strip()
+            if operation and operation.raw_message
+            else ""
+        )
+
+        prefix = f"{index}. " if limit > 1 else ""
+
+        lines.append(
+            f"{prefix}Машина {part.car_code}"
+            f"{' — ' + car_name if car_name else ''}"
+        )
+        lines.append(f"Дата: {date_text}")
+        lines.append(f"Деталь: {detail_name}")
+        lines.append(f"Стоимость: {amount_text}")
+        lines.append(f"Пробег: {mileage_text}")
+
+        if raw_text:
+            lines.append(f"Запись: {raw_text}")
+
+        if index < len(selected):
+            lines.append("")
+
+    return {
+        "ok": True,
+        "is_answer": True,
+        "message": "\n".join(lines),
+        "matches": len(selected),
+    }
+
+
+@bp.route("/api/ask-history", methods=["POST"])
+def api_ask_history():
+    payload = request.get_json(silent=True) or {}
+    message = (payload.get("message") or "").strip()
+
+    session = Session()
+
+    try:
+        answer = answer_history_question(session, message)
+
+        if answer is None:
+            return jsonify({
+                "ok": False,
+                "message": "Не понял вопрос по истории ремонта",
+            }), 400
+
+        return jsonify(answer)
+
+    finally:
+        session.close()
+
+
 @bp.route("/api/add", methods=["POST"])
 def api_add():
     payload = request.json or {}
     message = (payload.get("message", "") or "").strip()
     warehouse_item_id = payload.get("warehouse_item_id")
+
+    session = Session()
+    try:
+        history_answer = answer_history_question(
+            session,
+            message,
+        )
+    finally:
+        session.close()
+
+    if history_answer is not None:
+        return jsonify(history_answer)
 
     # Поддержка нескольких записей в одной строке:
     # 703 получил 13000 / 703 доп расходы 41700 инвестор оплатил 25000
