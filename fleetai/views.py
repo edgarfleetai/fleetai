@@ -180,6 +180,628 @@ td,th{padding:9px;border-bottom:1px solid #eee;text-align:left}
   input.msg{width:100%;margin-bottom:8px}
   table{font-size:12px}
 }
+
+/* =========================================================
+   FLEETAI — MINIMAL / PREMIUM THEME
+   ========================================================= */
+
+:root{
+  --page:#f4f3f1;
+  --surface:#ffffff;
+  --surface-soft:#faf9f7;
+  --surface-muted:#f0efed;
+
+  --text:#1f1d1a;
+  --text-soft:#6f6a64;
+  --text-faint:#9a958f;
+
+  --line:#e6e2de;
+  --line-strong:#d7d1cb;
+
+  --primary:#35312d;
+  --primary-hover:#211e1b;
+  --primary-soft:#ebe8e4;
+
+  --danger:#a73a3a;
+  --danger-soft:#fff3f2;
+
+  --warning:#8a6c36;
+  --warning-soft:#fbf6ea;
+
+  --success:#4d6757;
+  --success-soft:#eef5f0;
+
+  --shadow-sm:0 1px 2px rgba(31,29,26,.04);
+  --shadow-md:0 10px 28px rgba(31,29,26,.07);
+  --shadow-lg:0 20px 50px rgba(31,29,26,.10);
+
+  --radius-sm:10px;
+  --radius-md:14px;
+  --radius-lg:20px;
+}
+
+*{
+  box-sizing:border-box;
+}
+
+html{
+  scroll-behavior:smooth;
+}
+
+body{
+  margin:0;
+  background:
+    radial-gradient(circle at top left, rgba(255,255,255,.9), transparent 28%),
+    var(--page);
+  color:var(--text);
+  font-family:
+    Inter,
+    ui-sans-serif,
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    sans-serif;
+  line-height:1.5;
+}
+
+body::before{
+  content:"";
+  position:fixed;
+  inset:0 0 auto 0;
+  height:1px;
+  background:rgba(255,255,255,.9);
+  z-index:1000;
+}
+
+h1,h2,h3,h4{
+  color:var(--text);
+  letter-spacing:-.02em;
+}
+
+h1{
+  font-size:30px;
+  font-weight:750;
+  margin:0 0 6px;
+}
+
+h2{
+  font-size:20px;
+  font-weight:700;
+}
+
+h3{
+  font-size:16px;
+  font-weight:700;
+}
+
+p{
+  color:var(--text-soft);
+}
+
+a{
+  color:var(--text);
+}
+
+/* ---------- PAGE WIDTH ---------- */
+
+body > *{
+  max-width:1440px;
+  margin-left:auto;
+  margin-right:auto;
+}
+
+body > h1,
+body > .top-actions,
+body > #summary,
+body > #fleetStatus,
+body > .card,
+body > #carCard{
+  width:calc(100% - 40px);
+}
+
+/* ---------- CARDS ---------- */
+
+.card,
+.warehouse-item,
+.daycard,
+.status-column,
+.investor-card,
+.car-card{
+  background:rgba(255,255,255,.92);
+  border:1px solid var(--line);
+  border-radius:var(--radius-lg);
+  box-shadow:var(--shadow-sm);
+}
+
+.card{
+  padding:20px;
+  margin-top:14px;
+}
+
+.card:hover,
+.warehouse-item:hover,
+.daycard:hover,
+.status-column:hover{
+  box-shadow:var(--shadow-md);
+  transition:box-shadow .2s ease, border-color .2s ease;
+}
+
+.section-head{
+  align-items:center;
+  padding-bottom:2px;
+}
+
+.section-head h2{
+  margin:0;
+}
+
+/* ---------- TOP ACTIONS ---------- */
+
+.top-actions{
+  position:sticky;
+  top:12px;
+  z-index:40;
+  display:flex;
+  justify-content:flex-end;
+  pointer-events:none;
+}
+
+.top-actions button{
+  pointer-events:auto;
+}
+
+.icon-button{
+  width:42px;
+  height:42px;
+  border-radius:14px;
+  font-size:22px;
+  background:var(--primary);
+  box-shadow:var(--shadow-md);
+}
+
+/* ---------- BUTTONS ---------- */
+
+button{
+  appearance:none;
+  border:1px solid transparent;
+  border-radius:12px;
+  padding:9px 14px;
+  background:var(--primary);
+  color:#fff;
+  font-weight:650;
+  font-size:14px;
+  cursor:pointer;
+  transition:
+    background .16s ease,
+    border-color .16s ease,
+    color .16s ease,
+    transform .16s ease,
+    box-shadow .16s ease;
+}
+
+button:hover{
+  background:var(--primary-hover);
+  transform:translateY(-1px);
+  box-shadow:0 8px 20px rgba(31,29,26,.12);
+}
+
+button:active{
+  transform:translateY(0);
+  box-shadow:none;
+}
+
+button.secondary,
+.section-toggle{
+  background:var(--surface);
+  color:var(--text);
+  border-color:var(--line-strong);
+}
+
+button.secondary:hover,
+.section-toggle:hover{
+  background:var(--surface-soft);
+  border-color:#bfb8b1;
+}
+
+button.danger{
+  background:var(--surface);
+  color:var(--danger);
+  border-color:#e8c7c5;
+}
+
+button.danger:hover{
+  background:var(--danger-soft);
+  border-color:#d7a5a2;
+}
+
+button.small{
+  padding:7px 10px;
+  border-radius:10px;
+  font-size:12px;
+}
+
+/* ---------- INPUTS ---------- */
+
+input,
+select,
+textarea{
+  width:100%;
+  min-height:42px;
+  border:1px solid var(--line-strong);
+  border-radius:12px;
+  background:rgba(255,255,255,.96);
+  color:var(--text);
+  padding:10px 12px;
+  font:inherit;
+  outline:none;
+  transition:
+    border-color .16s ease,
+    box-shadow .16s ease,
+    background .16s ease;
+}
+
+input::placeholder,
+textarea::placeholder{
+  color:var(--text-faint);
+}
+
+input:focus,
+select:focus,
+textarea:focus{
+  border-color:#8e8881;
+  box-shadow:0 0 0 4px rgba(53,49,45,.08);
+  background:#fff;
+}
+
+/* ---------- SUMMARY ---------- */
+
+.grid{
+  gap:10px !important;
+}
+
+.stat,
+.investor-kpi,
+.flow-item,
+.metric{
+  background:rgba(255,255,255,.94);
+  border:1px solid var(--line);
+  border-radius:16px;
+  box-shadow:var(--shadow-sm);
+}
+
+.stat{
+  padding:16px;
+  color:var(--text-soft);
+  font-size:13px;
+}
+
+.stat b{
+  display:block;
+  margin-top:6px;
+  color:var(--text);
+  font-size:22px;
+  font-weight:760;
+}
+
+/* ---------- STATUS BOARD ---------- */
+
+.status-board{
+  gap:10px;
+}
+
+.status-column{
+  padding:16px;
+}
+
+.status-column.downtime{
+  background:var(--warning-soft);
+  border-color:#eadcc0;
+}
+
+.status-title{
+  font-size:14px;
+}
+
+.status-ok{
+  color:var(--success);
+}
+
+.status-off{
+  color:var(--warning);
+}
+
+.status-list{
+  gap:7px;
+}
+
+.car-status-chip{
+  background:var(--surface-soft);
+  border:1px solid var(--line);
+  border-radius:12px;
+  padding:9px 11px;
+}
+
+.car-status-chip.off{
+  background:#f8efe2;
+}
+
+.car-status-chip:hover{
+  border-color:#bdb6af;
+  box-shadow:var(--shadow-sm);
+}
+
+/* ---------- TABLES ---------- */
+
+table{
+  width:100%;
+  border-collapse:separate;
+  border-spacing:0;
+  overflow:hidden;
+  border:1px solid var(--line);
+  border-radius:14px;
+  background:var(--surface);
+}
+
+th{
+  background:var(--surface-soft);
+  color:var(--text-soft);
+  font-size:12px;
+  font-weight:700;
+  letter-spacing:.01em;
+  text-align:left;
+  padding:11px 12px;
+  border-bottom:1px solid var(--line);
+}
+
+td{
+  color:var(--text);
+  padding:11px 12px;
+  border-bottom:1px solid #efedea;
+  vertical-align:top;
+}
+
+tr:last-child td{
+  border-bottom:none;
+}
+
+tbody tr:hover td{
+  background:#fbfaf8;
+}
+
+/* ---------- BADGES ---------- */
+
+.badge{
+  display:inline-flex;
+  align-items:center;
+  gap:5px;
+  border-radius:999px;
+  padding:5px 9px;
+  background:var(--primary-soft);
+  color:#4e4944;
+  font-size:11px;
+  font-weight:700;
+}
+
+.badge-working{
+  background:var(--success-soft);
+  color:var(--success);
+}
+
+.badge-downtime{
+  background:var(--warning-soft);
+  color:var(--warning);
+}
+
+.good{
+  color:var(--success) !important;
+}
+
+.bad{
+  color:var(--danger) !important;
+}
+
+.raw{
+  color:var(--text-soft) !important;
+}
+
+/* ---------- MAIN COMMAND ---------- */
+
+.command-box{
+  gap:10px;
+}
+
+.command-box .msg{
+  min-height:46px;
+  font-size:15px;
+}
+
+.command-box > button{
+  min-height:46px;
+  padding-left:20px;
+  padding-right:20px;
+}
+
+.warehouse-suggestions{
+  border-color:var(--line);
+  border-radius:16px;
+  box-shadow:var(--shadow-lg);
+  overflow:hidden;
+}
+
+.warehouse-suggestion{
+  padding:12px 14px;
+}
+
+.warehouse-suggestion:hover,
+.warehouse-suggestion.active{
+  background:var(--surface-soft);
+}
+
+/* ---------- WAREHOUSE ---------- */
+
+.warehouse-grid{
+  gap:10px;
+}
+
+.warehouse-item{
+  padding:16px;
+}
+
+.warehouse-name{
+  font-size:15px;
+  font-weight:720;
+}
+
+.warehouse-stock{
+  font-size:28px;
+  font-weight:760;
+  letter-spacing:-.03em;
+}
+
+.warehouse-item.low{
+  background:var(--warning-soft);
+  border-color:#eadcc0;
+}
+
+.warehouse-actions{
+  gap:6px;
+}
+
+.warehouse-actions button{
+  background:var(--surface);
+  color:var(--text);
+  border-color:var(--line);
+}
+
+.warehouse-actions button:hover{
+  background:var(--surface-soft);
+}
+
+.warehouse-actions button.danger{
+  color:var(--danger);
+}
+
+/* ---------- INVESTOR AREA ---------- */
+
+.investor-summary-grid{
+  gap:10px !important;
+}
+
+.investor-kpi{
+  padding:15px;
+}
+
+.investor-kpi span{
+  color:var(--text-soft);
+}
+
+.investor-kpi b{
+  color:var(--text);
+}
+
+.investor-card{
+  padding:18px;
+}
+
+.investor-flow{
+  gap:8px;
+}
+
+.flow-item,
+.metric{
+  padding:12px;
+}
+
+/* ---------- CALENDAR / EVENTS ---------- */
+
+.calendar{
+  gap:10px;
+}
+
+.daycard{
+  padding:14px;
+}
+
+.event{
+  border:1px solid var(--line);
+  background:var(--surface-soft);
+  border-radius:12px;
+  padding:11px;
+  margin-top:8px;
+}
+
+.event.income{
+  background:var(--success-soft);
+  border-color:#d7e5db;
+}
+
+.event.expense,
+.event.repair,
+.event.service{
+  background:#faf7f3;
+}
+
+.event.downtime{
+  background:var(--warning-soft);
+}
+
+/* ---------- SCROLLBARS ---------- */
+
+*{
+  scrollbar-width:thin;
+  scrollbar-color:#c9c3bd transparent;
+}
+
+*::-webkit-scrollbar{
+  width:8px;
+  height:8px;
+}
+
+*::-webkit-scrollbar-thumb{
+  background:#c9c3bd;
+  border-radius:999px;
+}
+
+/* ---------- MOBILE ---------- */
+
+@media(max-width:800px){
+  body > h1,
+  body > .top-actions,
+  body > #summary,
+  body > #fleetStatus,
+  body > .card,
+  body > #carCard{
+    width:calc(100% - 20px);
+  }
+
+  h1{
+    font-size:24px;
+  }
+
+  .card{
+    padding:15px;
+    border-radius:16px;
+  }
+
+  .stat{
+    padding:13px;
+  }
+
+  .stat b{
+    font-size:19px;
+  }
+
+  table{
+    display:block;
+    overflow-x:auto;
+    white-space:nowrap;
+  }
+
+  .command-box > button{
+    width:100%;
+  }
+}
+
 </style>
 </head>
 
