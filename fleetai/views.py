@@ -3270,14 +3270,45 @@ async function addCar(){
     document.getElementById('addCarPanel').classList.remove('open');
   }
 }
+async function safeLoadSection(name, loader){
+  try{
+    await loader();
+    return true;
+  }catch(error){
+    console.error(`Ошибка загрузки раздела ${name}:`,error);
+    return false;
+  }
+}
+
 async function load(){
-  await loadSummary();
-  await loadInvestorsSummary();
-  await loadInvestors();
-  await loadMonthlyMileage();
-  await loadCars();
-  await loadMonthlyFleetFinance();
-  await loadOps();
+  // Машины и водители загружаются первыми и независимо от инвесторов.
+  // Ошибка одного раздела больше не останавливает остальные.
+  await safeLoadSection(
+    'месячный пробег',
+    loadMonthlyMileage
+  );
+
+  await safeLoadSection(
+    'машины и водители',
+    loadCars
+  );
+
+  await Promise.all([
+    safeLoadSection('главные показатели',loadSummary),
+    safeLoadSection('итоги инвесторов',loadInvestorsSummary),
+    safeLoadSection('инвесторы',loadInvestors),
+    safeLoadSection('сравнение месяцев',loadMonthlyFleetFinance),
+    safeLoadSection('последние операции',loadOps)
+  ]);
+}
+
+
+if(document.getElementById('driverPayments')){
+  driverPayments.innerHTML=`
+    <tr>
+      <td class="raw">Загрузка расчётов водителей…</td>
+    </tr>
+  `;
 }
 
 msg.addEventListener('keydown',e=>{if(e.key==='Enter')add()});
