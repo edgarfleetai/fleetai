@@ -3759,30 +3759,54 @@ def api_cars_monthly_mileage():
 
 @bp.route("/api/cars")
 def api_cars():
+    """
+    Возвращает список машин.
+
+    Расчёты водителей, инвесторов и простоев выполняются отдельно
+    для каждой машины. Ошибка одного дополнительного расчёта больше
+    не может скрыть весь автопарк.
+    """
     session = Session()
 
     try:
-        cleanup_legacy_investor_mess(session)
-        reconcile_all_downtimes(session, commit=True)
-        rows = []
+        cars_query = session.query(Car).order_by(Car.code.asc()).all()
+        result = []
 
-        for car in session.query(Car).order_by(Car.code).all():
-            (
-                income,
-                expenses,
-                investments,
-                payouts,
-                investor_invested,
-                downtime_days,
-            ) = car_finance(session, car.code)
+        for car in cars_query:
+            code = normalize_code(getattr(car, "code", ""))
 
-            active_downtime = current_downtime_for_car(
-                session,
-                car.code,
-            )
+            income = 0
+            expenses = 0
+            investments = 0
+            downtime_days = 0
 
-            # Ошибка в расчёте одного водителя не должна скрывать
-            # весь список машин.
+            try:
+                (
+                    income,
+                    expenses,
+                    investments,
+                    _payouts,
+                    _investor_invested,
+                    downtime_days,
+                ) = car_finance(session, code)
+            except Exception as error:
+                print(
+                    f"Ошибка финансов машины {code}: "
+                    f"{type(error).__name__}: {error}"
+                )
+
+            try:
+                active_downtime = current_downtime_for_car(
+                    session,
+                    code,
+                )
+            except Exception as error:
+                print(
+                    f"Ошибка простоя машины {code}: "
+                    f"{type(error).__name__}: {error}"
+                )
+                active_downtime = None
+
             try:
                 driver_payment = calculate_driver_payment(
                     session,
@@ -3791,15 +3815,19 @@ def api_cars():
                 driver_payment_error = ""
             except Exception as error:
                 print(
-                    f"Ошибка расчёта водителя для машины "
-                    f"{car.code}: {type(error).__name__}: {error}"
+                    f"Ошибка расчёта водителя {code}: "
+                    f"{type(error).__name__}: {error}"
                 )
 
                 driver_payment = {
                     "daily_rent": int(
                         getattr(car, "daily_rent", 0) or 0
                     ),
-                    "effective_daily_rent": effective_daily_rent(car),
+                    "effective_daily_rent": (
+                        effective_daily_rent(car)
+                        if "effective_daily_rent" in globals()
+                        else 0
+                    ),
                     "weekly_payment": int(
                         getattr(car, "weekly_payment", 0) or 0
                     ),
@@ -3818,23 +3846,42 @@ def api_cars():
                     f"{type(error).__name__}: {error}"
                 )
 
-            rows.append({
-                "code": car.code,
-                "brand": car.brand,
-                "model": car.model,
-                "plate": car.plate,
-                "mileage": car.current_mileage,
-                "income": income,
-                "expenses": expenses,
-                "profit": income - expenses,
-                "purchase_price": car.purchase_price or 0,
-                "full_cost": (
-                    (car.purchase_price or 0) + investments
+            mileage = int(
+                getattr(car, "current_mileage", 0)
+                or getattr(car, "mileage", 0)
+                or 0
+            )
+
+            result.append({
+                "code": code,
+                "brand": getattr(car, "brand", "") or "",
+                "model": getattr(car, "model", "") or "",
+                "plate": getattr(car, "plate", "") or "",
+                "mileage": mileage,
+
+                "income": int(income or 0),
+                "expenses": int(expenses or 0),
+                "profit": int((income or 0) - (expenses or 0)),
+
+                "purchase_price": int(
+                    getattr(car, "purchase_price", 0) or 0
                 ),
-                "owner_type": car.owner_type or "own",
-                "investor_name": car.investor_name or "",
-                "investor_percent": car.investor_percent or 0,
-                "downtime_days": downtime_days,
+                "full_cost": int(
+                    (getattr(car, "purchase_price", 0) or 0)
+                    + (investments or 0)
+                ),
+
+                "owner_type": (
+                    getattr(car, "owner_type", "own") or "own"
+                ),
+                "investor_name": (
+                    getattr(car, "investor_name", "") or ""
+                ),
+                "investor_percent": int(
+                    getattr(car, "investor_percent", 0) or 0
+                ),
+
+                "downtime_days": int(downtime_days or 0),
                 "is_in_downtime": bool(active_downtime),
                 "current_status": (
                     "Простой"
@@ -3842,35 +3889,42 @@ def api_cars():
                     else "Работает"
                 ),
                 "downtime_start": (
-                    active_downtime["start_date"]
+                    active_downtime.get("start_date", "")
                     if active_downtime
                     else ""
                 ),
-                "current_downtime_days": (
-                    active_downtime["days"]
+                "current_downtime_days": int(
+                    active_downtime.get("days", 0)
                     if active_downtime
                     else 0
                 ),
                 "downtime_reason": (
-                    active_downtime["reason"]
+                    active_downtime.get("reason", "")
                     if active_downtime
                     else ""
                 ),
                 "downtime_comment": (
-                    active_downtime["comment"]
+                    active_downtime.get("comment", "")
                     if active_downtime
                     else ""
                 ),
-                "settlement_day": car.settlement_day or 15,
-                "driver": car.driver or "",
-                "weekly_payment": (
+
+                "settlement_day": int(
+                    getattr(car, "settlement_day", 15) or 15
+                ),
+                "driver": getattr(car, "driver", "") or "",
+                "weekly_payment": int(
                     getattr(car, "weekly_payment", 0) or 0
                 ),
-                "daily_rent": (
+                "daily_rent": int(
                     getattr(car, "daily_rent", 0) or 0
                 ),
-                "effective_daily_rent": effective_daily_rent(car),
-                "payment_weekday": (
+                "effective_daily_rent": (
+                    effective_daily_rent(car)
+                    if "effective_daily_rent" in globals()
+                    else 0
+                ),
+                "payment_weekday": int(
                     getattr(car, "payment_weekday", 0) or 0
                 ),
                 "last_payment_date": (
@@ -3879,19 +3933,19 @@ def api_cars():
                 "next_payment_date": (
                     getattr(car, "next_payment_date", "") or ""
                 ),
-                "driver_payment": driver_payment,
-                "driver_payment_error": driver_payment_error,
-                "payment_notifications": (
+                "payment_notifications": int(
                     getattr(car, "payment_notifications", 0) or 0
                 ),
+
+                "driver_payment": driver_payment,
+                "driver_payment_error": driver_payment_error,
             })
 
-        return jsonify(rows)
+        return jsonify(result)
 
     except Exception as error:
-        session.rollback()
         print(
-            "Ошибка /api/cars:",
+            "Критическая ошибка /api/cars:",
             type(error).__name__,
             str(error),
         )
@@ -3899,7 +3953,7 @@ def api_cars():
         return jsonify({
             "ok": False,
             "message": (
-                "Не удалось загрузить машины: "
+                "Не удалось загрузить автопарк: "
                 f"{type(error).__name__}: {error}"
             ),
         }), 500
