@@ -1347,6 +1347,129 @@ def deduct_from_warehouse(session, op, car, data):
     }
 
 
+def enforce_repair_total_from_raw(data):
+    """
+    Финальная серверная проверка стоимости ремонта.
+
+    Не зависит от parser.py и понимает:
+    - цена 1000
+    - цена 1000р
+    - стоимость 1 000 руб.
+    - работа 700
+    - ремонт 700р
+    """
+    if data.get("type") not in ("repair", "service", "expense"):
+        return data
+
+    raw = (data.get("raw") or "").lower().replace("ё", "е")
+
+    if not raw:
+        return data
+
+    def to_int(raw_number):
+        cleaned = re.sub(r"[^\d]", "", raw_number or "")
+        return int(cleaned) if cleaned else 0
+
+    # Сначала вариант с разделителями тысяч, затем обычное число.
+    # Важно: старый порядок мог прочитать 1000 как 100.
+    number_pattern = (
+        r"(\d{1,3}(?:[ \u00a0]\d{3})+|\d{1,9})(?!\d)"
+    )
+
+    # Цена деталей: поддерживаем несколько упоминаний цены.
+    part_price_matches = re.findall(
+        rf"\b(?:цена|стоимость|деталь|запчасть)\s*[:=-]?\s*"
+        rf"{number_pattern}\s*(?:₽|р\.?|руб\.?|рублей)?",
+        raw,
+    )
+
+    # Работа может быть указана словами «работа» или «ремонт».
+    labor_matches = re.findall(
+        rf"\b(?:работа|за\s+работу|ремонт)\s*[:=-]?\s*"
+        rf"{number_pattern}\s*(?:₽|р\.?|руб\.?|рублей)?",
+        raw,
+    )
+
+    part_price = sum(to_int(value) for value in part_price_matches)
+    labor = sum(to_int(value) for value in labor_matches)
+
+    # Если явных меток нет, используем все денежные числа,
+    # кроме кода машины и пробега.
+    if part_price == 0 and labor == 0:
+        car_code = normalize_code(data.get("car_code"))
+        mileage = data.get("mileage")
+        values = []
+
+        for match in re.finditer(
+            rf"(?<!\d){number_pattern}\s*(?:₽|р\.?|руб\.?|рублей)?",
+            raw,
+        ):
+            value = to_int(match.group(1))
+
+            if car_code and str(value) == str(car_code):
+                continue
+            if mileage and value == int(mileage):
+                continue
+
+            values.append(value)
+
+        if values:
+            # Если парсер уже определил работу, сохраняем её,
+            # остальное считаем стоимостью деталей.
+            existing_labor = int(data.get("labor") or 0)
+            if existing_labor and existing_labor in values:
+                labor = existing_labor
+                removed = False
+                remaining = []
+
+                for value in values:
+                    if not removed and value == existing_labor:
+                        removed = True
+                        continue
+                    remaining.append(value)
+
+                part_price = sum(remaining)
+            else:
+                part_price = sum(values)
+
+    # Явные значения из исходной команды имеют приоритет.
+    if part_price or labor:
+        data["part_price"] = part_price
+        data["labor"] = labor
+        data["total"] = part_price + labor
+
+        parts = data.get("parts") or []
+
+        if parts:
+            # Распределяем итоговую стоимость деталей без потери суммы.
+            existing_prices = sum(
+                int(item.get("price") or 0)
+                for item in parts
+            )
+            difference = part_price - existing_prices
+
+            if difference != 0:
+                target = next(
+                    (
+                        item for item in parts
+                        if not int(item.get("price") or 0)
+                    ),
+                    parts[-1],
+                )
+                target["price"] = max(
+                    int(target.get("price") or 0) + difference,
+                    0,
+                )
+
+            # Работа хранится только у первой детали.
+            for index, item in enumerate(parts):
+                item["labor"] = labor if index == 0 else 0
+
+            data["parts"] = parts
+
+    return data
+
+
 def save_operation(data):
     data = enforce_repair_total_from_raw(data)
     session = Session()
