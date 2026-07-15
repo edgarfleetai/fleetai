@@ -79,7 +79,7 @@ td,th{padding:9px;border-bottom:1px solid #eee;text-align:left}
 .warehouse-item.low{border-color:#f97316;background:#fff7ed}
 .warehouse-name{font-weight:700;font-size:16px}
 .warehouse-stock{font-size:24px;font-weight:800;margin:8px 0}
-.warehouse-form{display:grid;grid-template-columns:repeat(6,minmax(130px,1fr));gap:8px;align-items:end}
+.warehouse-form{display:grid;grid-template-columns:repeat(7,minmax(120px,1fr));gap:8px;align-items:end}
 .warehouse-restock{display:grid;grid-template-columns:2fr 1fr 2fr auto;gap:8px;align-items:end;margin-top:12px}
 
 .status-board{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:14px 0}
@@ -339,6 +339,10 @@ td,th{padding:9px;border-bottom:1px solid #eee;text-align:left}
     <div class="warehouse-form">
       <input id="warehouse_part" placeholder="Название детали">
       <input id="warehouse_brand" placeholder="Бренд, например AMD">
+      <input
+        id="warehouse_variant"
+        placeholder="Исполнение: задние барабанные"
+      >
       <input id="warehouse_quantity" type="number" min="0" placeholder="Количество">
       <input id="warehouse_min" type="number" min="0" placeholder="Минимум">
       <input id="warehouse_shelf" placeholder="Полка">
@@ -1049,7 +1053,8 @@ function warehouseItemScore(item,input){
 
   const name=normalizeWarehouseSearch(item.part_name);
   const brand=normalizeWarehouseSearch(item.brand);
-  const haystack=(name+' '+brand).trim();
+  const variant=normalizeWarehouseSearch(item.variant);
+  const haystack=(name+' '+brand+' '+variant).trim();
 
   let score=0;
 
@@ -1124,7 +1129,9 @@ function renderWarehouseSuggestions(){
       >
         <div>
           <div class="warehouse-suggestion-name">
-            ${item.part_name}${item.brand?' · '+item.brand:''}
+            ${item.part_name}
+            ${item.brand?' · '+item.brand:''}
+            ${item.variant?' · '+item.variant:''}
           </div>
           <div class="warehouse-suggestion-meta">
             ${item.shelf?'Полка: '+item.shelf+' · ':''}
@@ -1164,6 +1171,10 @@ function selectWarehouseSuggestion(itemId){
     ? ` фирма ${item.brand.trim()}`
     : '';
 
+  const variantText=item.variant
+    ? ` исполнение ${item.variant.trim()}`
+    : '';
+
   // Не пытаемся угадать сокращённое название.
   // Добавляем точное складское название отдельной меткой.
   if(!normalizeWarehouseSearch(value).includes(
@@ -1179,6 +1190,15 @@ function selectWarehouseSuggestion(itemId){
     )
   ){
     value+=brandText;
+  }
+
+  if(
+    item.variant &&
+    !normalizeWarehouseSearch(value).includes(
+      normalizeWarehouseSearch(item.variant)
+    )
+  ){
+    value+=variantText;
   }
 
   if(!normalizeWarehouseSearch(value).includes('со склада')){
@@ -1340,7 +1360,7 @@ async function loadWarehouse(){
     '<option value="">Выбери деталь</option>'+
     items.map(i=>`
       <option value="${i.id}">
-        ${i.part_name} ${i.brand||''} — ${i.quantity} шт.
+        ${i.part_name} ${i.brand||''}${i.variant?' · '+i.variant:''} — ${i.quantity} шт.
       </option>
     `).join('');
 
@@ -1353,6 +1373,7 @@ async function loadWarehouse(){
     <div class="warehouse-item ${i.low_stock?'low':''}">
       <div class="warehouse-name">
         ${i.part_name} ${i.brand||''}
+        ${i.variant?`<div class="raw">${i.variant}</div>`:''}
       </div>
       <div class="warehouse-stock">${i.quantity} шт.</div>
       <div class="raw">
@@ -1368,6 +1389,7 @@ async function addWarehouseItem(){
   const payload={
     part_name:warehouse_part.value,
     brand:warehouse_brand.value,
+    variant:warehouse_variant.value,
     quantity:Number(warehouse_quantity.value||0),
     min_quantity:Number(warehouse_min.value||0),
     shelf:warehouse_shelf.value
@@ -1384,6 +1406,7 @@ async function addWarehouseItem(){
   if(r.ok){
     warehouse_part.value='';
     warehouse_brand.value='';
+    warehouse_variant.value='';
     warehouse_quantity.value='';
     warehouse_min.value='';
     warehouse_shelf.value='';
