@@ -49,6 +49,7 @@ from .finance import (
     car_finance,
     investor_balance_for_car,
     period_bounds_for_car,
+    period_bounds_for_investor,
     calculate_period_for_car,
     close_period,
 )
@@ -4037,7 +4038,17 @@ def api_period(code):
         "closed_at": p.closed_at.strftime("%d.%m.%Y %H:%M") if p.closed_at else "",
     } for p in session.query(SettlementPeriod).filter(func.trim(SettlementPeriod.car_code) == normalize_code(car.code)).order_by(SettlementPeriod.id.desc()).all()]
     session.close()
-    return jsonify({"ok": True, "settlement_day": car.settlement_day or 15, "current_period": {"start_date": start.strftime("%d.%m.%Y"), "end_date": end.strftime("%d.%m.%Y"), **calc}, "closed_periods": periods})
+    return jsonify({
+        "ok": True,
+        "period_source": "current_auto",
+        "settlement_day": car.settlement_day or 15,
+        "current_period": {
+            "start_date": start.strftime("%d.%m.%Y"),
+            "end_date": end.strftime("%d.%m.%Y"),
+            **calc,
+        },
+        "closed_periods": periods,
+    })
 
 
 @bp.route("/api/close-period/<code>", methods=["POST"])
@@ -5408,27 +5419,12 @@ def test_investor_report(investor_name):
                 "message": f"Инвестор «{investor_name}» не найден",
             }), 404
 
-        car_codes = [normalize_code(car.code) for car in cars]
-
-        latest_period = (
-            session.query(SettlementPeriod)
-            .filter(
-                func.trim(SettlementPeriod.car_code).in_(car_codes)
-            )
-            .order_by(
-                SettlementPeriod.end_date.desc(),
-                SettlementPeriod.id.desc(),
-            )
-            .first()
-        )
-
-        if latest_period:
-            period_start = latest_period.start_date
-            period_end = latest_period.end_date
-        else:
-            # Если ещё ничего не закрывали, формируем текущий период
-            # по расчётному дню первой машины.
-            period_start, period_end = period_bounds_for_car(cars[0])
+        # ВАЖНО:
+        # PDF всегда строится за текущий календарный расчётный период.
+        # Последний закрытый SettlementPeriod используется только для
+        # определения статуса машины и истории, но больше не управляет
+        # датами нового отчёта.
+        period_start, period_end = period_bounds_for_investor(cars)
 
         report_rows = []
 
@@ -5733,6 +5729,7 @@ def test_investor_report(investor_name):
         print(f"Ошибка отчёта инвестора: {error}")
 
         return jsonify({
+            "period_source": "current_auto",
             "ok": False,
             "message": f"Ошибка создания отчёта: {error}",
         }), 500
