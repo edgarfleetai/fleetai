@@ -1178,6 +1178,80 @@ body > *{
   font-weight:500;
 }
 
+
+/* ===== MONTHLY FINANCE COMPARISON ===== */
+
+.fleet-finance-strip{
+  display:grid;
+  grid-template-columns:repeat(3,minmax(0,1fr));
+  gap:10px;
+  margin-bottom:12px;
+}
+
+.fleet-finance-card{
+  min-width:0;
+  padding:16px 18px;
+  border:1px solid var(--line);
+  border-radius:16px;
+  background:rgba(255,255,255,.94);
+  box-shadow:var(--shadow-sm);
+}
+
+.fleet-finance-title{
+  color:var(--text-soft);
+  font-size:12px;
+  font-weight:650;
+}
+
+.fleet-finance-value{
+  margin-top:6px;
+  color:var(--text);
+  font-size:25px;
+  font-weight:760;
+  letter-spacing:-.03em;
+}
+
+.fleet-finance-compare{
+  display:flex;
+  align-items:center;
+  gap:7px;
+  margin-top:8px;
+  color:var(--text-soft);
+  font-size:11px;
+}
+
+.finance-trend{
+  width:23px;
+  height:23px;
+  display:inline-grid;
+  place-items:center;
+  flex:0 0 23px;
+  border-radius:7px;
+  font-size:15px;
+  font-weight:800;
+}
+
+.finance-trend.up{
+  color:#496454;
+  background:#edf4ef;
+}
+
+.finance-trend.down{
+  color:#a04848;
+  background:#fbefee;
+}
+
+.finance-trend.flat{
+  color:#756f68;
+  background:#f0eeeb;
+}
+
+@media(max-width:800px){
+  .fleet-finance-strip{
+    grid-template-columns:1fr;
+  }
+}
+
 </style>
 </head>
 
@@ -1479,6 +1553,36 @@ body > *{
 </section>
 
 <section id="page-fleet-continuation" class="app-page app-page-linked" data-linked-page="fleet">
+
+<div class="fleet-finance-strip" id="fleetMonthlyFinance">
+  <div class="fleet-finance-card">
+    <div class="fleet-finance-title">Доход за месяц</div>
+    <div class="fleet-finance-value" id="monthIncome">—</div>
+    <div class="fleet-finance-compare">
+      <span id="monthIncomeTrend" class="finance-trend flat">→</span>
+      <span id="monthIncomePrevious">Прошлый месяц: —</span>
+    </div>
+  </div>
+
+  <div class="fleet-finance-card">
+    <div class="fleet-finance-title">Расход за месяц</div>
+    <div class="fleet-finance-value" id="monthExpenses">—</div>
+    <div class="fleet-finance-compare">
+      <span id="monthExpensesTrend" class="finance-trend flat">→</span>
+      <span id="monthExpensesPrevious">Прошлый месяц: —</span>
+    </div>
+  </div>
+
+  <div class="fleet-finance-card">
+    <div class="fleet-finance-title">Прибыль за месяц</div>
+    <div class="fleet-finance-value" id="monthProfit">—</div>
+    <div class="fleet-finance-compare">
+      <span id="monthProfitTrend" class="finance-trend flat">→</span>
+      <span id="monthProfitPrevious">Прошлый месяц: —</span>
+    </div>
+  </div>
+</div>
+
 <div class="card">
   <div class="section-head">
     <div>
@@ -1981,6 +2085,54 @@ function renderDriverPayments(carsList){
       `;
     }).join('')}
   `;
+}
+
+
+function financeTrendSymbol(trend){
+  if(trend==='up')return '↗';
+  if(trend==='down')return '↘';
+  return '→';
+}
+
+function renderMonthlyMetric(prefix,metric){
+  const value=document.getElementById(`month${prefix}`);
+  const previous=document.getElementById(
+    `month${prefix}Previous`
+  );
+  const trend=document.getElementById(
+    `month${prefix}Trend`
+  );
+
+  if(!value || !previous || !trend){
+    return;
+  }
+
+  value.textContent=rub(metric.current||0);
+
+  const percent=Number(metric.change_percent||0);
+  const sign=percent>0?'+':'';
+
+  previous.textContent=
+    `Прошлый месяц: ${rub(metric.previous||0)} · ${sign}${percent}%`;
+
+  trend.className=`finance-trend ${metric.trend||'flat'}`;
+  trend.textContent=financeTrendSymbol(metric.trend);
+}
+
+async function loadMonthlyFleetFinance(){
+  try{
+    const data=await api('/api/cars-monthly-finance');
+
+    if(!data.ok){
+      return;
+    }
+
+    renderMonthlyMetric('Income',data.income);
+    renderMonthlyMetric('Expenses',data.expenses);
+    renderMonthlyMetric('Profit',data.profit);
+  }catch(error){
+    console.error('Не удалось загрузить показатели месяца',error);
+  }
 }
 
 async function loadCars(){
@@ -2895,7 +3047,14 @@ async function addCar(){
     document.getElementById('addCarPanel').classList.remove('open');
   }
 }
-async function load(){await loadSummary();await loadInvestorsSummary();await loadInvestors();await loadCars();await loadOps()}
+async function load(){
+  await loadSummary();
+  await loadInvestorsSummary();
+  await loadInvestors();
+  await loadCars();
+  await loadMonthlyFleetFinance();
+  await loadOps();
+}
 
 msg.addEventListener('keydown',e=>{if(e.key==='Enter')add()});
 preloadWarehouseAutocomplete();
