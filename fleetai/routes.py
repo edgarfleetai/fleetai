@@ -51,6 +51,7 @@ from .finance import (
     period_bounds_for_car,
     period_bounds_for_investor,
     calculate_period_for_car,
+    ensure_previous_period_saved,
     close_period,
 )
 from .views import HTML
@@ -4023,32 +4024,107 @@ def api_investor_balance(code):
 @bp.route("/api/period/<code>")
 def api_period(code):
     session = Session()
-    car = find_car(session, code)
-    if not car:
+
+    try:
+        car = find_car(session, code)
+
+        if not car:
+            return jsonify({
+                "ok": False,
+                "message": "Машина не найдена",
+            }), 404
+
+        # При первом открытии после начала нового периода
+        # предыдущий период автоматически сохраняется в истории.
+        archived_period, archived_now = ensure_previous_period_saved(
+            session,
+            car,
+        )
+
+        start, end = period_bounds_for_car(car)
+        calc = calculate_period_for_car(
+            session,
+            car,
+            start,
+            end,
+        )
+
+        periods = []
+
+        closed_rows = (
+            session.query(SettlementPeriod)
+            .filter(
+                func.trim(SettlementPeriod.car_code)
+                == normalize_code(car.code)
+            )
+            .order_by(
+                SettlementPeriod.end_date.desc(),
+                SettlementPeriod.id.desc(),
+            )
+            .all()
+        )
+
+        for period in closed_rows:
+            periods.append({
+                "id": period.id,
+                "start_date": (
+                    period.start_date.strftime("%d.%m.%Y")
+                    if period.start_date
+                    else ""
+                ),
+                "end_date": (
+                    period.end_date.strftime("%d.%m.%Y")
+                    if period.end_date
+                    else ""
+                ),
+                "income": period.income or 0,
+                "expenses": period.expenses or 0,
+                "profit": period.profit or 0,
+                "investor_amount": period.investor_amount or 0,
+                "owner_amount": period.owner_amount or 0,
+                "downtime_days": period.downtime_days or 0,
+                "comment": period.comment or "",
+                "closed_at": (
+                    period.closed_at.strftime("%d.%m.%Y %H:%M")
+                    if period.closed_at
+                    else ""
+                ),
+            })
+
+        return jsonify({
+            "ok": True,
+            "period_source": "current_auto",
+            "archived_previous_now": archived_now,
+            "archived_period": {
+                "start_date": (
+                    archived_period.start_date.strftime("%d.%m.%Y")
+                    if archived_period
+                    else ""
+                ),
+                "end_date": (
+                    archived_period.end_date.strftime("%d.%m.%Y")
+                    if archived_period
+                    else ""
+                ),
+            },
+            "settlement_day": car.settlement_day or 15,
+            "current_period": {
+                "start_date": start.strftime("%d.%m.%Y"),
+                "end_date": end.strftime("%d.%m.%Y"),
+                **calc,
+            },
+            "closed_periods": periods,
+        })
+
+    except Exception as error:
+        session.rollback()
+        return jsonify({
+            "ok": False,
+            "message": f"Ошибка расчётного периода: {error}",
+        }), 500
+
+    finally:
         session.close()
-        return jsonify({"ok": False, "message": "Машина не найдена"})
-    start, end = period_bounds_for_car(car)
-    calc = calculate_period_for_car(session, car, start, end)
-    periods = [{
-        "id": p.id, "start_date": p.start_date.strftime("%d.%m.%Y") if p.start_date else "",
-        "end_date": p.end_date.strftime("%d.%m.%Y") if p.end_date else "",
-        "income": p.income or 0, "expenses": p.expenses or 0,
-        "profit": p.profit or 0, "investor_amount": p.investor_amount or 0,
-        "owner_amount": p.owner_amount or 0,
-        "closed_at": p.closed_at.strftime("%d.%m.%Y %H:%M") if p.closed_at else "",
-    } for p in session.query(SettlementPeriod).filter(func.trim(SettlementPeriod.car_code) == normalize_code(car.code)).order_by(SettlementPeriod.id.desc()).all()]
-    session.close()
-    return jsonify({
-        "ok": True,
-        "period_source": "current_auto",
-        "settlement_day": car.settlement_day or 15,
-        "current_period": {
-            "start_date": start.strftime("%d.%m.%Y"),
-            "end_date": end.strftime("%d.%m.%Y"),
-            **calc,
-        },
-        "closed_periods": periods,
-    })
 
 
 @bp.route("/api/close-period/<code>", methods=["POST"])
