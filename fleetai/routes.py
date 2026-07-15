@@ -495,6 +495,129 @@ def test_telegram():
     }), 500
 
 
+
+def parse_iso_date(value):
+    if not value:
+        return None
+
+    try:
+        return datetime.strptime(value, "%Y-%m-%d").date()
+    except (TypeError, ValueError):
+        return None
+
+
+def driver_payment_period(car):
+    """
+    Возвращает расчётный период [начало, окончание).
+
+    День окончания — день расчёта. Период длится 7 дней.
+    """
+    end_date = parse_iso_date(car.next_payment_date)
+
+    if not end_date:
+        end_date = date.today()
+
+    start_date = parse_iso_date(
+        getattr(car, "last_payment_date", "")
+    )
+
+    if not start_date:
+        start_date = end_date - timedelta(days=7)
+
+    if start_date >= end_date:
+        start_date = end_date - timedelta(days=7)
+
+    return start_date, end_date
+
+
+def overlap_downtime_days(session, car_code, period_start, period_end):
+    """
+    Считает дни простоя внутри периода.
+
+    Правило:
+    - день начала простоя считается;
+    - день выхода уже рабочий;
+    - расчётный период считается до даты расчёта, не включая её.
+    """
+    downtime_dates = set()
+
+    rows = (
+        session.query(Downtime)
+        .filter(
+            func.trim(Downtime.car_code)
+            == normalize_code(car_code)
+        )
+        .all()
+    )
+
+    for row in rows:
+        if not row.start_date:
+            continue
+
+        downtime_start = row.start_date.date()
+        downtime_end = (
+            row.end_date.date()
+            if row.end_date
+            else period_end
+        )
+
+        overlap_start = max(period_start, downtime_start)
+        overlap_end = min(period_end, downtime_end)
+
+        current = overlap_start
+
+        while current < overlap_end:
+            downtime_dates.add(current)
+            current += timedelta(days=1)
+
+    return len(downtime_dates)
+
+
+def calculate_driver_payment(session, car):
+    """
+    Считает аренду с учётом простоя.
+
+    Итог:
+    (дни периода - дни простоя) × дневная ставка.
+    """
+    period_start, period_end = driver_payment_period(car)
+    total_days = max((period_end - period_start).days, 0)
+
+    downtime_days = overlap_downtime_days(
+        session,
+        car.code,
+        period_start,
+        period_end,
+    )
+
+    payable_days = max(total_days - downtime_days, 0)
+
+    daily_rent = int(
+        getattr(car, "daily_rent", 0)
+        or 0
+    )
+
+    # Совместимость со старыми настройками:
+    # если дневная ставка ещё не указана, используем недельную сумму.
+    if daily_rent > 0:
+        amount_due = payable_days * daily_rent
+    else:
+        weekly_payment = int(car.weekly_payment or 0)
+        amount_due = round(
+            weekly_payment * payable_days / 7
+        ) if total_days else 0
+
+    return {
+        "period_start": period_start.isoformat(),
+        "period_end": period_end.isoformat(),
+        "total_days": total_days,
+        "downtime_days": downtime_days,
+        "payable_days": payable_days,
+        "daily_rent": daily_rent,
+        "amount_due": amount_due,
+    }
+
+
 @bp.route("/api/payment-settings", methods=["POST"])
 def save_payment_settings():
     data = request.get_json(silent=True) or request.form
@@ -508,12 +631,12 @@ def save_payment_settings():
     ).strip()
 
     try:
-        weekly_payment = int(data.get("weekly_payment") or 0)
+        daily_rent = int(data.get("daily_rent") or 0)
         payment_weekday = int(data.get("payment_weekday") or 0)
     except (TypeError, ValueError):
         return jsonify({
             "ok": False,
-            "message": "Сумма или день недели указаны неправильно",
+            "message": "Ставка или день недели указаны неправильно",
         }), 400
 
     if not car_code:
@@ -522,10 +645,10 @@ def save_payment_settings():
             "message": "Не указан номер машины",
         }), 400
 
-    if weekly_payment < 0:
+    if daily_rent < 0:
         return jsonify({
             "ok": False,
-            "message": "Сумма не может быть отрицательной",
+            "message": "Ставка не может быть отрицательной",
         }), 400
 
     if payment_weekday < 0 or payment_weekday > 6:
@@ -534,14 +657,13 @@ def save_payment_settings():
             "message": "Неправильно указан день недели",
         }), 400
 
-    if next_payment_date:
-        try:
-            datetime.strptime(next_payment_date, "%Y-%m-%d")
-        except ValueError:
-            return jsonify({
-                "ok": False,
-                "message": "Дата должна быть в формате ГГГГ-ММ-ДД",
-            }), 400
+    payment_date = parse_iso_date(next_payment_date)
+
+    if next_payment_date and not payment_date:
+        return jsonify({
+            "ok": False,
+            "message": "Дата должна быть в формате ГГГГ-ММ-ДД",
+        }), 400
 
     session = Session()
 
@@ -554,23 +676,39 @@ def save_payment_settings():
                 "message": f"Машина {car_code} не найдена",
             }), 404
 
+        old_next_date = parse_iso_date(car.next_payment_date)
+
         car.driver = driver
-        car.weekly_payment = weekly_payment
+        car.daily_rent = daily_rent
+        car.weekly_payment = daily_rent * 7
         car.payment_weekday = payment_weekday
         car.next_payment_date = next_payment_date
         car.payment_notifications = 1
 
+        # При первой настройке начало периода — за 7 дней до расчёта.
+        if payment_date and (
+            not getattr(car, "last_payment_date", "")
+            or old_next_date != payment_date
+        ):
+            car.last_payment_date = (
+                payment_date - timedelta(days=7)
+            ).isoformat()
+
         session.commit()
+
+        calculation = calculate_driver_payment(session, car)
 
         return jsonify({
             "ok": True,
-            "message": "Настройки оплаты сохранены",
+            "message": "Настройки аренды сохранены",
             "car": {
                 "code": car.code,
                 "driver": car.driver,
-                "weekly_payment": car.weekly_payment,
+                "daily_rent": car.daily_rent,
                 "payment_weekday": car.payment_weekday,
+                "last_payment_date": car.last_payment_date,
                 "next_payment_date": car.next_payment_date,
+                **calculation,
             },
         })
 
@@ -580,7 +718,7 @@ def save_payment_settings():
 
         return jsonify({
             "ok": False,
-            "message": "Не удалось сохранить настройки",
+            "message": f"Не удалось сохранить настройки: {error}",
         }), 500
 
     finally:
@@ -606,32 +744,50 @@ def check_driver_payments():
         cars = (
             session.query(Car)
             .filter(Car.payment_notifications == 1)
-            .filter(Car.weekly_payment > 0)
+            .filter(
+                (Car.daily_rent > 0)
+                | (Car.weekly_payment > 0)
+            )
             .all()
         )
 
         for car in cars:
-            if not car.next_payment_date:
+            payment_date = parse_iso_date(car.next_payment_date)
+
+            if not payment_date:
                 continue
 
-            try:
-                payment_date = datetime.strptime(
-                    car.next_payment_date,
-                    "%Y-%m-%d",
-                ).date()
-            except (ValueError, TypeError):
-                continue
-
+            calculation = calculate_driver_payment(session, car)
             days_left = (payment_date - today).days
             driver_name = car.driver or "Не указан"
-            payment_text = f"{car.weekly_payment:,}".replace(",", " ")
+
+            amount_text = (
+                f"{calculation['amount_due']:,}"
+                .replace(",", " ")
+            )
+            rate_text = (
+                f"{calculation['daily_rent']:,}"
+                .replace(",", " ")
+            )
+
+            details = (
+                f"📅 Период: "
+                f"{calculation['period_start']} — "
+                f"{calculation['period_end']}\n"
+                f"💵 Ставка: {rate_text} ₽/сутки\n"
+                f"⏸ Простой: "
+                f"{calculation['downtime_days']} дн.\n"
+                f"✅ Оплачиваемых дней: "
+                f"{calculation['payable_days']}\n"
+            )
 
             if days_left == 1:
                 messages.append(
                     "🟡 <b>Завтра расчёт</b>\n"
                     f"🚕 Машина: <b>{car.code}</b>\n"
                     f"👤 Водитель: {driver_name}\n"
-                    f"💰 Сумма: {payment_text} ₽"
+                    + details
+                    + f"💰 К оплате: {amount_text} ₽"
                 )
 
             elif days_left == 0:
@@ -639,7 +795,8 @@ def check_driver_payments():
                     "🟠 <b>Сегодня расчёт</b>\n"
                     f"🚕 Машина: <b>{car.code}</b>\n"
                     f"👤 Водитель: {driver_name}\n"
-                    f"💰 Должен внести: {payment_text} ₽"
+                    + details
+                    + f"💰 Должен внести: {amount_text} ₽"
                 )
 
             elif days_left < 0:
@@ -649,7 +806,8 @@ def check_driver_payments():
                     "🔴 <b>Платёж просрочен</b>\n"
                     f"🚕 Машина: <b>{car.code}</b>\n"
                     f"👤 Водитель: {driver_name}\n"
-                    f"💰 Долг: {payment_text} ₽\n"
+                    + details
+                    + f"💰 Долг: {amount_text} ₽\n"
                     f"⏰ Просрочка: {overdue_days} дн."
                 )
 
@@ -682,7 +840,7 @@ def check_driver_payments():
 
         return jsonify({
             "ok": False,
-            "message": "Ошибка проверки платежей",
+            "message": f"Ошибка проверки платежей: {error}",
         }), 500
 
     finally:
@@ -713,31 +871,34 @@ def mark_driver_payment_paid():
                 "message": f"Машина {car_code} не найдена",
             }), 404
 
+        calculation = calculate_driver_payment(session, car)
         today = date.today()
+        current_due_date = parse_iso_date(
+            car.next_payment_date
+        ) or today
 
-        if car.next_payment_date:
-            try:
-                next_date = datetime.strptime(
-                    car.next_payment_date,
-                    "%Y-%m-%d",
-                ).date()
-            except (ValueError, TypeError):
-                next_date = today
-        else:
-            next_date = today
+        car.last_payment_date = current_due_date.isoformat()
 
-        next_date += timedelta(days=7)
+        next_date = current_due_date + timedelta(days=7)
 
         while next_date <= today:
             next_date += timedelta(days=7)
 
         car.next_payment_date = next_date.isoformat()
+
         session.commit()
 
         return jsonify({
             "ok": True,
-            "message": "Оплата отмечена",
+            "message": (
+                f"Оплата отмечена: "
+                f"{calculation['amount_due']:,} ₽"
+                .replace(",", " ")
+            ),
             "car_code": car.code,
+            "paid_period": {
+                **calculation,
+            },
             "next_payment_date": car.next_payment_date,
         })
 
@@ -747,11 +908,12 @@ def mark_driver_payment_paid():
 
         return jsonify({
             "ok": False,
-            "message": "Не удалось отметить оплату",
+            "message": f"Не удалось отметить оплату: {error}",
         }), 500
 
     finally:
         session.close()
+
     
 BAD_INVESTOR_NAMES = {"вложил", "вложила", "оплатил", "оплатила", "внес", "внесла", "дал", "дала", "инвестор", ""}
 
@@ -3069,8 +3231,11 @@ def api_cars():
                 "settlement_day": car.settlement_day or 15,
                 "driver": car.driver or "",
                 "weekly_payment": car.weekly_payment or 0,
+                "daily_rent": getattr(car, "daily_rent", 0) or 0,
                 "payment_weekday": car.payment_weekday or 0,
+                "last_payment_date": getattr(car, "last_payment_date", "") or "",
                 "next_payment_date": car.next_payment_date or "",
+                "driver_payment": calculate_driver_payment(session, car),
                 "payment_notifications": (
                     car.payment_notifications or 0
                 ),
