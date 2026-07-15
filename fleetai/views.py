@@ -1522,6 +1522,99 @@ body > *{
   }
 }
 
+
+/* ===== OPERATION EDITOR ===== */
+
+.operation-edit-modal{
+  position:fixed;
+  inset:0;
+  z-index:500;
+  display:none;
+  align-items:center;
+  justify-content:center;
+  padding:18px;
+  background:rgba(23,21,19,.48);
+  backdrop-filter:blur(5px);
+}
+
+.operation-edit-modal.open{
+  display:flex;
+}
+
+.operation-edit-dialog{
+  width:min(680px,100%);
+  padding:22px;
+  border:1px solid var(--line);
+  border-radius:18px;
+  background:#fff;
+  box-shadow:var(--shadow-lg);
+}
+
+.operation-edit-head{
+  display:flex;
+  justify-content:space-between;
+  align-items:flex-start;
+  gap:16px;
+  margin-bottom:16px;
+}
+
+.operation-edit-head h2{
+  margin:3px 0 0;
+}
+
+.operation-edit-close{
+  width:34px;
+  height:34px;
+  padding:0;
+  border-radius:50%;
+  background:var(--surface-muted);
+  color:var(--text-soft);
+  box-shadow:none;
+  font-size:21px;
+}
+
+.operation-edit-close:hover{
+  background:var(--line);
+  transform:none;
+  box-shadow:none;
+}
+
+.operation-edit-dialog label{
+  display:block;
+  margin-top:12px;
+  color:var(--text-soft);
+  font-size:12px;
+  font-weight:650;
+}
+
+.operation-edit-dialog textarea,
+.operation-edit-dialog input{
+  width:100%;
+  margin-top:6px;
+}
+
+.operation-edit-dialog textarea{
+  resize:vertical;
+  min-height:125px;
+}
+
+.operation-edit-note{
+  margin-top:12px;
+  padding:10px 12px;
+  border-radius:11px;
+  background:var(--surface-soft);
+  color:var(--text-soft);
+  font-size:12px;
+  line-height:1.5;
+}
+
+.operation-edit-actions{
+  display:flex;
+  justify-content:flex-end;
+  gap:8px;
+  margin-top:16px;
+}
+
 </style>
 </head>
 
@@ -1919,6 +2012,61 @@ body > *{
   </main>
 </div>
 
+<div id="editOperationModal" class="operation-edit-modal">
+  <div class="operation-edit-dialog">
+    <div class="operation-edit-head">
+      <div>
+        <div class="eyebrow">ИЗМЕНЕНИЕ ЗАПИСИ</div>
+        <h2 id="editOperationTitle">Редактирование ремонта</h2>
+      </div>
+
+      <button
+        type="button"
+        class="operation-edit-close"
+        onclick="closeEditOperation()"
+      >×</button>
+    </div>
+
+    <label>
+      Дата и время
+      <input id="editOperationDate" type="datetime-local">
+    </label>
+
+    <label>
+      Исправленный текст записи
+      <textarea
+        id="editOperationMessage"
+        rows="5"
+        placeholder="665 замена колодок цена 1000 работа 700 пробег 244100"
+      ></textarea>
+    </label>
+
+    <div class="operation-edit-note">
+      Складские списания при редактировании не повторяются.
+      Меняются сумма, детали, описание, дата и пробег.
+    </div>
+
+    <div class="operation-edit-actions">
+      <button
+        type="button"
+        class="secondary"
+        onclick="closeEditOperation()"
+      >
+        Отмена
+      </button>
+
+      <button
+        type="button"
+        onclick="saveEditedOperation()"
+      >
+        Сохранить изменения
+      </button>
+    </div>
+
+    <p id="editOperationResult"></p>
+  </div>
+</div>
+
 <script>
 
 function showAppPage(page,button){
@@ -2055,6 +2203,106 @@ function rub(n){return (n||0).toLocaleString('ru-RU')+' ₽'}
 async function fixInvestorData(){let r=await api('/api/fix-investor-data',{method:'POST'});alert(r.message);await load()}
 async function rebuildCalculations(){if(!confirm('Пересобрать расчеты из истории операций? Это исправит зависшие неверные суммы.')) return; let r=await api('/api/rebuild-calculations',{method:'POST'});alert(r.message);await load()}
 async function reassignInvestor(){let payload={code:fix_code.value,investor_name:fix_name.value,percent:fix_percent.value||75};let r=await api('/api/reassign-car-investor',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});alert(r.message);await load()}
+
+
+window.operationsCache=[];
+let editingOperationId=null;
+
+function openEditOperation(id){
+  const operation=(window.operationsCache||[]).find(
+    item=>Number(item.id)===Number(id)
+  );
+
+  if(!operation){
+    alert('Запись не найдена в загруженной истории');
+    return;
+  }
+
+  if(!['repair','service','expense'].includes(operation.type)){
+    alert('Пока можно изменять только ремонты и расходы');
+    return;
+  }
+
+  editingOperationId=Number(id);
+
+  document.getElementById('editOperationTitle').textContent=
+    `Изменение операции #${id}`;
+
+  document.getElementById('editOperationDate').value=
+    operation.date_iso||'';
+
+  document.getElementById('editOperationMessage').value=
+    operation.raw||'';
+
+  document.getElementById('editOperationResult').textContent='';
+
+  document
+    .getElementById('editOperationModal')
+    .classList.add('open');
+}
+
+function closeEditOperation(){
+  editingOperationId=null;
+
+  document
+    .getElementById('editOperationModal')
+    ?.classList.remove('open');
+}
+
+async function saveEditedOperation(){
+  if(!editingOperationId){
+    return;
+  }
+
+  const message=document
+    .getElementById('editOperationMessage')
+    .value
+    .trim();
+
+  const dateValue=document
+    .getElementById('editOperationDate')
+    .value;
+
+  const resultElement=document
+    .getElementById('editOperationResult');
+
+  if(!message){
+    resultElement.textContent='Введите исправленный текст';
+    return;
+  }
+
+  resultElement.textContent='Сохраняю изменения…';
+
+  try{
+    const result=await api(
+      `/api/edit-operation/${editingOperationId}`,
+      {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({
+          message,
+          date:dateValue
+        })
+      }
+    );
+
+    resultElement.textContent=result.message||'';
+
+    if(result.ok){
+      closeEditOperation();
+
+      await Promise.all([
+        loadOps(),
+        loadCars(),
+        loadSummary(),
+        loadMonthlyFleetFinance()
+      ]);
+    }
+  }catch(error){
+    resultElement.textContent=
+      'Ошибка изменения записи: '+error;
+  }
+}
 
 async function deleteOperation(id){
   if(!confirm('Удалить операцию #' + id + '? Расчеты сразу пересчитаются.')) return;
@@ -3191,6 +3439,7 @@ async function reopenPeriod(code){
 }
 async function loadOps(){
   let o=await api('/api/operations');
+  window.operationsCache=Array.isArray(o)?o:[];
 
   ops.innerHTML=`
     <tr>
@@ -3202,6 +3451,7 @@ async function loadOps(){
       <th>Сумма</th>
       <th>Пробег</th>
       <th>Сообщение</th>
+      <th>Изменить</th>
       <th>Удалить</th>
     </tr>
     ${o.map(x=>`
@@ -3219,6 +3469,20 @@ async function loadOps(){
           }
         </td>
         <td>${x.raw||''}</td>
+        <td>
+          ${
+            ['repair','service','expense'].includes(x.type)
+              ? `
+                <button
+                  class="secondary small"
+                  onclick="openEditOperation(${x.id})"
+                >
+                  Изменить
+                </button>
+              `
+              : '—'
+          }
+        </td>
         <td>
           <button
             class="danger small"
