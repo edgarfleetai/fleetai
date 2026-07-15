@@ -138,6 +138,15 @@ td,th{padding:9px;border-bottom:1px solid #eee;text-align:left}
   color:#64748b;
   background:#f8fafc;
 }
+
+.warehouse-actions{display:flex;flex-wrap:wrap;gap:6px;margin-top:12px}
+.warehouse-actions button{font-size:12px;padding:7px 10px}
+.warehouse-editor{display:none;margin-top:10px;padding-top:10px;border-top:1px solid #e5e7eb}
+.warehouse-editor.open{display:block}
+.warehouse-editor-grid{display:grid;grid-template-columns:1fr 1fr;gap:7px}
+.warehouse-editor-grid input{min-width:0}
+.warehouse-editor-full{grid-column:1/-1}
+
 @media(max-width:800px){
   .command-box{display:block}
   .command-box button{width:100%;margin-top:8px}
@@ -1381,8 +1390,118 @@ async function loadWarehouse(){
         ${i.shelf?` · Полка: ${i.shelf}`:''}
       </div>
       ${i.low_stock?'<p class="bad">⚠️ Нужно пополнить</p>':''}
+
+      <div class="warehouse-actions">
+        <button onclick="openWarehouseEditor(${i.id})">Исправить</button>
+        <button onclick="manualWarehouseWriteOff(${i.id})">Списать</button>
+        <button class="danger" onclick="deleteWarehouseItem(${i.id})">Удалить</button>
+      </div>
+
+      <div id="warehouse_editor_${i.id}" class="warehouse-editor">
+        <div class="warehouse-editor-grid">
+          <input id="warehouse_edit_part_${i.id}" value="${String(i.part_name||'').replaceAll('"','&quot;')}" placeholder="Название">
+          <input id="warehouse_edit_brand_${i.id}" value="${String(i.brand||'').replaceAll('"','&quot;')}" placeholder="Бренд">
+          <input id="warehouse_edit_variant_${i.id}" value="${String(i.variant||'').replaceAll('"','&quot;')}" placeholder="Исполнение">
+          <input id="warehouse_edit_shelf_${i.id}" value="${String(i.shelf||'').replaceAll('"','&quot;')}" placeholder="Полка">
+          <input id="warehouse_edit_min_${i.id}" type="number" min="0" value="${i.min_quantity||0}" placeholder="Минимум">
+          <input id="warehouse_edit_quantity_${i.id}" type="number" min="0" value="${i.quantity||0}" placeholder="Фактический остаток">
+          <input id="warehouse_edit_comment_${i.id}" class="warehouse-editor-full" value="${String(i.comment||'').replaceAll('"','&quot;')}" placeholder="Комментарий">
+        </div>
+
+        <div class="warehouse-actions">
+          <button onclick="saveWarehouseItemEdit(${i.id})">Сохранить</button>
+          <button onclick="closeWarehouseEditor(${i.id})">Отмена</button>
+        </div>
+      </div>
     </div>
   `).join('');
+}
+
+
+function openWarehouseEditor(itemId){
+  document.getElementById(`warehouse_editor_${itemId}`)?.classList.add('open');
+}
+
+function closeWarehouseEditor(itemId){
+  document.getElementById(`warehouse_editor_${itemId}`)?.classList.remove('open');
+}
+
+async function saveWarehouseItemEdit(itemId){
+  const currentItem=warehouseAutocompleteItems.find(item=>Number(item.id)===Number(itemId));
+  const newQuantity=Number(document.getElementById(`warehouse_edit_quantity_${itemId}`).value||0);
+
+  let result=await api('/api/warehouse/update-item',{
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({
+      item_id:itemId,
+      part_name:document.getElementById(`warehouse_edit_part_${itemId}`).value,
+      brand:document.getElementById(`warehouse_edit_brand_${itemId}`).value,
+      variant:document.getElementById(`warehouse_edit_variant_${itemId}`).value,
+      shelf:document.getElementById(`warehouse_edit_shelf_${itemId}`).value,
+      min_quantity:Number(document.getElementById(`warehouse_edit_min_${itemId}`).value||0),
+      comment:document.getElementById(`warehouse_edit_comment_${itemId}`).value
+    })
+  });
+
+  if(!result.ok){
+    warehouseRes.innerText=result.message||'Ошибка';
+    return;
+  }
+
+  if(currentItem && Number(currentItem.quantity||0)!==newQuantity){
+    result=await api('/api/warehouse/adjust',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({
+        item_id:itemId,
+        new_quantity:newQuantity,
+        comment:'Исправление остатка через карточку склада'
+      })
+    });
+  }
+
+  warehouseRes.innerText=result.message||'Изменения сохранены';
+  await loadWarehouse();
+  await preloadWarehouseAutocomplete();
+}
+
+async function manualWarehouseWriteOff(itemId){
+  const quantityText=prompt('Сколько штук списать?','1');
+  if(quantityText===null)return;
+
+  const quantity=Number(quantityText);
+  if(!Number.isInteger(quantity)||quantity<=0){
+    alert('Укажи целое количество больше нуля');
+    return;
+  }
+
+  const comment=prompt('Причина списания: брак, потеря, использовано вручную','Ручное списание');
+  if(comment===null)return;
+
+  const result=await api('/api/warehouse/write-off',{
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({item_id:itemId,quantity,comment})
+  });
+
+  warehouseRes.innerText=result.message||'';
+  if(result.ok){
+    await loadWarehouse();
+    await preloadWarehouseAutocomplete();
+  }
+}
+
+async function deleteWarehouseItem(itemId){
+  if(!confirm('Удалить позицию? Это возможно только при остатке 0.'))return;
+
+  const result=await api(`/api/warehouse/delete-item/${itemId}`,{method:'POST'});
+  warehouseRes.innerText=result.message||'';
+
+  if(result.ok){
+    await loadWarehouse();
+    await preloadWarehouseAutocomplete();
+  }
 }
 
 async function addWarehouseItem(){
