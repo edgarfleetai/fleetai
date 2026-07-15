@@ -50,6 +50,7 @@ from .finance import (
     investor_balance_for_car,
     period_bounds_for_car,
     period_bounds_for_investor,
+    period_display_end,
     calculate_period_for_car,
     ensure_previous_period_saved,
     close_period,
@@ -228,7 +229,7 @@ def build_investor_report_pdf(
         Paragraph(
             "<b>Период:</b> "
             f"{period_start.strftime('%d.%m.%Y')} — "
-            f"{period_end.strftime('%d.%m.%Y')}",
+            f"{period_display_end(period_end).strftime('%d.%m.%Y')}",
             normal_style,
         ),
         Paragraph(
@@ -4073,7 +4074,7 @@ def api_period(code):
                     else ""
                 ),
                 "end_date": (
-                    period.end_date.strftime("%d.%m.%Y")
+                    period_display_end(period.end_date).strftime("%d.%m.%Y")
                     if period.end_date
                     else ""
                 ),
@@ -4102,7 +4103,7 @@ def api_period(code):
                     else ""
                 ),
                 "end_date": (
-                    archived_period.end_date.strftime("%d.%m.%Y")
+                    archived_period_display_end(period.end_date).strftime("%d.%m.%Y")
                     if archived_period
                     else ""
                 ),
@@ -4110,7 +4111,9 @@ def api_period(code):
             "settlement_day": car.settlement_day or 15,
             "current_period": {
                 "start_date": start.strftime("%d.%m.%Y"),
-                "end_date": end.strftime("%d.%m.%Y"),
+                "end_date": period_display_end(
+                    end
+                ).strftime("%d.%m.%Y"),
                 **calc,
             },
             "closed_periods": periods,
