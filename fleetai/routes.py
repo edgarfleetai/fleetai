@@ -3781,6 +3781,43 @@ def api_cars():
                 car.code,
             )
 
+            # Ошибка в расчёте одного водителя не должна скрывать
+            # весь список машин.
+            try:
+                driver_payment = calculate_driver_payment(
+                    session,
+                    car,
+                )
+                driver_payment_error = ""
+            except Exception as error:
+                print(
+                    f"Ошибка расчёта водителя для машины "
+                    f"{car.code}: {type(error).__name__}: {error}"
+                )
+
+                driver_payment = {
+                    "daily_rent": int(
+                        getattr(car, "daily_rent", 0) or 0
+                    ),
+                    "effective_daily_rent": effective_daily_rent(car),
+                    "weekly_payment": int(
+                        getattr(car, "weekly_payment", 0) or 0
+                    ),
+                    "overdue_periods": [],
+                    "overdue_periods_count": 0,
+                    "overdue_total": 0,
+                    "current_period": {},
+                    "current_amount": 0,
+                    "amount_due": 0,
+                    "next_payment_date": (
+                        getattr(car, "next_payment_date", "") or ""
+                    ),
+                    "is_overdue": False,
+                }
+                driver_payment_error = (
+                    f"{type(error).__name__}: {error}"
+                )
+
             rows.append({
                 "code": car.code,
                 "brand": car.brand,
@@ -3826,19 +3863,46 @@ def api_cars():
                 ),
                 "settlement_day": car.settlement_day or 15,
                 "driver": car.driver or "",
-                "weekly_payment": car.weekly_payment or 0,
-                "daily_rent": getattr(car, "daily_rent", 0) or 0,
+                "weekly_payment": (
+                    getattr(car, "weekly_payment", 0) or 0
+                ),
+                "daily_rent": (
+                    getattr(car, "daily_rent", 0) or 0
+                ),
                 "effective_daily_rent": effective_daily_rent(car),
-                "payment_weekday": car.payment_weekday or 0,
-                "last_payment_date": getattr(car, "last_payment_date", "") or "",
-                "next_payment_date": car.next_payment_date or "",
-                "driver_payment": calculate_driver_payment(session, car),
+                "payment_weekday": (
+                    getattr(car, "payment_weekday", 0) or 0
+                ),
+                "last_payment_date": (
+                    getattr(car, "last_payment_date", "") or ""
+                ),
+                "next_payment_date": (
+                    getattr(car, "next_payment_date", "") or ""
+                ),
+                "driver_payment": driver_payment,
+                "driver_payment_error": driver_payment_error,
                 "payment_notifications": (
-                    car.payment_notifications or 0
+                    getattr(car, "payment_notifications", 0) or 0
                 ),
             })
 
         return jsonify(rows)
+
+    except Exception as error:
+        session.rollback()
+        print(
+            "Ошибка /api/cars:",
+            type(error).__name__,
+            str(error),
+        )
+
+        return jsonify({
+            "ok": False,
+            "message": (
+                "Не удалось загрузить машины: "
+                f"{type(error).__name__}: {error}"
+            ),
+        }), 500
 
     finally:
         session.close()
