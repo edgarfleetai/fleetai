@@ -2369,93 +2369,137 @@ function renderDriverPayments(carsList){
 }
 
 async function loadCars(){
+  const carsTable=document.getElementById('cars');
+  const paymentSelect=document.getElementById('paymentCar');
+  const paymentsTable=document.getElementById('driverPayments');
+
   try{
+    const response=await api('/api/cars');
 
-  let c=await api('/api/cars');
+    if(!Array.isArray(response)){
+      throw new Error(
+        response?.message || 'Сервер не вернул список машин'
+      );
+    }
 
-  if(!Array.isArray(c)){
-    throw new Error(
-      c?.message || 'Сервер не вернул список машин'
-    );
-  }
+    window.cachedCars=response;
 
-  fillPaymentCarSelect(c);
-  renderDriverPayments(c);
+    if(paymentSelect){
+      fillPaymentCarSelect(response);
+    }
 
-  cars.innerHTML=`
-    <tr>
-      <th>Статус</th>
-      <th>Тип</th>
-      <th>Код</th>
-      <th>Авто</th>
-      <th>Госномер</th>
-      <th>Пробег</th>
-      <th>Инвестор</th>
-      <th>%</th>
-      <th>Доход</th>
-      <th>Расход</th>
-      <th>Прибыль</th>
-      <th>Действия</th>
-    </tr>
-    ${c.map(x=>`
+    if(paymentsTable){
+      renderDriverPayments(response);
+    }
+
+    if(!carsTable){
+      return;
+    }
+
+    carsTable.innerHTML=`
       <tr>
-        <td>
-          <span class="badge ${x.is_in_downtime?'badge-downtime':'badge-working'}">
-            ${x.current_status}
-          </span>
-          ${x.is_in_downtime?`
-            <div class="raw">
-              ${x.current_downtime_days} дн.
-              ${x.downtime_reason?` · ${x.downtime_reason}`:''}
-            </div>
-          `:''}
-        </td>
-        <td>
-          <span class="badge">
-            ${x.owner_type==='investor'?'Инвестор':'Моя'}
-          </span>
-        </td>
-        <td>${x.code}</td>
-        <td>${x.brand||''} ${x.model||''}</td>
-        <td>${x.plate||''}</td>
-        <td>${mileageCell(x)}</td>
-        <td>${x.investor_name||''}</td>
-        <td>${x.investor_percent||0}</td>
-        <td>${rub(x.income)}</td>
-        <td>${rub(x.expenses)}</td>
-        <td>${rub(x.profit)}</td>
-        <td>
-          <button onclick="openCar('${x.code}')">Открыть</button>
-          <button onclick="openPeriod('${x.code}')">Расчёт</button>
-          <button class="danger small" onclick="deleteCar('${x.code}')">
-            Удалить
-          </button>
-        </td>
+        <th>Статус</th>
+        <th>Тип</th>
+        <th>Код</th>
+        <th>Авто</th>
+        <th>Госномер</th>
+        <th>Пробег</th>
+        <th>Инвестор</th>
+        <th>%</th>
+        <th>Доход</th>
+        <th>Расход</th>
+        <th>Прибыль</th>
+        <th>Действия</th>
       </tr>
-    `).join('')}
-  `;
+
+      ${response.map(car=>`
+        <tr>
+          <td>
+            <span class="badge ${
+              car.is_in_downtime
+                ? 'badge-downtime'
+                : 'badge-working'
+            }">
+              ${car.current_status||'Работает'}
+            </span>
+
+            ${car.is_in_downtime?`
+              <div class="raw">
+                ${car.current_downtime_days||0} дн.
+                ${
+                  car.downtime_reason
+                    ? ` · ${car.downtime_reason}`
+                    : ''
+                }
+              </div>
+            `:''}
+          </td>
+
+          <td>
+            <span class="badge">
+              ${
+                car.owner_type==='investor'
+                  ? 'Инвестор'
+                  : 'Моя'
+              }
+            </span>
+          </td>
+
+          <td>${car.code||''}</td>
+          <td>${car.brand||''} ${car.model||''}</td>
+          <td>${car.plate||''}</td>
+          <td>${mileageCell(car)}</td>
+          <td>${car.investor_name||''}</td>
+          <td>${car.investor_percent||0}</td>
+          <td>${rub(car.income||0)}</td>
+          <td>${rub(car.expenses||0)}</td>
+          <td>${rub(car.profit||0)}</td>
+
+          <td>
+            <button onclick="openCar('${car.code}')">
+              Открыть
+            </button>
+            <button onclick="openPeriod('${car.code}')">
+              Расчёт
+            </button>
+            <button
+              class="danger small"
+              onclick="deleteCar('${car.code}')"
+            >
+              Удалить
+            </button>
+          </td>
+        </tr>
+      `).join('')}
+    `;
 
   }catch(error){
     console.error('Ошибка загрузки машин:',error);
 
-    paymentCar.innerHTML=
-      '<option value="">Ошибка загрузки машин</option>';
+    if(paymentSelect){
+      paymentSelect.innerHTML=
+        '<option value="">Ошибка загрузки машин</option>';
+    }
 
-    driverPayments.innerHTML=`
-      <tr>
-        <td class="bad">
-          ${error.message || error}
-        </td>
-      </tr>
-    `;
+    if(paymentsTable){
+      paymentsTable.innerHTML=`
+        <tr>
+          <td class="bad">
+            ${error.message||error}
+          </td>
+        </tr>
+      `;
+    }
 
-    cars.innerHTML=`
-      <tr>
-        <td class="bad">
-          ${error.message || error}
-        </td>
-      </tr>
-    `;
+    if(carsTable){
+      carsTable.innerHTML=`
+        <tr>
+          <td class="bad">
+            ${error.message||error}
+          </td>
+        </tr>
+      `;
+    }
   }
 }
 
