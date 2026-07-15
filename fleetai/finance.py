@@ -357,6 +357,126 @@ def period_bounds_for_investor(cars, now=None):
     return period_bounds_for_car(cars[0], now=now)
 
 
+
+def previous_period_bounds_for_car(car, now=None):
+    """
+    Возвращает полностью завершённый период перед текущим.
+
+    Например, если текущий период 15.07–15.08,
+    предыдущий будет 15.06–15.07.
+    """
+    current_start, _current_end = period_bounds_for_car(
+        car,
+        now=now,
+    )
+
+    day = current_start.day
+
+    if current_start.month == 1:
+        previous_start = datetime(
+            current_start.year - 1,
+            12,
+            day,
+        )
+    else:
+        previous_start = datetime(
+            current_start.year,
+            current_start.month - 1,
+            day,
+        )
+
+    return previous_start, current_start
+
+
+def save_period_snapshot(session, car, start, end, auto=False):
+    """
+    Сохраняет снимок выбранного расчётного периода.
+
+    Повторно один и тот же период не создаётся.
+    """
+    exists = (
+        session.query(SettlementPeriod)
+        .filter(
+            func.trim(SettlementPeriod.car_code)
+            == normalize_code(car.code),
+            SettlementPeriod.start_date == start,
+            SettlementPeriod.end_date == end,
+        )
+        .first()
+    )
+
+    if exists:
+        return exists, False
+
+    calc = calculate_period_for_car(
+        session,
+        car,
+        start,
+        end,
+    )
+
+    period = SettlementPeriod(
+        car_code=car.code,
+        start_date=start,
+        end_date=end,
+        income=calc["income"],
+        expenses=calc["expenses"],
+        investments=calc["investments"],
+        profit=calc["profit"],
+        investor_name=calc["investor_name"],
+        investor_percent=calc["investor_percent"],
+        investor_amount=calc["investor_amount"],
+        owner_amount=calc["owner_amount"],
+        downtime_days=calc["downtime_days"],
+        comment=(
+            f"{'Автоматически сохранённый' if auto else 'Расчётный'} "
+            f"период {start.strftime('%d.%m.%Y')} - "
+            f"{end.strftime('%d.%m.%Y')}"
+        ),
+    )
+
+    session.add(period)
+
+    session.add(
+        Operation(
+            car_code=car.code,
+            type="settlement_period",
+            category="Расчётный период",
+            description=period.comment,
+            amount=calc["profit"],
+            raw_message=(
+                f"{car.code} "
+                f"{'автоматически сохранён' if auto else 'закрыт'} "
+                f"расчётный период"
+            ),
+        )
+    )
+
+    session.commit()
+    return period, True
+
+
+def ensure_previous_period_saved(session, car, now=None):
+    """
+    При наступлении нового периода автоматически сохраняет предыдущий.
+
+    Новый текущий период остаётся открытым и начинает считать только
+    новые доходы и расходы. Старый период появляется в истории.
+    """
+    start, end = previous_period_bounds_for_car(
+        car,
+        now=now,
+    )
+
+    return save_period_snapshot(
+        session,
+        car,
+        start,
+        end,
+        auto=True,
+    )
+
+
 def downtime_days_by_period(session, car_code, start, end):
     total = 0
 
@@ -616,53 +736,16 @@ def calculate_period_for_car(session, car, start, end):
 
 def close_period(session, car):
     start, end = period_bounds_for_car(car)
-    calc = calculate_period_for_car(session, car, start, end)
 
-    exists = (
-        session.query(SettlementPeriod)
-        .filter(
-            func.trim(SettlementPeriod.car_code)
-            == normalize_code(car.code),
-            SettlementPeriod.start_date == start,
-            SettlementPeriod.end_date == end,
-        )
-        .first()
+    period, created = save_period_snapshot(
+        session,
+        car,
+        start,
+        end,
+        auto=False,
     )
 
-    if exists:
-        return None, "Этот расчетный период уже закрыт"
+    if not created:
+        return None, "Этот расчётный период уже сохранён"
 
-    period = SettlementPeriod(
-        car_code=car.code,
-        start_date=start,
-        end_date=end,
-        income=calc["income"],
-        expenses=calc["expenses"],
-        investments=calc["investments"],
-        profit=calc["profit"],
-        investor_name=calc["investor_name"],
-        investor_percent=calc["investor_percent"],
-        investor_amount=calc["investor_amount"],
-        owner_amount=calc["owner_amount"],
-        downtime_days=calc["downtime_days"],
-        comment=(
-            f"Расчетный период "
-            f"{start.strftime('%d.%m.%Y')} - "
-            f"{end.strftime('%d.%m.%Y')}"
-        ),
-    )
-    session.add(period)
-
-    session.add(
-        Operation(
-            car_code=car.code,
-            type="settlement_period",
-            category="Расчетный период",
-            description=period.comment,
-            amount=calc["profit"],
-            raw_message=f"{car.code} закрыт расчетный период",
-        )
-    )
-
-    session.commit()
-    return period, "Расчетный период закрыт"
+    return period, "Расчётный период сохранён"
