@@ -1048,6 +1048,41 @@ def warehouse_name_matches(stored_name, parsed_name):
     return stored in parsed or parsed in stored
 
 
+
+def find_exact_warehouse_item(
+    session,
+    part_name,
+    brand="",
+    variant="",
+):
+    """
+    Проверяет только точное совпадение складской позиции.
+
+    Разные бренды и разные исполнения одной детали считаются
+    отдельными позициями:
+    - колодки / AMD / задние барабанные;
+    - колодки / AMD / задние дисковые;
+    - колодки / JUST DRIVE / задние барабанные.
+    """
+    part_key = normalize_warehouse_text(part_name)
+    brand_key = normalize_warehouse_text(brand)
+    variant_key = normalize_warehouse_text(variant)
+
+    for item in session.query(WarehouseItem).all():
+        if normalize_warehouse_text(item.part_name) != part_key:
+            continue
+        if normalize_warehouse_text(item.brand) != brand_key:
+            continue
+        if normalize_warehouse_text(
+            getattr(item, "variant", "")
+        ) != variant_key:
+            continue
+
+        return item
+
+    return None
+
+
 def find_warehouse_item(session, part_name, brand=""):
     """
     Ищет деталь сначала по названию и бренду,
@@ -1146,6 +1181,7 @@ def deduct_from_warehouse(session, op, car, data):
                 car_code=car.code,
                 part_name=item.part_name,
                 brand=item.brand or "",
+                variant=getattr(item, "variant", "") or "",
                 quantity=1,
                 movement_type="out",
                 comment=data.get("raw") or "",
@@ -1161,7 +1197,8 @@ def deduct_from_warehouse(session, op, car, data):
             low_stock_text = (
                 "⚠️ <b>Заканчивается деталь</b>\n"
                 f"Деталь: {item.part_name}"
-                f"{' ' + item.brand if item.brand else ''}\n"
+                f"{' ' + item.brand if item.brand else ''}"
+                f"{' · ' + item.variant if getattr(item, 'variant', '') else ''}\n"
                 f"Осталось: {remaining} шт.\n"
                 f"Минимум: {minimum} шт."
             )
@@ -1170,7 +1207,8 @@ def deduct_from_warehouse(session, op, car, data):
             "used": True,
             "message": (
                 f"Со склада списано: {item.part_name}"
-                f"{' ' + item.brand if item.brand else ''} — "
+                f"{' ' + item.brand if item.brand else ''}"
+                f"{' · ' + item.variant if getattr(item, 'variant', '') else ''} — "
                 f"1 шт. Остаток: {remaining} шт."
             ),
             "low_stock_text": low_stock_text,
@@ -1240,6 +1278,7 @@ def deduct_from_warehouse(session, op, car, data):
                 car_code=car.code,
                 part_name=item.part_name,
                 brand=item.brand or "",
+                variant=getattr(item, "variant", "") or "",
                 quantity=1,
                 movement_type="out",
                 comment=data.get("raw") or "",
@@ -1251,7 +1290,8 @@ def deduct_from_warehouse(session, op, car, data):
 
         messages.append(
             f"{item.part_name}"
-            f"{' ' + item.brand if item.brand else ''} — "
+            f"{' ' + item.brand if item.brand else ''}"
+            f"{' · ' + item.variant if getattr(item, 'variant', '') else ''} — "
             f"1 шт., остаток {remaining}"
         )
 
@@ -1259,7 +1299,8 @@ def deduct_from_warehouse(session, op, car, data):
             low_messages.append(
                 "⚠️ <b>Заканчивается деталь</b>\n"
                 f"Деталь: {item.part_name}"
-                f"{' ' + item.brand if item.brand else ''}\n"
+                f"{' ' + item.brand if item.brand else ''}"
+                f"{' · ' + item.variant if getattr(item, 'variant', '') else ''}\n"
                 f"Осталось: {remaining} шт.\n"
                 f"Минимум: {minimum} шт."
             )
@@ -2887,13 +2928,18 @@ def api_warehouse():
 
         for item in (
             session.query(WarehouseItem)
-            .order_by(WarehouseItem.part_name, WarehouseItem.brand)
+            .order_by(
+                WarehouseItem.part_name,
+                WarehouseItem.brand,
+                WarehouseItem.variant,
+            )
             .all()
         ):
             items.append({
                 "id": item.id,
                 "part_name": item.part_name or "",
                 "brand": item.brand or "",
+                "variant": getattr(item, "variant", "") or "",
                 "quantity": item.quantity or 0,
                 "min_quantity": item.min_quantity or 0,
                 "shelf": item.shelf or "",
@@ -2916,6 +2962,7 @@ def api_warehouse_add_item():
 
     part_name = (payload.get("part_name") or "").strip()
     brand = (payload.get("brand") or "").strip().upper()
+    variant = (payload.get("variant") or "").strip()
     shelf = (payload.get("shelf") or "").strip()
     comment = (payload.get("comment") or "").strip()
 
@@ -2931,24 +2978,26 @@ def api_warehouse_add_item():
     session = Session()
 
     try:
-        existing = find_warehouse_item(
+        existing = find_exact_warehouse_item(
             session,
             part_name,
             brand,
+            variant,
         )
 
         if existing:
             return jsonify({
                 "ok": False,
                 "message": (
-                    "Такая позиция уже есть. "
-                    "Используй кнопку «Приход»."
+                    "Такая позиция с тем же брендом и исполнением "
+                    "уже есть. Используй кнопку «Приход»."
                 ),
             }), 400
 
         item = WarehouseItem(
             part_name=part_name,
             brand=brand,
+            variant=variant,
             quantity=max(quantity, 0),
             min_quantity=max(min_quantity, 0),
             shelf=shelf,
@@ -2964,6 +3013,7 @@ def api_warehouse_add_item():
                     car_code="",
                     part_name=part_name,
                     brand=brand,
+                    variant=variant,
                     quantity=quantity,
                     movement_type="in",
                     comment="Первоначальный остаток",
@@ -2976,7 +3026,8 @@ def api_warehouse_add_item():
             "ok": True,
             "message": (
                 f"Добавлено на склад: {part_name}"
-                f"{' ' + brand if brand else ''}. "
+                f"{' ' + brand if brand else ''}"
+                f"{' · ' + variant if variant else ''}. "
                 f"Остаток: {max(quantity, 0)} шт."
             ),
         })
@@ -3029,6 +3080,7 @@ def api_warehouse_restock():
                 car_code="",
                 part_name=item.part_name,
                 brand=item.brand or "",
+                variant=getattr(item, "variant", "") or "",
                 quantity=quantity,
                 movement_type="in",
                 comment=comment or "Приход на склад",
@@ -3081,6 +3133,7 @@ def api_warehouse_movements():
                 "car_code": movement.car_code or "",
                 "part_name": movement.part_name or "",
                 "brand": movement.brand or "",
+                "variant": getattr(movement, "variant", "") or "",
                 "quantity": movement.quantity or 0,
                 "movement_type": movement.movement_type or "",
                 "comment": movement.comment or "",
