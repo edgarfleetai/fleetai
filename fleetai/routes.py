@@ -1132,16 +1132,36 @@ def find_warehouse_item(session, part_name, brand=""):
 
 def deduct_from_warehouse(session, op, car, data):
     """
-    Списывает все распознанные детали, если в команде есть «со склада».
+    Списывает одну или несколько выбранных складских позиций.
 
-    Цена ремонта остаётся в Expense, склад хранит только количество.
+    Если пользователь выбрал позиции во всплывающем списке,
+    сервер списывает их строго по ID. Название в команде уже
+    не влияет на складское списание.
     """
     raw_text = (
         data.get("raw") or ""
     ).lower().replace("ё", "е")
 
+    selected_ids = data.get("warehouse_item_ids") or []
+
+    # Совместимость со старой версией интерфейса.
+    old_selected_id = data.get("warehouse_item_id")
+    if old_selected_id and old_selected_id not in selected_ids:
+        selected_ids.append(old_selected_id)
+
+    normalized_ids = []
+    for value in selected_ids:
+        try:
+            item_id = int(value)
+        except (TypeError, ValueError):
+            continue
+
+        if item_id not in normalized_ids:
+            normalized_ids.append(item_id)
+
     from_warehouse = (
-        bool(data.get("from_warehouse"))
+        bool(normalized_ids)
+        or bool(data.get("from_warehouse"))
         or "со склада" in raw_text
         or "из склада" in raw_text
     )
@@ -1153,79 +1173,76 @@ def deduct_from_warehouse(session, op, car, data):
             "low_stock_text": "",
         }
 
-    selected_item_id = data.get("warehouse_item_id")
+    # Точное списание выбранных позиций.
+    if normalized_ids:
+        messages = []
+        low_messages = []
+        used_any = False
 
-    # Если пользователь выбрал позицию из всплывающего списка,
-    # списываем именно её. Название, сокращения и парсер уже не влияют.
-    if selected_item_id:
-        item = (
-            session.query(WarehouseItem)
-            .filter_by(id=int(selected_item_id))
-            .first()
-        )
-
-        if not item:
-            return {
-                "used": False,
-                "message": (
-                    "Расход записан, но выбранная позиция "
-                    "склада больше не найдена."
-                ),
-                "low_stock_text": "",
-            }
-
-        if (item.quantity or 0) <= 0:
-            return {
-                "used": False,
-                "message": (
-                    f"Расход записан, но «{item.part_name}"
-                    f"{' ' + item.brand if item.brand else ''}» "
-                    "закончилась на складе."
-                ),
-                "low_stock_text": "",
-            }
-
-        item.quantity = (item.quantity or 0) - 1
-
-        session.add(
-            WarehouseMovement(
-                operation_id=op.id,
-                car_code=car.code,
-                part_name=item.part_name,
-                brand=item.brand or "",
-                variant=getattr(item, "variant", "") or "",
-                quantity=1,
-                movement_type="out",
-                comment=data.get("raw") or "",
+        for item_id in normalized_ids:
+            item = (
+                session.query(WarehouseItem)
+                .filter_by(id=item_id)
+                .first()
             )
-        )
 
-        remaining = item.quantity or 0
-        minimum = item.min_quantity or 0
+            if not item:
+                messages.append(
+                    f"позиция ID {item_id} больше не найдена"
+                )
+                continue
 
-        low_stock_text = ""
-
-        if remaining <= minimum:
-            low_stock_text = (
-                "⚠️ <b>Заканчивается деталь</b>\n"
-                f"Деталь: {item.part_name}"
+            label = (
+                f"{item.part_name}"
                 f"{' ' + item.brand if item.brand else ''}"
-                f"{' · ' + item.variant if getattr(item, 'variant', '') else ''}\n"
-                f"Осталось: {remaining} шт.\n"
-                f"Минимум: {minimum} шт."
+                f"{' · ' + item.variant if getattr(item, 'variant', '') else ''}"
             )
+
+            if (item.quantity or 0) <= 0:
+                messages.append(f"«{label}» закончилась")
+                continue
+
+            item.quantity = (item.quantity or 0) - 1
+            used_any = True
+
+            session.add(
+                WarehouseMovement(
+                    operation_id=op.id,
+                    car_code=car.code,
+                    part_name=item.part_name,
+                    brand=item.brand or "",
+                    variant=getattr(item, "variant", "") or "",
+                    quantity=1,
+                    movement_type="out",
+                    comment=data.get("raw") or "",
+                )
+            )
+
+            remaining = item.quantity or 0
+            minimum = item.min_quantity or 0
+
+            messages.append(
+                f"{label} — 1 шт., остаток {remaining}"
+            )
+
+            if remaining <= minimum:
+                low_messages.append(
+                    "⚠️ <b>Заканчивается деталь</b>\n"
+                    f"Деталь: {label}\n"
+                    f"Осталось: {remaining} шт.\n"
+                    f"Минимум: {minimum} шт."
+                )
 
         return {
-            "used": True,
+            "used": used_any,
             "message": (
-                f"Со склада списано: {item.part_name}"
-                f"{' ' + item.brand if item.brand else ''}"
-                f"{' · ' + item.variant if getattr(item, 'variant', '') else ''} — "
-                f"1 шт. Остаток: {remaining} шт."
+                ("Со склада списано: " if used_any else "Склад не списан: ")
+                + "; ".join(messages)
             ),
-            "low_stock_text": low_stock_text,
+            "low_stock_text": "\n\n".join(low_messages),
         }
 
+    # Запасной поиск по названию для старых команд без выбора подсказки.
     parsed_parts = data.get("parts") or []
 
     if not parsed_parts and data.get("part"):
@@ -1270,15 +1287,11 @@ def deduct_from_warehouse(session, op, car, data):
         display_name = f"{part_name} {brand}".strip()
 
         if not item:
-            messages.append(
-                f"не найдена «{display_name}»"
-            )
+            messages.append(f"не найдена «{display_name}»")
             continue
 
         if (item.quantity or 0) <= 0:
-            messages.append(
-                f"«{display_name}» закончилась"
-            )
+            messages.append(f"«{display_name}» закончилась")
             continue
 
         item.quantity = (item.quantity or 0) - 1
@@ -1300,158 +1313,32 @@ def deduct_from_warehouse(session, op, car, data):
         remaining = item.quantity or 0
         minimum = item.min_quantity or 0
 
-        messages.append(
+        label = (
             f"{item.part_name}"
             f"{' ' + item.brand if item.brand else ''}"
-            f"{' · ' + item.variant if getattr(item, 'variant', '') else ''} — "
-            f"1 шт., остаток {remaining}"
+            f"{' · ' + item.variant if getattr(item, 'variant', '') else ''}"
+        )
+
+        messages.append(
+            f"{label} — 1 шт., остаток {remaining}"
         )
 
         if remaining <= minimum:
             low_messages.append(
                 "⚠️ <b>Заканчивается деталь</b>\n"
-                f"Деталь: {item.part_name}"
-                f"{' ' + item.brand if item.brand else ''}"
-                f"{' · ' + item.variant if getattr(item, 'variant', '') else ''}\n"
+                f"Деталь: {label}\n"
                 f"Осталось: {remaining} шт.\n"
                 f"Минимум: {minimum} шт."
             )
 
-    prefix = (
-        "Со склада списано: "
-        if used_any
-        else "Склад не списан: "
-    )
-
     return {
         "used": used_any,
-        "message": prefix + "; ".join(messages),
+        "message": (
+            ("Со склада списано: " if used_any else "Склад не списан: ")
+            + "; ".join(messages)
+        ),
         "low_stock_text": "\n\n".join(low_messages),
     }
-
-
-
-def enforce_repair_total_from_raw(data):
-    """
-    Финальная серверная проверка стоимости ремонта.
-
-    Не зависит от parser.py и понимает:
-    - цена 1000
-    - цена 1000р
-    - стоимость 1 000 руб.
-    - работа 700
-    - ремонт 700р
-    """
-    if data.get("type") not in ("repair", "service", "expense"):
-        return data
-
-    raw = (data.get("raw") or "").lower().replace("ё", "е")
-
-    if not raw:
-        return data
-
-    def to_int(raw_number):
-        cleaned = re.sub(r"[^\d]", "", raw_number or "")
-        return int(cleaned) if cleaned else 0
-
-    # Сначала вариант с разделителями тысяч, затем обычное число.
-    # Важно: старый порядок мог прочитать 1000 как 100.
-    number_pattern = (
-        r"(\d{1,3}(?:[ \u00a0]\d{3})+|\d{1,9})(?!\d)"
-    )
-
-    # Цена деталей: поддерживаем несколько упоминаний цены.
-    part_price_matches = re.findall(
-        rf"\b(?:цена|стоимость|деталь|запчасть)\s*[:=-]?\s*"
-        rf"{number_pattern}\s*(?:₽|р\.?|руб\.?|рублей)?",
-        raw,
-    )
-
-    # Работа может быть указана словами «работа» или «ремонт».
-    labor_matches = re.findall(
-        rf"\b(?:работа|за\s+работу|ремонт)\s*[:=-]?\s*"
-        rf"{number_pattern}\s*(?:₽|р\.?|руб\.?|рублей)?",
-        raw,
-    )
-
-    part_price = sum(to_int(value) for value in part_price_matches)
-    labor = sum(to_int(value) for value in labor_matches)
-
-    # Если явных меток нет, используем все денежные числа,
-    # кроме кода машины и пробега.
-    if part_price == 0 and labor == 0:
-        car_code = normalize_code(data.get("car_code"))
-        mileage = data.get("mileage")
-        values = []
-
-        for match in re.finditer(
-            rf"(?<!\d){number_pattern}\s*(?:₽|р\.?|руб\.?|рублей)?",
-            raw,
-        ):
-            value = to_int(match.group(1))
-
-            if car_code and str(value) == str(car_code):
-                continue
-            if mileage and value == int(mileage):
-                continue
-
-            values.append(value)
-
-        if values:
-            # Если парсер уже определил работу, сохраняем её,
-            # остальное считаем стоимостью деталей.
-            existing_labor = int(data.get("labor") or 0)
-            if existing_labor and existing_labor in values:
-                labor = existing_labor
-                removed = False
-                remaining = []
-
-                for value in values:
-                    if not removed and value == existing_labor:
-                        removed = True
-                        continue
-                    remaining.append(value)
-
-                part_price = sum(remaining)
-            else:
-                part_price = sum(values)
-
-    # Явные значения из исходной команды имеют приоритет.
-    if part_price or labor:
-        data["part_price"] = part_price
-        data["labor"] = labor
-        data["total"] = part_price + labor
-
-        parts = data.get("parts") or []
-
-        if parts:
-            # Распределяем итоговую стоимость деталей без потери суммы.
-            existing_prices = sum(
-                int(item.get("price") or 0)
-                for item in parts
-            )
-            difference = part_price - existing_prices
-
-            if difference != 0:
-                target = next(
-                    (
-                        item for item in parts
-                        if not int(item.get("price") or 0)
-                    ),
-                    parts[-1],
-                )
-                target["price"] = max(
-                    int(target.get("price") or 0) + difference,
-                    0,
-                )
-
-            # Работа хранится только у первой детали.
-            for index, item in enumerate(parts):
-                item["labor"] = labor if index == 0 else 0
-
-            data["parts"] = parts
-
-    return data
 
 
 def save_operation(data):
@@ -2439,6 +2326,7 @@ def api_add():
     payload = request.json or {}
     message = (payload.get("message", "") or "").strip()
     warehouse_item_id = payload.get("warehouse_item_id")
+    warehouse_item_ids = payload.get("warehouse_item_ids") or []
 
     session = Session()
     try:
@@ -2459,6 +2347,7 @@ def api_add():
     if len(parts) <= 1:
         parsed = parse_message(message)
         parsed["warehouse_item_id"] = warehouse_item_id
+        parsed["warehouse_item_ids"] = warehouse_item_ids
         return jsonify(save_operation(parsed))
 
     results = []
@@ -2468,8 +2357,10 @@ def api_add():
     for index, part in enumerate(parts):
         parsed = parse_message(part)
 
-        if index == 0 and warehouse_item_id:
-            parsed["warehouse_item_id"] = warehouse_item_id
+        if index == 0:
+            if warehouse_item_id:
+                parsed["warehouse_item_id"] = warehouse_item_id
+            parsed["warehouse_item_ids"] = warehouse_item_ids
 
         if parsed.get("car_code"):
             first_code = parsed.get("car_code")
