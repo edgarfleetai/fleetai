@@ -24,7 +24,9 @@ class Car(Base):
     settlement_day = Column(Integer, default=15)
 
     weekly_payment = Column(Integer, default=0)
+    daily_rent = Column(Integer, default=0)
     payment_weekday = Column(Integer, default=0)
+    last_payment_date = Column(String, default="")
     next_payment_date = Column(String, default="")
     payment_notifications = Column(Integer, default=1)
 
