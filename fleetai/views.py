@@ -2801,7 +2801,7 @@ async function loadOps(){
   `;
 }
 
-let window.monthlyMileageByCar={};
+window.monthlyMileageByCar = window.monthlyMileageByCar || {};
 let warehouseAutocompleteItems=[];
 let warehouseSuggestionIndex=-1;
 let warehouseAutocompleteTimer=null;
