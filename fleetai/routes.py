@@ -3301,6 +3301,151 @@ def api_cars_monthly_finance():
         session.close()
 
 
+
+def mileage_status(month_increase):
+    """
+    Цветовая зона месячного пробега:
+    - меньше 8 000 км — нейтральный;
+    - 8 000–10 999 км — зелёный;
+    - 11 000–12 000 км — жёлтый;
+    - больше 12 000 км — красный.
+    """
+    value = int(month_increase or 0)
+
+    if value > 12000:
+        return "red"
+    if value >= 11000:
+        return "yellow"
+    if value >= 8000:
+        return "green"
+    return "neutral"
+
+
+def car_monthly_mileage(session, car, reference_date=None):
+    """
+    Считает, насколько вырос пробег машины за текущий месяц.
+
+    Источник истории — пробеги, сохранённые в операциях.
+    Базовый пробег:
+    1. последняя запись до начала месяца;
+    2. если её нет — первая запись текущего месяца;
+    3. если нет записей — текущий пробег машины.
+    """
+    reference_date = reference_date or date.today()
+    month_start = reference_date.replace(day=1)
+
+    next_month = (
+        month_start.replace(
+            year=month_start.year + 1,
+            month=1,
+        )
+        if month_start.month == 12
+        else month_start.replace(month=month_start.month + 1)
+    )
+
+    code = normalize_code(car.code)
+
+    previous_operation = (
+        session.query(Operation)
+        .filter(
+            func.trim(Operation.car_code) == code,
+            Operation.mileage.isnot(None),
+            Operation.mileage > 0,
+            Operation.date < month_start,
+        )
+        .order_by(
+            Operation.date.desc(),
+            Operation.id.desc(),
+        )
+        .first()
+    )
+
+    current_month_operations = (
+        session.query(Operation)
+        .filter(
+            func.trim(Operation.car_code) == code,
+            Operation.mileage.isnot(None),
+            Operation.mileage > 0,
+            Operation.date >= month_start,
+            Operation.date < next_month,
+        )
+        .order_by(
+            Operation.date.asc(),
+            Operation.id.asc(),
+        )
+        .all()
+    )
+
+    current_mileage = int(car.mileage or 0)
+
+    # Если в текущем месяце есть более свежая операция с пробегом,
+    # берём максимальный известный пробег.
+    if current_month_operations:
+        current_mileage = max(
+            [current_mileage]
+            + [
+                int(operation.mileage or 0)
+                for operation in current_month_operations
+            ]
+        )
+
+    if previous_operation:
+        start_mileage = int(previous_operation.mileage or 0)
+        source = "previous_month_record"
+    elif current_month_operations:
+        start_mileage = int(
+            current_month_operations[0].mileage or 0
+        )
+        source = "first_current_month_record"
+    else:
+        start_mileage = current_mileage
+        source = "no_history"
+
+    increase = max(current_mileage - start_mileage, 0)
+
+    return {
+        "car_code": code,
+        "current_mileage": current_mileage,
+        "month_start_mileage": start_mileage,
+        "month_increase": increase,
+        "status": mileage_status(increase),
+        "source": source,
+        "month": month_start.strftime("%m.%Y"),
+    }
+
+
+@bp.route("/api/cars-monthly-mileage")
+def api_cars_monthly_mileage():
+    session = Session()
+
+    try:
+        cars = (
+            session.query(Car)
+            .order_by(Car.code.asc())
+            .all()
+        )
+
+        items = [
+            car_monthly_mileage(session, car)
+            for car in cars
+        ]
+
+        return jsonify({
+            "ok": True,
+            "month": date.today().replace(day=1).strftime("%m.%Y"),
+            "items": items,
+        })
+
+    except Exception as error:
+        return jsonify({
+            "ok": False,
+            "message": f"Ошибка расчёта пробега: {error}",
+        }), 500
+
+    finally:
+        session.close()
+
+
 @bp.route("/api/cars")
 def api_cars():
     session = Session()
