@@ -1749,7 +1749,464 @@ def part_history_score(question, part, operation):
     return score
 
 
+
+def canonical_part_key(value):
+    """
+    Нормализует название детали для статистики.
+
+    Примеры:
+    - рулевой наконечник / рулевого наконечника;
+    - стойка стаба / стойка стабилизатора;
+    - колодки / тормозные колодки.
+    """
+    normalized = normalize_history_question_text(value)
+
+    aliases = {
+        "стойка стаба": "стойка стабилизатора",
+        "стойки стаба": "стойка стабилизатора",
+        "линк стабилизатора": "стойка стабилизатора",
+        "линка стабилизатора": "стойка стабилизатора",
+        "втулка стаба": "втулка стабилизатора",
+        "втулки стаба": "втулка стабилизатора",
+        "рулевой наконечник": "рулевой наконечник",
+        "рулевого наконечника": "рулевой наконечник",
+        "тормозные колодки": "тормозные колодки",
+        "колодки": "тормозные колодки",
+        "ступичный подшипник": "подшипник ступицы",
+        "подшипник ступицы": "подшипник ступицы",
+    }
+
+    if normalized in aliases:
+        return aliases[normalized]
+
+    words = [
+        history_word_stem(word)
+        for word in normalized.split()
+        if len(word) >= 3
+    ]
+
+    return " ".join(words).strip()
+
+
+def build_parts_analytics(session):
+    """
+    Строит статистику замен деталей по всей истории.
+
+    Для каждой детали считает:
+    - количество замен;
+    - количество машин;
+    - последнюю замену;
+    - средний интервал в днях;
+    - средний интервал по пробегу;
+    - повторные замены на одной машине.
+    """
+    grouped = {}
+
+    for part in session.query(Part).all():
+        operation = None
+
+        if part.operation_id:
+            operation = (
+                session.query(Operation)
+                .filter_by(id=part.operation_id)
+                .first()
+            )
+
+        event_date = (
+            operation.date
+            if operation and operation.date
+            else getattr(part, "date", None)
+        )
+
+        key = canonical_part_key(part.part_name or "")
+
+        if not key:
+            continue
+
+        row = grouped.setdefault(key, {
+            "name": part.part_name or key,
+            "count": 0,
+            "cars": set(),
+            "brands": {},
+            "events": [],
+            "repeat_by_car": {},
+        })
+
+        row["count"] += 1
+        row["cars"].add(normalize_code(part.car_code))
+
+        if part.brand:
+            row["brands"][part.brand] = (
+                row["brands"].get(part.brand, 0) + 1
+            )
+
+        event = {
+            "car_code": normalize_code(part.car_code),
+            "date": event_date,
+            "mileage": part.install_mileage,
+            "brand": part.brand or "",
+            "position": part.position or "",
+            "price": part.price or 0,
+            "labor": part.labor or 0,
+            "operation": operation,
+        }
+
+        row["events"].append(event)
+
+        car_events = row["repeat_by_car"].setdefault(
+            normalize_code(part.car_code),
+            [],
+        )
+        car_events.append(event)
+
+    result = []
+
+    for key, row in grouped.items():
+        intervals_days = []
+        intervals_mileage = []
+        repeated_cars = []
+
+        for car_code, events in row["repeat_by_car"].items():
+            events.sort(
+                key=lambda item: (
+                    item["date"] or datetime.min,
+                    item["mileage"] or 0,
+                )
+            )
+
+            if len(events) >= 2:
+                repeated_cars.append({
+                    "car_code": car_code,
+                    "count": len(events),
+                })
+
+            for previous, current in zip(events, events[1:]):
+                if previous["date"] and current["date"]:
+                    day_gap = (
+                        current["date"].date()
+                        - previous["date"].date()
+                    ).days
+
+                    if day_gap > 0:
+                        intervals_days.append(day_gap)
+
+                if previous["mileage"] and current["mileage"]:
+                    mileage_gap = (
+                        current["mileage"]
+                        - previous["mileage"]
+                    )
+
+                    if mileage_gap > 0:
+                        intervals_mileage.append(mileage_gap)
+
+        events_sorted = sorted(
+            row["events"],
+            key=lambda item: item["date"] or datetime.min,
+            reverse=True,
+        )
+
+        top_brand = ""
+        top_brand_count = 0
+
+        if row["brands"]:
+            top_brand, top_brand_count = max(
+                row["brands"].items(),
+                key=lambda item: item[1],
+            )
+
+        result.append({
+            "key": key,
+            "name": row["name"],
+            "count": row["count"],
+            "cars_count": len(row["cars"]),
+            "cars": sorted(row["cars"]),
+            "top_brand": top_brand,
+            "top_brand_count": top_brand_count,
+            "avg_days": (
+                round(sum(intervals_days) / len(intervals_days))
+                if intervals_days
+                else None
+            ),
+            "avg_mileage": (
+                round(
+                    sum(intervals_mileage)
+                    / len(intervals_mileage)
+                )
+                if intervals_mileage
+                else None
+            ),
+            "repeated_cars": sorted(
+                repeated_cars,
+                key=lambda item: item["count"],
+                reverse=True,
+            ),
+            "last_event": events_sorted[0] if events_sorted else None,
+        })
+
+    result.sort(
+        key=lambda item: (
+            item["count"],
+            item["cars_count"],
+        ),
+        reverse=True,
+    )
+
+    return result
+
+
+def answer_parts_analytics_question(session, message):
+    normalized = normalize_history_question_text(message)
+
+    analytics_signals = (
+        "часто ломаются",
+        "чаще ломаются",
+        "самые частые поломки",
+        "какие детали часто",
+        "какие детали чаще",
+        "реже ломаются",
+        "редко ломаются",
+        "реже меняются",
+        "часто меняются",
+        "статистика деталей",
+        "анализ деталей",
+        "сколько раз меняли",
+        "как часто меняли",
+        "как часто меняется",
+        "средний срок замены",
+        "через сколько меняется",
+        "через сколько меняли",
+    )
+
+    if not any(signal in normalized for signal in analytics_signals):
+        return None
+
+    analytics = build_parts_analytics(session)
+
+    if not analytics:
+        return {
+            "ok": True,
+            "is_answer": True,
+            "message": "Пока недостаточно данных по заменам деталей.",
+        }
+
+    # Вопрос про конкретную деталь.
+    query_tokens = history_tokens(message)
+    specific_matches = []
+
+    for item in analytics:
+        item_tokens = {
+            history_word_stem(word)
+            for word in normalize_history_question_text(
+                item["name"]
+            ).split()
+        }
+
+        score = 0
+
+        for token in query_tokens:
+            if token in item_tokens:
+                score += 20
+            elif any(
+                stored.startswith(token)
+                or token.startswith(stored)
+                for stored in item_tokens
+                if len(stored) >= 4
+            ):
+                score += 10
+
+        if score > 0:
+            specific_matches.append((score, item))
+
+    if specific_matches and (
+        "сколько раз" in normalized
+        or "как часто" in normalized
+        or "через сколько" in normalized
+        or "средний срок" in normalized
+    ):
+        specific_matches.sort(
+            key=lambda pair: (
+                pair[0],
+                pair[1]["count"],
+            ),
+            reverse=True,
+        )
+
+        item = specific_matches[0][1]
+        lines = [
+            f"Статистика по детали: {item['name']}",
+            f"Всего замен: {item['count']}",
+            f"Машин: {item['cars_count']}",
+            f"Машины: {', '.join(item['cars'])}",
+        ]
+
+        if item["avg_days"] is not None:
+            lines.append(
+                f"Средний интервал: {item['avg_days']} дней"
+            )
+        else:
+            lines.append(
+                "Средний интервал по дням пока нельзя посчитать"
+            )
+
+        if item["avg_mileage"] is not None:
+            lines.append(
+                "Средний интервал по пробегу: "
+                f"{item['avg_mileage']:,} км".replace(",", " ")
+            )
+        else:
+            lines.append(
+                "Средний интервал по пробегу пока нельзя посчитать"
+            )
+
+        if item["top_brand"]:
+            lines.append(
+                f"Чаще ставили бренд: {item['top_brand']} "
+                f"({item['top_brand_count']} раз)"
+            )
+
+        if item["repeated_cars"]:
+            repeat_text = ", ".join(
+                f"{row['car_code']} — {row['count']} раза"
+                for row in item["repeated_cars"][:5]
+            )
+            lines.append(
+                f"Повторные замены на машинах: {repeat_text}"
+            )
+
+        last_event = item["last_event"]
+
+        if last_event:
+            last_date = (
+                last_event["date"].strftime("%d.%m.%Y")
+                if last_event["date"]
+                else "дата не указана"
+            )
+            lines.append(
+                f"Последняя замена: машина "
+                f"{last_event['car_code']}, {last_date}"
+            )
+
+        return {
+            "ok": True,
+            "is_answer": True,
+            "message": "\n".join(lines),
+        }
+
+    # Частые детали.
+    if any(
+        phrase in normalized
+        for phrase in (
+            "часто ломаются",
+            "чаще ломаются",
+            "самые частые",
+            "часто меняются",
+            "какие детали часто",
+            "какие детали чаще",
+        )
+    ):
+        frequent = [
+            item
+            for item in analytics
+            if item["count"] >= 2
+        ][:10]
+
+        if not frequent:
+            return {
+                "ok": True,
+                "is_answer": True,
+                "message": (
+                    "Пока нет деталей с повторными заменами. "
+                    "Для вывода о частых поломках нужно минимум "
+                    "две замены одной детали."
+                ),
+            }
+
+        lines = ["Чаще всего менялись:"]
+
+        for index, item in enumerate(frequent, start=1):
+            interval_parts = []
+
+            if item["avg_days"] is not None:
+                interval_parts.append(
+                    f"в среднем раз в {item['avg_days']} дней"
+                )
+
+            if item["avg_mileage"] is not None:
+                interval_parts.append(
+                    f"через {item['avg_mileage']:,} км".replace(",", " ")
+                )
+
+            interval_text = (
+                f" · {', '.join(interval_parts)}"
+                if interval_parts
+                else ""
+            )
+
+            lines.append(
+                f"{index}. {item['name']} — "
+                f"{item['count']} замен на "
+                f"{item['cars_count']} машинах"
+                f"{interval_text}"
+            )
+
+        return {
+            "ok": True,
+            "is_answer": True,
+            "message": "\n".join(lines),
+        }
+
+    # Редкие детали.
+    rare = sorted(
+        analytics,
+        key=lambda item: (
+            item["count"],
+            item["cars_count"],
+            item["name"],
+        ),
+    )[:10]
+
+    lines = ["Реже всего менялись:"]
+
+    for index, item in enumerate(rare, start=1):
+        lines.append(
+            f"{index}. {item['name']} — "
+            f"{item['count']} замена"
+            f"{'ы' if item['count'] in (2, 3, 4) else ''}"
+        )
+
+    return {
+        "ok": True,
+        "is_answer": True,
+        "message": "\n".join(lines),
+    }
+
+
+@bp.route("/api/parts-analytics", methods=["GET"])
+def api_parts_analytics():
+    session = Session()
+
+    try:
+        analytics = build_parts_analytics(session)
+
+        return jsonify({
+            "ok": True,
+            "items": analytics,
+            "parts_count": len(analytics),
+        })
+
+    finally:
+        session.close()
+
+
 def answer_history_question(session, message):
+    analytics_answer = answer_parts_analytics_question(
+        session,
+        message,
+    )
+
+    if analytics_answer is not None:
+        return analytics_answer
+
     """
     Отвечает на вопросы по истории ремонта.
 
