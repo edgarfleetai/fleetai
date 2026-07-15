@@ -1144,6 +1144,12 @@ def deduct_from_warehouse(session, op, car, data):
 
     selected_ids = data.get("warehouse_item_ids") or []
 
+    # JSON может прислать список, одно число или строку.
+    if not isinstance(selected_ids, (list, tuple, set)):
+        selected_ids = [selected_ids]
+    else:
+        selected_ids = list(selected_ids)
+
     # Совместимость со старой версией интерфейса.
     old_selected_id = data.get("warehouse_item_id")
     if old_selected_id and old_selected_id not in selected_ids:
@@ -1344,161 +1350,176 @@ def deduct_from_warehouse(session, op, car, data):
 def save_operation(data):
     data = enforce_repair_total_from_raw(data)
     session = Session()
-    car = find_car(session, data.get("car_code"))
 
-    if not car:
-        existing = [c.code for c in session.query(Car).order_by(Car.code).all()]
-        session.close()
-        return {"ok": False, "message": f"Машина не найдена. Есть коды: {', '.join(existing)}"}
-
-    if data["type"] == "unknown":
-        session.close()
-        return {"ok": False, "message": "Не понял сообщение. Пример: 703 получил 13000"}
-
-    op = Operation(
-        car_code=car.code, type=data["type"], category=data["category"],
-        description=data["description"], amount=data["total"],
-        mileage=data["mileage"], raw_message=data["raw"],
-    )
-    session.add(op)
-    session.flush()
-
-    if data["type"] == "income":
-        session.add(Income(operation_id=op.id, car_code=car.code, amount=data["income"], income_type=data["description"]))
-
-    elif data["type"] in ("repair", "service", "expense"):
-        session.add(Expense(operation_id=op.id, car_code=car.code, category=data["category"], amount=data["total"], share_type=data.get("share_type", "shared")))
-
-    elif data["type"] == "car_investment":
-        session.add(CarInvestment(operation_id=op.id, car_code=car.code, category=data["category"], description=data["description"], amount=data["total"], raw_message=data["raw"]))
-
-    elif data["type"] == "investor_investment":
-        # Если написано просто "636 инвестор вложил 25000",
-        # не создаем инвестора с именем "Вложил". Берем текущего
-        # инвестора из карточки машины.
-        investor_name = data.get("investor_name") or car.investor_name or ""
-
-        session.add(InvestorInvestment(
-            operation_id=op.id,
-            car_code=car.code,
-            investor_name=investor_name,
-            amount=data["total"],
-            percent=data["investor_percent"] or car.investor_percent or 0,
-            comment=data["raw"],
-        ))
-
-        car.owner_type = "investor"
-        if investor_name:
-            car.investor_name = investor_name
-        if data["investor_percent"]:
-            car.investor_percent = data["investor_percent"]
-
-    elif data["type"] == "investor_payout":
-        session.add(InvestorPayout(operation_id=op.id, car_code=car.code, investor_name=data["investor_name"], amount=data["total"], comment=data["raw"]))
-
-    elif data["type"] == "investor_expense_split":
-        session.add(InvestorSettlement(
-            operation_id=op.id, investor_name=car.investor_name or data.get("investor_name", ""),
-            car_code=car.code, total_cost=data["total_cost"], investor_paid=data["investor_paid"],
-            park_paid=data["park_paid"], investor_debt_to_park=data["investor_debt_to_park"],
-            park_debt_to_investor=data["park_debt_to_investor"], description=data["description"],
-            comment=data["raw"],
-        ))
-        session.add(Expense(operation_id=op.id, car_code=car.code, category="Доп. расходы", amount=data["total_cost"], share_type="investor_only"))
-
-    elif data["type"] == "downtime_end":
-        # Ищем любую незакрытую строку, а не только active=1.
-        # Это исправляет старые записи, где active сохранился неверно.
-        downtime = (
-            session.query(Downtime)
-            .filter(
-                func.trim(Downtime.car_code) == normalize_code(car.code),
-                Downtime.end_date.is_(None),
-            )
-            .order_by(Downtime.id.desc())
-            .first()
+    try:
+        car = find_car(session, data.get("car_code"))
+    
+        if not car:
+            existing = [c.code for c in session.query(Car).order_by(Car.code).all()]
+            return {"ok": False, "message": f"Машина не найдена. Есть коды: {', '.join(existing)}"}
+    
+        if data["type"] == "unknown":
+            return {"ok": False, "message": "Не понял сообщение. Пример: 703 получил 13000"}
+    
+        op = Operation(
+            car_code=car.code, type=data["type"], category=data["category"],
+            description=data["description"], amount=data["total"],
+            mileage=data["mileage"], raw_message=data["raw"],
         )
-
-        if downtime:
-            downtime.end_date = op.date or datetime.now()
-            downtime.active = 0
-
-            if downtime.start_date:
-                downtime.days = max(
-                    (
-                        downtime.end_date.date()
-                        - downtime.start_date.date()
-                    ).days,
-                    1,
+        session.add(op)
+        session.flush()
+    
+        if data["type"] == "income":
+            session.add(Income(operation_id=op.id, car_code=car.code, amount=data["income"], income_type=data["description"]))
+    
+        elif data["type"] in ("repair", "service", "expense"):
+            session.add(Expense(operation_id=op.id, car_code=car.code, category=data["category"], amount=data["total"], share_type=data.get("share_type", "shared")))
+    
+        elif data["type"] == "car_investment":
+            session.add(CarInvestment(operation_id=op.id, car_code=car.code, category=data["category"], description=data["description"], amount=data["total"], raw_message=data["raw"]))
+    
+        elif data["type"] == "investor_investment":
+            # Если написано просто "636 инвестор вложил 25000",
+            # не создаем инвестора с именем "Вложил". Берем текущего
+            # инвестора из карточки машины.
+            investor_name = data.get("investor_name") or car.investor_name or ""
+    
+            session.add(InvestorInvestment(
+                operation_id=op.id,
+                car_code=car.code,
+                investor_name=investor_name,
+                amount=data["total"],
+                percent=data["investor_percent"] or car.investor_percent or 0,
+                comment=data["raw"],
+            ))
+    
+            car.owner_type = "investor"
+            if investor_name:
+                car.investor_name = investor_name
+            if data["investor_percent"]:
+                car.investor_percent = data["investor_percent"]
+    
+        elif data["type"] == "investor_payout":
+            session.add(InvestorPayout(operation_id=op.id, car_code=car.code, investor_name=data["investor_name"], amount=data["total"], comment=data["raw"]))
+    
+        elif data["type"] == "investor_expense_split":
+            session.add(InvestorSettlement(
+                operation_id=op.id, investor_name=car.investor_name or data.get("investor_name", ""),
+                car_code=car.code, total_cost=data["total_cost"], investor_paid=data["investor_paid"],
+                park_paid=data["park_paid"], investor_debt_to_park=data["investor_debt_to_park"],
+                park_debt_to_investor=data["park_debt_to_investor"], description=data["description"],
+                comment=data["raw"],
+            ))
+            session.add(Expense(operation_id=op.id, car_code=car.code, category="Доп. расходы", amount=data["total_cost"], share_type="investor_only"))
+    
+        elif data["type"] == "downtime_end":
+            # Ищем любую незакрытую строку, а не только active=1.
+            # Это исправляет старые записи, где active сохранился неверно.
+            downtime = (
+                session.query(Downtime)
+                .filter(
+                    func.trim(Downtime.car_code) == normalize_code(car.code),
+                    Downtime.end_date.is_(None),
                 )
-
-        # Выключаем все случайно оставшиеся активные простои машины.
-        for old_row in (
-            session.query(Downtime)
-            .filter(
-                func.trim(Downtime.car_code)
-                == normalize_code(car.code),
-                Downtime.active == 1,
+                .order_by(Downtime.id.desc())
+                .first()
             )
-            .all()
-        ):
-            old_row.active = 0
-
-        car.status = "Работает"
-
-    elif data["type"] == "downtime":
-        downtime_end = data.get("end_date")
-        is_active = 0 if downtime_end else 1
-
-        session.add(Downtime(
-            operation_id=op.id,
-            car_code=car.code,
-            start_date=data.get("start_date") or datetime.now(),
-            end_date=downtime_end,
-            days=data.get("days", 0),
-            reason=data["description"],
-            active=is_active,
-            comment=data["raw"],
-        ))
-
-        car.status = "Простой" if is_active else "Работает"
-
-    add_part_rows_from_parsed(
-        session,
-        op,
-        car,
-        data,
-    )
-
-    if data.get("mileage"):
-        car.current_mileage = data["mileage"]
-        session.add(Mileage(car_code=car.code, mileage=data["mileage"], source=data["raw"]))
-
-    warehouse_result = deduct_from_warehouse(
-        session,
-        op,
-        car,
-        data,
-    )
-
-    session.commit()
-    op_id = op.id
-
-    low_stock_text = warehouse_result.get("low_stock_text") or ""
-    if low_stock_text:
-        send_telegram_message(low_stock_text)
-
-    message = f"Записано. Операция #{op_id}"
-    if warehouse_result.get("message"):
-        message += " | " + warehouse_result["message"]
-
-    session.close()
-    return {
-        "ok": True,
-        "message": message,
-        "data": data,
-        "warehouse": warehouse_result,
-    }
+    
+            if downtime:
+                downtime.end_date = op.date or datetime.now()
+                downtime.active = 0
+    
+                if downtime.start_date:
+                    downtime.days = max(
+                        (
+                            downtime.end_date.date()
+                            - downtime.start_date.date()
+                        ).days,
+                        1,
+                    )
+    
+            # Выключаем все случайно оставшиеся активные простои машины.
+            for old_row in (
+                session.query(Downtime)
+                .filter(
+                    func.trim(Downtime.car_code)
+                    == normalize_code(car.code),
+                    Downtime.active == 1,
+                )
+                .all()
+            ):
+                old_row.active = 0
+    
+            car.status = "Работает"
+    
+        elif data["type"] == "downtime":
+            downtime_end = data.get("end_date")
+            is_active = 0 if downtime_end else 1
+    
+            session.add(Downtime(
+                operation_id=op.id,
+                car_code=car.code,
+                start_date=data.get("start_date") or datetime.now(),
+                end_date=downtime_end,
+                days=data.get("days", 0),
+                reason=data["description"],
+                active=is_active,
+                comment=data["raw"],
+            ))
+    
+            car.status = "Простой" if is_active else "Работает"
+    
+        add_part_rows_from_parsed(
+            session,
+            op,
+            car,
+            data,
+        )
+    
+        if data.get("mileage"):
+            car.current_mileage = data["mileage"]
+            session.add(Mileage(car_code=car.code, mileage=data["mileage"], source=data["raw"]))
+    
+        warehouse_result = deduct_from_warehouse(
+            session,
+            op,
+            car,
+            data,
+        )
+    
+        session.commit()
+        op_id = op.id
+    
+        low_stock_text = warehouse_result.get("low_stock_text") or ""
+        if low_stock_text:
+            send_telegram_message(low_stock_text)
+    
+        message = f"Записано. Операция #{op_id}"
+        if warehouse_result.get("message"):
+            message += " | " + warehouse_result["message"]
+    
+        return {
+            "ok": True,
+            "message": message,
+            "data": data,
+            "warehouse": warehouse_result,
+        }
+    except Exception as error:
+        session.rollback()
+        print(
+            "Ошибка save_operation:",
+            type(error).__name__,
+            str(error),
+        )
+        return {
+            "ok": False,
+            "message": (
+                "Ошибка записи операции: "
+                f"{type(error).__name__}: {error}"
+            ),
+        }
+    finally:
+        session.close()
 
 
 @bp.route("/")
@@ -2323,60 +2344,84 @@ def api_ask_history():
 
 @bp.route("/api/add", methods=["POST"])
 def api_add():
-    payload = request.json or {}
-    message = (payload.get("message", "") or "").strip()
-    warehouse_item_id = payload.get("warehouse_item_id")
-    warehouse_item_ids = payload.get("warehouse_item_ids") or []
-
-    session = Session()
     try:
-        history_answer = answer_history_question(
-            session,
-            message,
-        )
-    finally:
-        session.close()
+        payload = request.get_json(silent=True) or {}
+        message = (payload.get("message", "") or "").strip()
+        warehouse_item_id = payload.get("warehouse_item_id")
+        warehouse_item_ids = payload.get("warehouse_item_ids") or []
 
-    if history_answer is not None:
-        return jsonify(history_answer)
+        if not message:
+            return jsonify({
+                "ok": False,
+                "message": "Введите команду",
+            }), 400
 
-    # Поддержка нескольких записей в одной строке:
-    # 703 получил 13000 / 703 доп расходы 41700 инвестор оплатил 25000
-    parts = [p.strip() for p in message.split("/") if p.strip()]
+        session = Session()
+        try:
+            history_answer = answer_history_question(
+                session,
+                message,
+            )
+        finally:
+            session.close()
 
-    if len(parts) <= 1:
-        parsed = parse_message(message)
-        parsed["warehouse_item_id"] = warehouse_item_id
-        parsed["warehouse_item_ids"] = warehouse_item_ids
-        return jsonify(save_operation(parsed))
+        if history_answer is not None:
+            return jsonify(history_answer)
 
-    results = []
-    ok = True
-    first_code = None
+        parts = [
+            part.strip()
+            for part in message.split("/")
+            if part.strip()
+        ]
 
-    for index, part in enumerate(parts):
-        parsed = parse_message(part)
-
-        if index == 0:
-            if warehouse_item_id:
-                parsed["warehouse_item_id"] = warehouse_item_id
+        if len(parts) <= 1:
+            parsed = parse_message(message)
+            parsed["warehouse_item_id"] = warehouse_item_id
             parsed["warehouse_item_ids"] = warehouse_item_ids
+            result = save_operation(parsed)
+            return jsonify(result), (200 if result.get("ok") else 400)
 
-        if parsed.get("car_code"):
-            first_code = parsed.get("car_code")
-        elif first_code:
-            parsed["car_code"] = first_code
+        results = []
+        ok = True
+        first_code = None
 
-        result = save_operation(parsed)
-        results.append(result.get("message", ""))
-        if not result.get("ok"):
-            ok = False
+        for index, part in enumerate(parts):
+            parsed = parse_message(part)
 
-    return jsonify({
-        "ok": ok,
-        "message": " | ".join(results),
-        "results": results,
-    })
+            if index == 0:
+                if warehouse_item_id:
+                    parsed["warehouse_item_id"] = warehouse_item_id
+                parsed["warehouse_item_ids"] = warehouse_item_ids
+
+            if parsed.get("car_code"):
+                first_code = parsed.get("car_code")
+            elif first_code:
+                parsed["car_code"] = first_code
+
+            result = save_operation(parsed)
+            results.append(result.get("message", ""))
+
+            if not result.get("ok"):
+                ok = False
+
+        return jsonify({
+            "ok": ok,
+            "message": " | ".join(results),
+        }), (200 if ok else 400)
+
+    except Exception as error:
+        print(
+            "Ошибка /api/add:",
+            type(error).__name__,
+            str(error),
+        )
+        return jsonify({
+            "ok": False,
+            "message": (
+                "Ошибка сервера при записи: "
+                f"{type(error).__name__}: {error}"
+            ),
+        }), 500
 
 
 @bp.route("/api/add-car", methods=["POST"])
