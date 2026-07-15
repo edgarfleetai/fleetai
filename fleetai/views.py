@@ -1805,27 +1805,45 @@ function showAppPage(page,button){
 
   window.scrollTo(0,0);
 
-  if(page==='warehouse'){
+  if(page==='warehouse' && typeof loadWarehouse==='function'){
     safeLoadSection('склад',loadWarehouse);
   }
 
   if(page==='fleet'){
-    safeLoadSection('месячный пробег',loadMonthlyMileage)
-      .then(()=>safeLoadSection('машины',loadCars));
-    safeLoadSection('сравнение месяцев',loadMonthlyFleetFinance);
-    safeLoadSection('операции',loadOps);
+    const mileagePromise =
+      typeof loadMonthlyMileage==='function'
+        ? safeLoadSection('месячный пробег',loadMonthlyMileage)
+        : Promise.resolve(false);
+
+    mileagePromise.then(()=>{
+      if(typeof loadCars==='function'){
+        safeLoadSection('машины',loadCars);
+      }
+    });
+
+    if(typeof loadMonthlyFleetFinance==='function'){
+      safeLoadSection('сравнение месяцев',loadMonthlyFleetFinance);
+    }
+
+    if(typeof loadOps==='function'){
+      safeLoadSection('операции',loadOps);
+    }
   }
 
-  if(page==='drivers'){
+  if(page==='drivers' && typeof loadCars==='function'){
     safeLoadSection('водители',loadCars);
   }
 
   if(page==='investors'){
-    safeLoadSection('итоги инвесторов',loadInvestorsSummary);
-    safeLoadSection('инвесторы',loadInvestors);
+    if(typeof loadInvestorsSummary==='function'){
+      safeLoadSection('итоги инвесторов',loadInvestorsSummary);
+    }
+    if(typeof loadInvestors==='function'){
+      safeLoadSection('инвесторы',loadInvestors);
+    }
   }
 
-  if(page==='dashboard'){
+  if(page==='dashboard' && typeof loadSummary==='function'){
     safeLoadSection('главные показатели',loadSummary);
   }
 }
@@ -2369,10 +2387,8 @@ function renderDriverPayments(carsList){
 }
 
 
-let monthlyMileageByCar =
-  typeof monthlyMileageByCar !== 'undefined'
-    ? monthlyMileageByCar
-    : {};
+window.monthlyMileageByCar =
+  window.monthlyMileageByCar || {};
 
 function mileageIncreaseClass(status){
   if(status==='green')return 'mileage-green';
@@ -2383,7 +2399,7 @@ function mileageIncreaseClass(status){
 
 function mileageCell(car){
   const current=Number(car.mileage||0);
-  const data=monthlyMileageByCar[String(car.code)]||{};
+  const data=window.monthlyMileageByCar[String(car.code)]||{};
   const increase=Number(data.month_increase||0);
   const status=data.status||'neutral';
 
@@ -2407,17 +2423,17 @@ async function loadMonthlyMileage(){
   try{
     const data=await api('/api/cars-monthly-mileage');
 
-    monthlyMileageByCar={};
+    window.monthlyMileageByCar={};
 
     if(!data || !data.ok || !Array.isArray(data.items)){
       return;
     }
 
     for(const item of data.items){
-      monthlyMileageByCar[String(item.car_code)]=item;
+      window.monthlyMileageByCar[String(item.car_code)]=item;
     }
   }catch(error){
-    monthlyMileageByCar={};
+    window.monthlyMileageByCar={};
     console.error(
       'Не удалось загрузить месячный пробег:',
       error
@@ -2426,7 +2442,7 @@ async function loadMonthlyMileage(){
 }
 
 async function loadCars(){
-  if(!Object.keys(monthlyMileageByCar||{}).length){
+  if(!Object.keys(window.monthlyMileageByCar||{}).length){
     await loadMonthlyMileage();
   }
 
@@ -2785,7 +2801,7 @@ async function loadOps(){
   `;
 }
 
-let monthlyMileageByCar={};
+let window.monthlyMileageByCar={};
 let warehouseAutocompleteItems=[];
 let warehouseSuggestionIndex=-1;
 let warehouseAutocompleteTimer=null;
@@ -3476,7 +3492,12 @@ document.addEventListener('DOMContentLoaded',()=>{
 
   // Принудительно открываем главную страницу после загрузки.
   showAppPage('dashboard');
-  load();
+
+  if(typeof load==='function'){
+    load().catch(error=>{
+      console.error('Ошибка начальной загрузки:',error);
+    });
+  }
 });
 </script>
 </body>
