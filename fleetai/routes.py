@@ -1753,6 +1753,14 @@ def history_tokens(value):
 
 
 def part_history_score(question, part, operation):
+    """
+    Оценивает соответствие вопроса записи ремонта.
+
+    Важное правило: сокращения и полные названия одной детали
+    получают одинаковый приоритет. Поэтому более старая запись
+    «стойка стаба» больше не обгоняет новую запись
+    «стойка стабилизатора» только из-за буквального совпадения.
+    """
     query_tokens = history_tokens(question)
 
     searchable = " ".join([
@@ -1783,14 +1791,44 @@ def part_history_score(question, part, operation):
         ):
             score += 12
 
-    normalized_question = normalize_history_question_text(question)
-    normalized_part = normalize_history_question_text(part.part_name)
+    question_key = canonical_part_key(
+        extract_part_phrase_from_question(question)
+    )
+    stored_key = canonical_part_key(part.part_name or "")
 
-    if normalized_part and normalized_part in normalized_question:
-        score += 100
+    if question_key and stored_key and question_key == stored_key:
+        score += 120
 
     return score
 
+
+def extract_part_phrase_from_question(question):
+    """
+    Убирает служебные слова из вопроса и оставляет название детали.
+    """
+    normalized = normalize_history_question_text(question)
+
+    removable = (
+        "когда последний раз менялась",
+        "когда последний раз меняли",
+        "кому мы меняли",
+        "кому меняли",
+        "на какой машине меняли",
+        "последний раз меняли",
+        "последняя замена",
+        "когда меняли",
+        "когда менялась",
+        "покажи последние",
+        "покажи последнюю",
+        "найди последнюю",
+        "какая машина",
+    )
+
+    for phrase in removable:
+        normalized = normalized.replace(phrase, " ")
+
+    normalized = re.sub(r"\s+", " ", normalized).strip()
+    return normalized
 
 
 def canonical_part_key(value):
@@ -1807,6 +1845,10 @@ def canonical_part_key(value):
     aliases = {
         "стойка стаба": "стойка стабилизатора",
         "стойки стаба": "стойка стабилизатора",
+        "стойка стабилизатора": "стойка стабилизатора",
+        "стойки стабилизатора": "стойка стабилизатора",
+        "стоика стаба": "стойка стабилизатора",
+        "стоика стабилизатора": "стойка стабилизатора",
         "линк стабилизатора": "стойка стабилизатора",
         "линка стабилизатора": "стойка стабилизатора",
         "втулка стаба": "втулка стабилизатора",
@@ -1849,6 +1891,7 @@ def build_parts_analytics(session):
         operation = None
 
         if part.operation_id:
+            operation_ids_with_parts.add(part.operation_id)
             operation = (
                 session.query(Operation)
                 .filter_by(id=part.operation_id)
@@ -2299,6 +2342,7 @@ def answer_history_question(session, message):
         limit = 5
 
     candidates = []
+    operation_ids_with_parts = set()
 
     for part in session.query(Part).all():
         operation = None
@@ -2330,6 +2374,77 @@ def answer_history_question(session, message):
             "part": part,
             "operation": operation,
             "date": event_date or datetime.min,
+        })
+
+    # Старые или сложные операции иногда имеют Operation,
+    # но не имеют отдельной строки Part. Ищем также по тексту операции.
+    query_part_key = canonical_part_key(
+        extract_part_phrase_from_question(message)
+    )
+
+    for operation in (
+        session.query(Operation)
+        .filter(Operation.type.in_(("repair", "service")))
+        .all()
+    ):
+        if operation.id in operation_ids_with_parts:
+            continue
+
+        operation_text = " ".join([
+            operation.description or "",
+            operation.raw_message or "",
+        ])
+
+        operation_key = canonical_part_key(operation_text)
+        operation_tokens = {
+            history_word_stem(word)
+            for word in normalize_history_question_text(
+                operation_text
+            ).split()
+            if len(word) >= 3
+        }
+
+        score = 0
+
+        for token in history_tokens(message):
+            if token in operation_tokens:
+                score += 25
+            elif any(
+                stored.startswith(token) or token.startswith(stored)
+                for stored in operation_tokens
+                if len(stored) >= 4
+            ):
+                score += 12
+
+        if (
+            query_part_key
+            and operation_key
+            and (
+                query_part_key in operation_key
+                or operation_key in query_part_key
+            )
+        ):
+            score += 120
+
+        if score <= 0:
+            continue
+
+        synthetic_part = type("HistoryPart", (), {
+            "part_name": operation.description or "Ремонт / замена",
+            "brand": "",
+            "position": "",
+            "price": operation.amount or 0,
+            "labor": 0,
+            "install_mileage": operation.mileage,
+            "car_code": operation.car_code,
+            "operation_id": operation.id,
+        })()
+
+        candidates.append({
+            "score": score,
+            "part": synthetic_part,
+            "operation": operation,
+            "date": operation.date or datetime.min,
         })
 
     candidates.sort(
