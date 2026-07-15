@@ -802,12 +802,388 @@ tbody tr:hover td{
   }
 }
 
+
+/* ===== APP SHELL / SIDEBAR ===== */
+
+body > *{
+  max-width:none !important;
+  width:auto !important;
+  margin:0 !important;
+}
+
+.app-shell{
+  min-height:100vh;
+  display:grid;
+  grid-template-columns:250px minmax(0,1fr);
+}
+
+.app-sidebar{
+  position:fixed;
+  inset:0 auto 0 0;
+  width:250px;
+  display:flex;
+  flex-direction:column;
+  padding:22px 16px;
+  background:#1e1d1b;
+  color:#fff;
+  border-right:1px solid rgba(255,255,255,.06);
+  z-index:100;
+}
+
+.brand-block{
+  display:flex;
+  align-items:center;
+  gap:12px;
+  padding:4px 8px 26px;
+}
+
+.brand-mark{
+  width:38px;
+  height:38px;
+  display:grid;
+  place-items:center;
+  border-radius:12px;
+  background:#f1efeb;
+  color:#24211e;
+  font-size:18px;
+  font-weight:800;
+}
+
+.brand-name{
+  font-size:16px;
+  font-weight:750;
+  letter-spacing:-.01em;
+}
+
+.brand-subtitle{
+  margin-top:2px;
+  color:#9f9a94;
+  font-size:11px;
+}
+
+.app-nav{
+  display:flex;
+  flex-direction:column;
+  gap:4px;
+}
+
+.nav-item{
+  width:100%;
+  display:flex;
+  align-items:center;
+  gap:12px;
+  padding:11px 12px;
+  background:transparent;
+  color:#aaa59f;
+  border:1px solid transparent;
+  border-radius:11px;
+  box-shadow:none;
+  text-align:left;
+}
+
+.nav-item:hover{
+  background:rgba(255,255,255,.06);
+  color:#fff;
+  box-shadow:none;
+  transform:none;
+}
+
+.nav-item.active{
+  background:#f1efeb;
+  color:#26231f;
+}
+
+.nav-icon{
+  width:20px;
+  text-align:center;
+  font-size:17px;
+}
+
+.sidebar-footer{
+  margin-top:auto;
+  padding:16px 8px 2px;
+}
+
+.system-status{
+  display:flex;
+  align-items:center;
+  gap:8px;
+  color:#8f8a84;
+  font-size:11px;
+}
+
+.status-dot{
+  width:7px;
+  height:7px;
+  border-radius:50%;
+  background:#6d8a75;
+  box-shadow:0 0 0 4px rgba(109,138,117,.12);
+}
+
+.app-main{
+  grid-column:2;
+  min-width:0;
+  padding:30px 34px 60px;
+}
+
+.wrap{
+  max-width:1500px;
+  margin:0 auto;
+}
+
+.mobile-topbar{
+  display:none;
+}
+
+.app-page{
+  display:none;
+  animation:pageFade .18s ease;
+}
+
+.app-page.active{
+  display:block;
+}
+
+.app-page-linked.active{
+  display:block;
+}
+
+@keyframes pageFade{
+  from{opacity:0;transform:translateY(4px)}
+  to{opacity:1;transform:none}
+}
+
+.page-heading{
+  display:flex;
+  justify-content:space-between;
+  align-items:flex-end;
+  gap:20px;
+  margin:2px 0 20px;
+}
+
+.page-heading h1{
+  margin:3px 0 3px;
+  font-size:31px;
+}
+
+.page-heading p{
+  margin:0;
+  font-size:14px;
+}
+
+.eyebrow{
+  color:#8b857e;
+  font-size:10px;
+  font-weight:800;
+  letter-spacing:.12em;
+}
+
+.page-primary-action{
+  white-space:nowrap;
+}
+
+.top-actions{
+  display:none !important;
+}
+
+.analytics-grid{
+  display:grid;
+  grid-template-columns:repeat(4,minmax(0,1fr));
+  gap:10px;
+}
+
+.analytics-prompt{
+  min-height:150px;
+  display:flex;
+  flex-direction:column;
+  align-items:flex-start;
+  justify-content:flex-end;
+  text-align:left;
+  background:#fff;
+  color:var(--text);
+  border:1px solid var(--line);
+  box-shadow:var(--shadow-sm);
+}
+
+.analytics-prompt:hover{
+  background:#faf9f7;
+  border-color:#cfc9c2;
+  box-shadow:var(--shadow-md);
+}
+
+.analytics-prompt-icon{
+  margin-bottom:auto;
+  color:#8d877f;
+  font-size:24px;
+}
+
+.analytics-prompt strong{
+  font-size:15px;
+}
+
+.analytics-prompt small{
+  margin-top:4px;
+  color:var(--text-soft);
+  font-weight:400;
+  line-height:1.4;
+}
+
+.analytics-console{
+  margin-top:12px;
+}
+
+.analytics-input-row{
+  display:grid;
+  grid-template-columns:minmax(0,1fr) auto;
+  gap:9px;
+}
+
+.analytics-answer{
+  min-height:160px;
+  margin:14px 0 0;
+  padding:16px;
+  overflow:auto;
+  border:1px solid var(--line);
+  border-radius:14px;
+  background:#f8f7f5;
+  color:#35312d;
+  white-space:pre-wrap;
+  font:13px/1.6 ui-monospace,SFMono-Regular,Menlo,monospace;
+}
+
+@media(max-width:1050px){
+  .analytics-grid{
+    grid-template-columns:repeat(2,minmax(0,1fr));
+  }
+}
+
+@media(max-width:800px){
+  .app-shell{
+    display:block;
+  }
+
+  .app-sidebar{
+    transform:translateX(-100%);
+    transition:transform .2s ease;
+    box-shadow:var(--shadow-lg);
+  }
+
+  .app-sidebar.open{
+    transform:translateX(0);
+  }
+
+  .app-main{
+    padding:70px 10px 40px;
+  }
+
+  .mobile-topbar{
+    position:fixed;
+    inset:0 0 auto 0;
+    z-index:80;
+    height:54px;
+    display:flex;
+    align-items:center;
+    gap:12px;
+    padding:0 14px;
+    background:rgba(255,255,255,.92);
+    backdrop-filter:blur(12px);
+    border-bottom:1px solid var(--line);
+    font-weight:700;
+  }
+
+  .mobile-menu-button{
+    width:36px;
+    height:36px;
+    padding:0;
+    background:#292622;
+  }
+
+  .page-heading{
+    align-items:flex-start;
+    flex-direction:column;
+  }
+
+  .page-heading h1{
+    font-size:25px;
+  }
+
+  .analytics-grid{
+    grid-template-columns:1fr;
+  }
+
+  .analytics-prompt{
+    min-height:115px;
+  }
+
+  .analytics-input-row{
+    grid-template-columns:1fr;
+  }
+}
+
 </style>
 </head>
 
 <body>
-<div class="wrap">
-<h1>🚕 FleetAI 3.0</h1>
+<div class="app-shell">
+  <aside class="app-sidebar">
+    <div class="brand-block">
+      <div class="brand-mark">F</div>
+      <div>
+        <div class="brand-name">FleetAI</div>
+        <div class="brand-subtitle">Управление автопарком</div>
+      </div>
+    </div>
+
+    <nav class="app-nav">
+      <button class="nav-item active" data-page="dashboard" onclick="showAppPage('dashboard',this)">
+        <span class="nav-icon">⌂</span>
+        <span>Главная</span>
+      </button>
+      <button class="nav-item" data-page="fleet" onclick="showAppPage('fleet',this)">
+        <span class="nav-icon">◈</span>
+        <span>Машины</span>
+      </button>
+      <button class="nav-item" data-page="investors" onclick="showAppPage('investors',this)">
+        <span class="nav-icon">₽</span>
+        <span>Инвесторы</span>
+      </button>
+      <button class="nav-item" data-page="warehouse" onclick="showAppPage('warehouse',this)">
+        <span class="nav-icon">□</span>
+        <span>Склад</span>
+      </button>
+      <button class="nav-item" data-page="drivers" onclick="showAppPage('drivers',this)">
+        <span class="nav-icon">◎</span>
+        <span>Водители</span>
+      </button>
+      <button class="nav-item" data-page="analytics" onclick="showAppPage('analytics',this)">
+        <span class="nav-icon">↗</span>
+        <span>Аналитика</span>
+      </button>
+    </nav>
+
+    <div class="sidebar-footer">
+      <div class="system-status">
+        <span class="status-dot"></span>
+        Система работает
+      </div>
+    </div>
+  </aside>
+
+  <main class="app-main">
+    <div class="mobile-topbar">
+      <button class="mobile-menu-button" onclick="toggleMobileSidebar()">☰</button>
+      <span>FleetAI</span>
+    </div>
+
+    <div class="wrap">
+<section id="page-dashboard" class="app-page active">
+<div class="page-heading">
+  <div>
+    <div class="eyebrow">ОБЗОР АВТОПАРКА</div>
+    <h1>Панель управления</h1>
+    <p>Главные показатели, статусы машин и быстрая запись операций.</p>
+  </div>
+</div>
 
 <div class="top-actions">
   <button
@@ -837,6 +1213,16 @@ tbody tr:hover td{
 
   <p id="res"></p>
 </div>
+</section>
+
+<section id="page-investors" class="app-page">
+<div class="page-heading">
+  <div>
+    <div class="eyebrow">КАПИТАЛ И ВЫПЛАТЫ</div>
+    <h1>Инвесторы</h1>
+    <p>Начисления, удержания, долги и расчётные периоды.</p>
+  </div>
+</div>
 
 <div class="card">
   <h2>Инвесторы</h2>
@@ -858,6 +1244,17 @@ tbody tr:hover td{
 
   <div id="investorsSummary"></div>
   <div id="investors"></div>
+</div>
+
+</section>
+
+<section id="page-drivers" class="app-page">
+<div class="page-heading">
+  <div>
+    <div class="eyebrow">ПЛАТЕЖИ И ГРАФИК</div>
+    <h1>Водители</h1>
+    <p>Еженедельные расчёты, даты оплат и уведомления.</p>
+  </div>
 </div>
 
 <div class="card">
@@ -921,6 +1318,18 @@ tbody tr:hover td{
   </div>
 </div>
 
+</section>
+
+<section id="page-fleet" class="app-page">
+<div class="page-heading fleet-page-heading">
+  <div>
+    <div class="eyebrow">АВТОПАРК</div>
+    <h1>Машины</h1>
+    <p>Состояние, ремонты, пробег и история каждой машины.</p>
+  </div>
+  <button class="page-primary-action" onclick="toggleAddCarForm()">+ Добавить машину</button>
+</div>
+
 <div id="addCarPanel" class="card collapsible-panel">
   <div class="section-head">
     <h2>Добавить машину</h2>
@@ -947,6 +1356,17 @@ tbody tr:hover td{
 
   <button onclick="addCar()">Добавить авто</button>
   <p id="carRes"></p>
+</div>
+
+</section>
+
+<section id="page-warehouse" class="app-page">
+<div class="page-heading">
+  <div>
+    <div class="eyebrow">ЗАПЧАСТИ И ОСТАТКИ</div>
+    <h1>Склад</h1>
+    <p>Наличие, исполнения, бренды, приход и списания.</p>
+  </div>
 </div>
 
 <div class="card">
@@ -997,6 +1417,9 @@ tbody tr:hover td{
   </div>
 </div>
 
+</section>
+
+<section id="page-fleet-continuation" class="app-page app-page-linked" data-linked-page="fleet">
 <div class="card">
   <div class="section-head">
     <div>
@@ -1014,9 +1437,126 @@ tbody tr:hover td{
 </div>
 <div id="carCard"></div>
 <div class="card"><h2>Последние операции</h2><table id="ops"></table></div>
+</section>
+
+<section id="page-analytics" class="app-page">
+<div class="page-heading">
+  <div>
+    <div class="eyebrow">ИСТОРИЯ И ЗАКОНОМЕРНОСТИ</div>
+    <h1>Аналитика</h1>
+    <p>Задавай вопросы системе о ремонтах, деталях и частоте поломок.</p>
+  </div>
+</div>
+
+<div class="analytics-grid">
+  <button class="analytics-prompt" onclick="askAnalytics('Какие детали чаще всего ломаются?')">
+    <span class="analytics-prompt-icon">↗</span>
+    <strong>Частые поломки</strong>
+    <small>Какие детали меняются чаще всего</small>
+  </button>
+  <button class="analytics-prompt" onclick="askAnalytics('Какие детали меняются реже всего?')">
+    <span class="analytics-prompt-icon">↓</span>
+    <strong>Редкие замены</strong>
+    <small>Что служит дольше остальных деталей</small>
+  </button>
+  <button class="analytics-prompt" onclick="askAnalytics('Кому мы меняли рулевой наконечник последний раз?')">
+    <span class="analytics-prompt-icon">⌕</span>
+    <strong>Поиск по истории</strong>
+    <small>Последняя замена конкретной детали</small>
+  </button>
+  <button class="analytics-prompt" onclick="askAnalytics('Как часто меняли стойку стабилизатора?')">
+    <span class="analytics-prompt-icon">◷</span>
+    <strong>Интервалы замен</strong>
+    <small>Средний срок и пробег детали</small>
+  </button>
+</div>
+
+<div class="card analytics-console">
+  <h2>Спросить FleetAI</h2>
+  <p class="raw">Например: «Какие детали чаще ломаются?» или «Когда меняли помпу последний раз?»</p>
+  <div class="analytics-input-row">
+    <input id="analyticsQuestion" placeholder="Введите вопрос по истории автопарка">
+    <button onclick="askAnalytics()">Спросить</button>
+  </div>
+  <pre id="analyticsAnswer" class="analytics-answer">Ответ появится здесь.</pre>
+</div>
+</section>
+
+    </div>
+  </main>
 </div>
 
 <script>
+
+function showAppPage(page,button){
+  document.querySelectorAll('.app-page').forEach(section=>{
+    section.classList.remove('active');
+  });
+
+  const mainPage=document.getElementById(`page-${page}`);
+  if(mainPage){
+    mainPage.classList.add('active');
+  }
+
+  document.querySelectorAll(
+    `.app-page-linked[data-linked-page="${page}"]`
+  ).forEach(section=>{
+    section.classList.add('active');
+  });
+
+  document.querySelectorAll('.nav-item').forEach(item=>{
+    item.classList.remove('active');
+  });
+
+  const navButton=button || document.querySelector(
+    `.nav-item[data-page="${page}"]`
+  );
+
+  if(navButton){
+    navButton.classList.add('active');
+  }
+
+  document.querySelector('.app-sidebar')?.classList.remove('open');
+  window.scrollTo({top:0,behavior:'smooth'});
+
+  if(page==='warehouse'){
+    loadWarehouse();
+  }
+}
+
+function toggleMobileSidebar(){
+  document.querySelector('.app-sidebar')?.classList.toggle('open');
+}
+
+async function askAnalytics(question){
+  const input=document.getElementById('analyticsQuestion');
+  const output=document.getElementById('analyticsAnswer');
+  const text=(question || input?.value || '').trim();
+
+  if(!text){
+    output.textContent='Введите вопрос.';
+    return;
+  }
+
+  if(input){
+    input.value=text;
+  }
+
+  output.textContent='Ищу ответ по истории...';
+
+  try{
+    const result=await api('/api/ask-history',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({message:text})
+    });
+
+    output.textContent=result.message || 'Ответ не найден.';
+  }catch(error){
+    output.textContent='Не удалось выполнить анализ.';
+  }
+}
+
 async function api(u,o){
   const r = await fetch(u,o);
   const data = await r.json();
@@ -1432,6 +1972,7 @@ function renderCalendar(ops){
 }
 
 async function openCar(code){
+  showAppPage('fleet');
   let d=await api('/api/car/'+code);
   let c=d.car;
 
