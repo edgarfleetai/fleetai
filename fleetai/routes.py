@@ -3110,6 +3110,184 @@ def api_warehouse_restock():
         session.close()
 
 
+
+@bp.route("/api/warehouse/adjust", methods=["POST"])
+def api_warehouse_adjust():
+    payload = request.get_json(silent=True) or {}
+    item_id = only_int(payload.get("item_id"))
+    new_quantity = only_int(payload.get("new_quantity"))
+    comment = (payload.get("comment") or "").strip()
+
+    if not item_id:
+        return jsonify({"ok": False, "message": "Выбери складскую позицию"}), 400
+    if new_quantity < 0:
+        return jsonify({"ok": False, "message": "Количество не может быть меньше нуля"}), 400
+
+    session = Session()
+    try:
+        item = session.query(WarehouseItem).filter_by(id=item_id).first()
+        if not item:
+            return jsonify({"ok": False, "message": "Позиция склада не найдена"}), 404
+
+        old_quantity = item.quantity or 0
+        difference = new_quantity - old_quantity
+
+        if difference == 0:
+            return jsonify({"ok": True, "message": "Количество не изменилось"})
+
+        item.quantity = new_quantity
+        session.add(WarehouseMovement(
+            operation_id=None,
+            car_code="",
+            part_name=item.part_name,
+            brand=item.brand or "",
+            variant=getattr(item, "variant", "") or "",
+            quantity=abs(difference),
+            movement_type="adjustment_in" if difference > 0 else "adjustment_out",
+            comment=comment or f"Исправление остатка: {old_quantity} → {new_quantity}",
+        ))
+        session.commit()
+
+        return jsonify({
+            "ok": True,
+            "message": (
+                f"Остаток исправлен: {item.part_name}"
+                f"{' ' + item.brand if item.brand else ''}"
+                f"{' · ' + item.variant if getattr(item, 'variant', '') else ''}: "
+                f"{old_quantity} → {new_quantity} шт."
+            ),
+        })
+    except Exception as error:
+        session.rollback()
+        return jsonify({"ok": False, "message": f"Не удалось исправить остаток: {error}"}), 500
+    finally:
+        session.close()
+
+
+@bp.route("/api/warehouse/write-off", methods=["POST"])
+def api_warehouse_write_off():
+    payload = request.get_json(silent=True) or {}
+    item_id = only_int(payload.get("item_id"))
+    quantity = only_int(payload.get("quantity"))
+    comment = (payload.get("comment") or "").strip()
+
+    if not item_id:
+        return jsonify({"ok": False, "message": "Выбери складскую позицию"}), 400
+    if quantity <= 0:
+        return jsonify({"ok": False, "message": "Укажи количество для списания"}), 400
+
+    session = Session()
+    try:
+        item = session.query(WarehouseItem).filter_by(id=item_id).first()
+        if not item:
+            return jsonify({"ok": False, "message": "Позиция склада не найдена"}), 404
+
+        current = item.quantity or 0
+        if quantity > current:
+            return jsonify({
+                "ok": False,
+                "message": f"Нельзя списать {quantity} шт. На складе только {current} шт.",
+            }), 400
+
+        item.quantity = current - quantity
+        session.add(WarehouseMovement(
+            operation_id=None,
+            car_code="",
+            part_name=item.part_name,
+            brand=item.brand or "",
+            variant=getattr(item, "variant", "") or "",
+            quantity=quantity,
+            movement_type="manual_out",
+            comment=comment or "Ручное списание",
+        ))
+        session.commit()
+
+        return jsonify({
+            "ok": True,
+            "message": (
+                f"Списано: {item.part_name}"
+                f"{' ' + item.brand if item.brand else ''}"
+                f"{' · ' + item.variant if getattr(item, 'variant', '') else ''} — "
+                f"{quantity} шт. Остаток: {item.quantity} шт."
+            ),
+        })
+    except Exception as error:
+        session.rollback()
+        return jsonify({"ok": False, "message": f"Не удалось списать: {error}"}), 500
+    finally:
+        session.close()
+
+
+@bp.route("/api/warehouse/update-item", methods=["POST"])
+def api_warehouse_update_item():
+    payload = request.get_json(silent=True) or {}
+    item_id = only_int(payload.get("item_id"))
+    part_name = (payload.get("part_name") or "").strip()
+    brand = (payload.get("brand") or "").strip().upper()
+    variant = (payload.get("variant") or "").strip()
+    shelf = (payload.get("shelf") or "").strip()
+    comment = (payload.get("comment") or "").strip()
+    min_quantity = only_int(payload.get("min_quantity"))
+
+    if not item_id:
+        return jsonify({"ok": False, "message": "Позиция склада не выбрана"}), 400
+    if not part_name:
+        return jsonify({"ok": False, "message": "Название детали не может быть пустым"}), 400
+    if min_quantity < 0:
+        return jsonify({"ok": False, "message": "Минимальный остаток не может быть меньше нуля"}), 400
+
+    session = Session()
+    try:
+        item = session.query(WarehouseItem).filter_by(id=item_id).first()
+        if not item:
+            return jsonify({"ok": False, "message": "Позиция склада не найдена"}), 404
+
+        duplicate = find_exact_warehouse_item(session, part_name, brand, variant)
+        if duplicate and duplicate.id != item.id:
+            return jsonify({
+                "ok": False,
+                "message": "Позиция с таким названием, брендом и исполнением уже существует",
+            }), 400
+
+        item.part_name = part_name
+        item.brand = brand
+        item.variant = variant
+        item.min_quantity = min_quantity
+        item.shelf = shelf
+        item.comment = comment
+        session.commit()
+
+        return jsonify({"ok": True, "message": "Позиция склада обновлена"})
+    except Exception as error:
+        session.rollback()
+        return jsonify({"ok": False, "message": f"Не удалось обновить позицию: {error}"}), 500
+    finally:
+        session.close()
+
+
+@bp.route("/api/warehouse/delete-item/<int:item_id>", methods=["POST"])
+def api_warehouse_delete_item(item_id):
+    session = Session()
+    try:
+        item = session.query(WarehouseItem).filter_by(id=item_id).first()
+        if not item:
+            return jsonify({"ok": False, "message": "Позиция склада не найдена"}), 404
+        if (item.quantity or 0) != 0:
+            return jsonify({
+                "ok": False,
+                "message": "Сначала исправь остаток до 0. Позиции с ненулевым остатком удалять нельзя.",
+            }), 400
+
+        session.delete(item)
+        session.commit()
+        return jsonify({"ok": True, "message": "Позиция склада удалена"})
+    except Exception as error:
+        session.rollback()
+        return jsonify({"ok": False, "message": f"Не удалось удалить позицию: {error}"}), 500
+    finally:
+        session.close()
+
+
 @bp.route("/api/warehouse/movements")
 def api_warehouse_movements():
     session = Session()
