@@ -56,6 +56,9 @@ def run_migrations():
         "ALTER TABLE car_investments ADD COLUMN investor_name VARCHAR DEFAULT ''",
         "ALTER TABLE downtime ADD COLUMN operation_id INTEGER",
         "ALTER TABLE downtime ADD COLUMN active INTEGER DEFAULT 0",
+
+        "ALTER TABLE warehouse_items ADD COLUMN variant VARCHAR DEFAULT ''",
+        "ALTER TABLE warehouse_movements ADD COLUMN variant VARCHAR DEFAULT ''",
     ]
 
     for migration_sql in migrations:
