@@ -1361,6 +1361,167 @@ body > *{
   display:block !important;
 }
 
+
+/* ===== SETTLEMENT PERIOD TABS ===== */
+
+.period-card{
+  overflow:hidden;
+}
+
+.period-card-heading{
+  display:flex;
+  justify-content:space-between;
+  align-items:flex-start;
+  gap:16px;
+}
+
+.period-card-heading h2{
+  margin:3px 0 0;
+}
+
+.period-auto-notice{
+  padding:7px 10px;
+  border-radius:999px;
+  background:var(--success-soft);
+  color:var(--success);
+  font-size:11px;
+  font-weight:700;
+}
+
+.period-tabs{
+  display:flex;
+  gap:6px;
+  margin:18px 0 14px;
+  padding:4px;
+  border-radius:12px;
+  background:var(--surface-muted);
+}
+
+.period-tab{
+  display:flex;
+  align-items:center;
+  gap:7px;
+  background:transparent;
+  color:var(--text-soft);
+  box-shadow:none;
+}
+
+.period-tab:hover{
+  background:rgba(255,255,255,.7);
+  color:var(--text);
+  box-shadow:none;
+  transform:none;
+}
+
+.period-tab.active{
+  background:#fff;
+  color:var(--text);
+  box-shadow:var(--shadow-sm);
+}
+
+.period-tab span{
+  min-width:20px;
+  padding:2px 6px;
+  border-radius:999px;
+  background:var(--primary-soft);
+  font-size:10px;
+}
+
+.period-main-range{
+  display:flex;
+  flex-direction:column;
+  gap:4px;
+  margin-bottom:13px;
+}
+
+.period-main-range span,
+.period-metrics span,
+.period-history-metrics span{
+  color:var(--text-soft);
+  font-size:11px;
+}
+
+.period-main-range b{
+  font-size:20px;
+}
+
+.period-metrics,
+.period-history-metrics{
+  display:grid;
+  grid-template-columns:repeat(5,minmax(0,1fr));
+  gap:8px;
+  margin-bottom:14px;
+}
+
+.period-metrics > div,
+.period-history-metrics > div{
+  padding:12px;
+  border:1px solid var(--line);
+  border-radius:12px;
+  background:var(--surface-soft);
+}
+
+.period-metrics b,
+.period-history-metrics b{
+  display:block;
+  margin-top:4px;
+  font-size:15px;
+}
+
+.period-history-list{
+  display:flex;
+  flex-direction:column;
+  gap:9px;
+}
+
+.period-history-card{
+  padding:14px;
+  border:1px solid var(--line);
+  border-radius:14px;
+  background:var(--surface-soft);
+}
+
+.period-history-head{
+  display:flex;
+  justify-content:space-between;
+  gap:12px;
+  margin-bottom:10px;
+}
+
+.period-history-head > div{
+  display:flex;
+  flex-direction:column;
+  gap:2px;
+}
+
+.period-history-head span{
+  color:var(--text-soft);
+  font-size:11px;
+}
+
+.period-history-card button{
+  margin-top:10px;
+}
+
+.period-empty{
+  padding:28px;
+  text-align:center;
+  color:var(--text-soft);
+  border:1px dashed var(--line-strong);
+  border-radius:14px;
+}
+
+@media(max-width:800px){
+  .period-card-heading{
+    flex-direction:column;
+  }
+
+  .period-metrics,
+  .period-history-metrics{
+    grid-template-columns:1fr 1fr;
+  }
+}
+
 </style>
 </head>
 
@@ -2679,54 +2840,226 @@ async function openCar(code){
   window.scrollTo(0,carCard.offsetTop);
 }
 async function openInvestorBalance(code){let d=await api('/api/investor-balance/'+code);let b=d.balance;carCard.innerHTML=`<div class="card warn"><h2>Взаиморасчет ${code}</h2><p><b>Доля прибыли инвестора:</b> ${rub(b.investor_share_total)}</p><p><b>Погашено долгом:</b> ${rub(b.debt_repaid_by_profit)}</p><p><b>Инвестор должен парку:</b> ${rub(b.investor_debt_to_park)}</p><p><b>Парк должен инвестору:</b> ${rub(b.park_debt_to_investor)}</p><p><b>Выплачено:</b> ${rub(b.paid_to_investor)}</p><p><b>Доступно к выплате:</b> ${rub(b.available_to_pay)}</p></div><div class="card"><h3>Журнал взаиморасчетов</h3><table><tr><th>Дата</th><th>Всего</th><th>Инвестор оплатил</th><th>Парк оплатил</th><th>Долг инвестора</th><th>Комментарий</th></tr>${d.settlements.map(x=>`<tr><td>${x.date}</td><td>${rub(x.total_cost)}</td><td>${rub(x.investor_paid)}</td><td>${rub(x.park_paid)}</td><td>${rub(x.investor_debt_to_park)}</td><td>${x.comment||''}</td></tr>`).join('')}</table></div>`;window.scrollTo(0,carCard.offsetTop)}
-async function openPeriod(code){
-  let d=await api('/api/period/'+code);
-  if(!d.ok){
-    alert(d.message||'Не удалось открыть расчётный период');
-    return;
-  }
+let openedPeriodData=null;
+let openedPeriodCode='';
 
-  let p=d.current_period;
-  let hasClosedPeriods=Array.isArray(d.closed_periods)&&d.closed_periods.length>0;
-  let lastClosed=hasClosedPeriods?d.closed_periods[0]:null;
+function periodCurrentHtml(code,data){
+  const p=data.current_period||{};
 
-  carCard.innerHTML=`
-    <div class="card warn">
-      <h2>Расчётный период ${code}</h2>
+  return `
+    <div class="period-current-panel">
+      <div class="period-main-range">
+        <span>Текущий период</span>
+        <b>${p.start_date||'—'} — ${p.end_date||'—'}</b>
+      </div>
 
-      <p><b>Текущий период:</b> ${p.start_date} — ${p.end_date}</p>
+      <div class="period-metrics">
+        <div>
+          <span>Доход</span>
+          <b>${rub(p.income||0)}</b>
+        </div>
+        <div>
+          <span>Расход</span>
+          <b>${rub(p.expenses||0)}</b>
+        </div>
+        <div>
+          <span>Прибыль</span>
+          <b>${rub(p.profit||0)}</b>
+        </div>
+        <div>
+          <span>Инвестору</span>
+          <b>${rub(p.investor_amount||0)}</b>
+        </div>
+        <div>
+          <span>Парку</span>
+          <b>${rub(p.owner_amount||0)}</b>
+        </div>
+      </div>
 
-      <p>
-        Доход: ${rub(p.income)}
-        | Расход: ${rub(p.expenses)}
-        | Прибыль: ${rub(p.profit)}
-      </p>
-
-      <p>
-        Инвестору: ${rub(p.investor_amount)}
-        | Парку: ${rub(p.owner_amount)}
+      <p class="raw">
+        Период обновляется автоматически в день расчёта.
+        Предыдущий период сохраняется во вкладке «История».
       </p>
 
       <button onclick="closePeriod('${code}')">
-        Закрыть период
+        Сохранить текущий период досрочно
       </button>
+    </div>
+  `;
+}
 
-      ${hasClosedPeriods?`
-        <button class="danger" onclick="reopenPeriod('${code}')">
-          Открыть последний период заново
+function periodHistoryHtml(code,data){
+  const periods=Array.isArray(data.closed_periods)
+    ? data.closed_periods
+    : [];
+
+  if(!periods.length){
+    return `
+      <div class="period-empty">
+        Сохранённых периодов пока нет.
+      </div>
+    `;
+  }
+
+  return `
+    <div class="period-history-list">
+      ${periods.map((period,index)=>`
+        <div class="period-history-card">
+          <div class="period-history-head">
+            <div>
+              <span>Период ${periods.length-index}</span>
+              <b>
+                ${period.start_date} — ${period.end_date}
+              </b>
+            </div>
+
+            <span class="badge">
+              Сохранён
+            </span>
+          </div>
+
+          <div class="period-history-metrics">
+            <div>
+              <span>Доход</span>
+              <b>${rub(period.income||0)}</b>
+            </div>
+            <div>
+              <span>Расход</span>
+              <b>${rub(period.expenses||0)}</b>
+            </div>
+            <div>
+              <span>Прибыль</span>
+              <b>${rub(period.profit||0)}</b>
+            </div>
+            <div>
+              <span>Инвестору</span>
+              <b>${rub(period.investor_amount||0)}</b>
+            </div>
+            <div>
+              <span>Парку</span>
+              <b>${rub(period.owner_amount||0)}</b>
+            </div>
+          </div>
+
+          <div class="raw">
+            ${period.comment||''}
+            ${
+              period.closed_at
+                ? ` · сохранён ${period.closed_at}`
+                : ''
+            }
+          </div>
+
+          ${
+            index===0
+              ? `
+                <button
+                  class="danger small"
+                  onclick="reopenPeriod('${code}')"
+                >
+                  Открыть последний период заново
+                </button>
+              `
+              : ''
+          }
+        </div>
+      `).join('')}
+    </div>
+  `;
+}
+
+function switchPeriodTab(tab){
+  document.querySelectorAll('.period-tab').forEach(button=>{
+    button.classList.toggle(
+      'active',
+      button.dataset.periodTab===tab
+    );
+  });
+
+  const content=document.getElementById('periodTabContent');
+
+  if(!content || !openedPeriodData){
+    return;
+  }
+
+  content.innerHTML=
+    tab==='history'
+      ? periodHistoryHtml(
+          openedPeriodCode,
+          openedPeriodData
+        )
+      : periodCurrentHtml(
+          openedPeriodCode,
+          openedPeriodData
+        );
+}
+
+async function openPeriod(code){
+  const data=await api('/api/period/'+code);
+
+  if(!data.ok){
+    alert(
+      data.message ||
+      'Не удалось открыть расчётный период'
+    );
+    return;
+  }
+
+  openedPeriodData=data;
+  openedPeriodCode=code;
+
+  carCard.innerHTML=`
+    <div class="card period-card">
+      <div class="period-card-heading">
+        <div>
+          <div class="eyebrow">РАСЧЁТЫ ПО МАШИНЕ</div>
+          <h2>Расчётный период ${code}</h2>
+        </div>
+
+        ${
+          data.archived_previous_now
+            ? `
+              <span class="period-auto-notice">
+                Предыдущий период сохранён автоматически
+              </span>
+            `
+            : ''
+        }
+      </div>
+
+      <div class="period-tabs">
+        <button
+          class="period-tab active"
+          data-period-tab="current"
+          onclick="switchPeriodTab('current')"
+        >
+          Текущий период
         </button>
 
-        <p class="raw">
-          Последний закрытый период:
-          ${lastClosed.start_date} — ${lastClosed.end_date}
-        </p>
-      `:''}
+        <button
+          class="period-tab"
+          data-period-tab="history"
+          onclick="switchPeriodTab('history')"
+        >
+          История
+          <span>
+            ${
+              Array.isArray(data.closed_periods)
+                ? data.closed_periods.length
+                : 0
+            }
+          </span>
+        </button>
+      </div>
+
+      <div id="periodTabContent">
+        ${periodCurrentHtml(code,data)}
+      </div>
     </div>
   `;
 
   window.scrollTo(0,carCard.offsetTop);
 }
-
 async function closePeriod(code){
   let r=await api('/api/close-period/'+code,{
     method:'POST',
