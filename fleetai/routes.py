@@ -3161,6 +3161,146 @@ def api_summary():
 
 
 
+
+def month_bounds(reference_date):
+    """
+    Возвращает начало текущего и предыдущего календарного месяца.
+    """
+    current_start = reference_date.replace(day=1)
+
+    previous_end = current_start
+    previous_last_day = current_start - timedelta(days=1)
+    previous_start = previous_last_day.replace(day=1)
+
+    next_month = (
+        current_start.replace(year=current_start.year + 1, month=1)
+        if current_start.month == 12
+        else current_start.replace(month=current_start.month + 1)
+    )
+
+    return {
+        "current_start": current_start,
+        "current_end": next_month,
+        "previous_start": previous_start,
+        "previous_end": previous_end,
+    }
+
+
+def percent_change(current_value, previous_value):
+    current_value = int(current_value or 0)
+    previous_value = int(previous_value or 0)
+
+    if previous_value == 0:
+        if current_value == 0:
+            return 0
+        return 100
+
+    return round(
+        (current_value - previous_value)
+        * 100
+        / abs(previous_value)
+    )
+
+
+def trend_direction(current_value, previous_value):
+    current_value = int(current_value or 0)
+    previous_value = int(previous_value or 0)
+
+    if current_value > previous_value:
+        return "up"
+    if current_value < previous_value:
+        return "down"
+    return "flat"
+
+
+@bp.route("/api/cars-monthly-finance")
+def api_cars_monthly_finance():
+    """
+    Сравнение текущего и прошлого календарного месяца
+    по доходам, расходам и прибыли всего автопарка.
+    """
+    session = Session()
+
+    try:
+        today = date.today()
+        bounds = month_bounds(today)
+
+        current_income = (
+            session.query(func.coalesce(func.sum(Income.amount), 0))
+            .filter(
+                Income.date >= bounds["current_start"],
+                Income.date < bounds["current_end"],
+            )
+            .scalar()
+            or 0
+        )
+
+        previous_income = (
+            session.query(func.coalesce(func.sum(Income.amount), 0))
+            .filter(
+                Income.date >= bounds["previous_start"],
+                Income.date < bounds["previous_end"],
+            )
+            .scalar()
+            or 0
+        )
+
+        current_expenses = (
+            session.query(func.coalesce(func.sum(Expense.amount), 0))
+            .filter(
+                Expense.date >= bounds["current_start"],
+                Expense.date < bounds["current_end"],
+            )
+            .scalar()
+            or 0
+        )
+
+        previous_expenses = (
+            session.query(func.coalesce(func.sum(Expense.amount), 0))
+            .filter(
+                Expense.date >= bounds["previous_start"],
+                Expense.date < bounds["previous_end"],
+            )
+            .scalar()
+            or 0
+        )
+
+        current_profit = current_income - current_expenses
+        previous_profit = previous_income - previous_expenses
+
+        def metric(current_value, previous_value):
+            return {
+                "current": int(current_value or 0),
+                "previous": int(previous_value or 0),
+                "change_percent": percent_change(
+                    current_value,
+                    previous_value,
+                ),
+                "trend": trend_direction(
+                    current_value,
+                    previous_value,
+                ),
+            }
+
+        return jsonify({
+            "ok": True,
+            "current_month": bounds["current_start"].strftime("%m.%Y"),
+            "previous_month": bounds["previous_start"].strftime("%m.%Y"),
+            "income": metric(current_income, previous_income),
+            "expenses": metric(current_expenses, previous_expenses),
+            "profit": metric(current_profit, previous_profit),
+        })
+
+    except Exception as error:
+        return jsonify({
+            "ok": False,
+            "message": f"Ошибка расчёта показателей: {error}",
+        }), 500
+
+    finally:
+        session.close()
+
+
 @bp.route("/api/cars")
 def api_cars():
     session = Session()
