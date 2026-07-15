@@ -1300,6 +1300,22 @@ body > *{
   background:#fbeaea;
 }
 
+
+.driver-debt{
+  color:#a33e3e;
+  font-weight:750;
+}
+
+.driver-status-overdue{
+  display:inline-flex;
+  padding:5px 8px;
+  border-radius:8px;
+  background:#fbeaea;
+  color:#a33e3e;
+  font-size:12px;
+  font-weight:700;
+}
+
 </style>
 </head>
 
@@ -2084,11 +2100,14 @@ async function checkPaymentsNow(){
 
 function renderDriverPayments(carsList){
   const configured=carsList.filter(
-    car=>Number(car.daily_rent)>0 || Number(car.weekly_payment)>0
+    car=>
+      Number(car.daily_rent)>0 ||
+      Number(car.weekly_payment)>0
   );
 
   if(!configured.length){
-    driverPayments.innerHTML='<tr><td>Расчёты водителей пока не настроены</td></tr>';
+    driverPayments.innerHTML=
+      '<tr><td>Расчёты водителей пока не настроены</td></tr>';
     return;
   }
 
@@ -2097,33 +2116,99 @@ function renderDriverPayments(carsList){
       <th>Машина</th>
       <th>Водитель</th>
       <th>Ставка</th>
-      <th>Период</th>
-      <th>Дней</th>
+      <th>Текущий период</th>
+      <th>Начислено дней</th>
       <th>Простой</th>
-      <th>К оплате</th>
+      <th>Долг прошлых периодов</th>
+      <th>Новый период</th>
+      <th>Всего к оплате</th>
       <th>Дата расчёта</th>
       <th>Статус</th>
       <th>Действие</th>
     </tr>
+
     ${configured.map(car=>{
       const calc=car.driver_payment||{};
+      const rate=Number(
+        calc.effective_daily_rent ||
+        car.effective_daily_rent ||
+        car.daily_rent ||
+        0
+      );
+
+      const rateNote=
+        calc.rate_source==='weekly_prorated'
+          ? '<div class="raw">из недельной ставки</div>'
+          : '';
+
       return `
         <tr>
           <td>${car.code}</td>
           <td>${car.driver||'Не указан'}</td>
-          <td>${rub(car.daily_rent)} / сутки</td>
+
+          <td>
+            ${rub(rate)} / сутки
+            ${rateNote}
+          </td>
+
           <td>
             ${calc.period_start||'—'} —
-            ${calc.period_end||'—'}
+            ${calc.scheduled_period_end||'—'}
           </td>
+
           <td>
-            ${calc.payable_days||0}
-            из ${calc.total_days||0}
+            ${calc.payable_days||0} дн.
+            <div class="raw">
+              прошло ${calc.total_days||0} дн.
+            </div>
           </td>
+
           <td>${calc.downtime_days||0} дн.</td>
-          <td><b>${rub(calc.amount_due||0)}</b></td>
-          <td>${car.next_payment_date||'—'}</td>
-          <td>${paymentStatus(car.next_payment_date)}</td>
+
+          <td>
+            <span class="${
+              Number(calc.previous_debt||0)>0
+                ? 'driver-debt'
+                : 'raw'
+            }">
+              ${rub(calc.previous_debt||0)}
+            </span>
+            ${
+              Number(calc.completed_unpaid_periods||0)>0
+                ? `<div class="raw">
+                    ${calc.completed_unpaid_periods}
+                    просроч. период(а)
+                  </div>`
+                : ''
+            }
+          </td>
+
+          <td>
+            <b>${rub(calc.current_amount||0)}</b>
+            <div class="raw">
+              начисляется по дням
+            </div>
+          </td>
+
+          <td>
+            <b>${rub(calc.amount_due||0)}</b>
+          </td>
+
+          <td>${calc.next_payment_date||car.next_payment_date||'—'}</td>
+
+          <td>
+            ${
+              Number(calc.previous_debt||0)>0
+                ? `<span class="driver-status-overdue">
+                    Долг + новый период
+                  </span>`
+                : paymentStatus(
+                    calc.next_payment_date ||
+                    car.next_payment_date
+                  )
+            }
+          </td>
+
           <td>
             <button onclick="markPaymentPaid('${car.code}')">
               Оплачено
@@ -2133,103 +2218,6 @@ function renderDriverPayments(carsList){
       `;
     }).join('')}
   `;
-}
-
-
-function financeTrendSymbol(trend){
-  if(trend==='up')return '↗';
-  if(trend==='down')return '↘';
-  return '→';
-}
-
-function renderMonthlyMetric(prefix,metric){
-  const value=document.getElementById(`month${prefix}`);
-  const previous=document.getElementById(
-    `month${prefix}Previous`
-  );
-  const trend=document.getElementById(
-    `month${prefix}Trend`
-  );
-
-  if(!value || !previous || !trend){
-    return;
-  }
-
-  value.textContent=rub(metric.current||0);
-
-  const percent=Number(metric.change_percent||0);
-  const sign=percent>0?'+':'';
-
-  previous.textContent=
-    `Прошлый месяц: ${rub(metric.previous||0)} · ${sign}${percent}%`;
-
-  trend.className=`finance-trend ${metric.trend||'flat'}`;
-  trend.textContent=financeTrendSymbol(metric.trend);
-}
-
-async function loadMonthlyFleetFinance(){
-  try{
-    const data=await api('/api/cars-monthly-finance');
-
-    if(!data.ok){
-      return;
-    }
-
-    renderMonthlyMetric('Income',data.income);
-    renderMonthlyMetric('Expenses',data.expenses);
-    renderMonthlyMetric('Profit',data.profit);
-  }catch(error){
-    console.error('Не удалось загрузить показатели месяца',error);
-  }
-}
-
-
-function mileageIncreaseClass(status){
-  if(status==='green')return 'mileage-green';
-  if(status==='yellow')return 'mileage-yellow';
-  if(status==='red')return 'mileage-red';
-  return 'mileage-neutral';
-}
-
-function mileageCell(car){
-  const current=Number(car.mileage||0);
-  const data=monthlyMileageByCar[String(car.code)]||{};
-  const increase=Number(data.month_increase||0);
-  const status=data.status||'neutral';
-
-  return `
-    <div class="mileage-cell">
-      <div class="mileage-increase ${mileageIncreaseClass(status)}">
-        +${increase.toLocaleString('ru-RU')} км за месяц
-      </div>
-      <div class="mileage-current">
-        ${current
-          ? current.toLocaleString('ru-RU')+' км'
-          : '—'
-        }
-      </div>
-    </div>
-  `;
-}
-
-async function loadMonthlyMileage(){
-  try{
-    const data=await api('/api/cars-monthly-mileage');
-
-    if(!data.ok){
-      monthlyMileageByCar={};
-      return;
-    }
-
-    monthlyMileageByCar={};
-
-    for(const item of data.items||[]){
-      monthlyMileageByCar[String(item.car_code)]=item;
-    }
-  }catch(error){
-    monthlyMileageByCar={};
-    console.error('Не удалось загрузить пробег за месяц',error);
-  }
 }
 
 async function loadCars(){
