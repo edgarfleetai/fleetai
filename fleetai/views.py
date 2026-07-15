@@ -1983,7 +1983,10 @@ function showAppPage(page,button){
     });
 
     if(typeof loadMonthlyFleetFinance==='function'){
-      safeLoadSection('сравнение месяцев',loadMonthlyFleetFinance);
+      safeLoadSection(
+        'доход, расход и прибыль',
+        loadMonthlyFleetFinance
+      );
     }
 
     if(typeof loadOps==='function'){
@@ -2598,6 +2601,101 @@ async function loadMonthlyMileage(){
     console.error(
       'Не удалось загрузить месячный пробег:',
       error
+    );
+  }
+}
+
+
+function financeTrendSymbol(trend){
+  if(trend==='up'){
+    return '↗';
+  }
+
+  if(trend==='down'){
+    return '↘';
+  }
+
+  return '→';
+}
+
+function renderMonthlyMetric(prefix,metric){
+  const valueElement=document.getElementById(
+    `month${prefix}`
+  );
+  const previousElement=document.getElementById(
+    `month${prefix}Previous`
+  );
+  const trendElement=document.getElementById(
+    `month${prefix}Trend`
+  );
+
+  if(
+    !valueElement ||
+    !previousElement ||
+    !trendElement
+  ){
+    return;
+  }
+
+  const current=Number(metric?.current||0);
+  const previous=Number(metric?.previous||0);
+  const percent=Number(metric?.change_percent||0);
+  const trend=metric?.trend||'flat';
+
+  valueElement.textContent=rub(current);
+
+  const sign=percent>0?'+':'';
+
+  previousElement.textContent=
+    `Прошлый месяц: ${rub(previous)} · ${sign}${percent}%`;
+
+  trendElement.className=
+    `finance-trend ${trend}`;
+
+  trendElement.textContent=
+    financeTrendSymbol(trend);
+}
+
+function showMonthlyFinanceError(message){
+  const ids=[
+    'monthIncome',
+    'monthExpenses',
+    'monthProfit'
+  ];
+
+  ids.forEach(id=>{
+    const element=document.getElementById(id);
+
+    if(element){
+      element.textContent='Ошибка';
+      element.title=message||'Не удалось загрузить показатели';
+    }
+  });
+}
+
+async function loadMonthlyFleetFinance(){
+  try{
+    const data=await api('/api/cars-monthly-finance');
+
+    if(!data || data.ok===false){
+      throw new Error(
+        data?.message ||
+        'Сервер не вернул показатели месяца'
+      );
+    }
+
+    renderMonthlyMetric('Income',data.income||{});
+    renderMonthlyMetric('Expenses',data.expenses||{});
+    renderMonthlyMetric('Profit',data.profit||{});
+
+  }catch(error){
+    console.error(
+      'Ошибка загрузки дохода, расхода и прибыли:',
+      error
+    );
+
+    showMonthlyFinanceError(
+      error?.message || String(error)
     );
   }
 }
