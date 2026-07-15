@@ -573,14 +573,62 @@ def overlap_downtime_days(session, car_code, period_start, period_end):
     return len(downtime_dates)
 
 
-def calculate_driver_payment(session, car):
+def rental_amount_for_days(car, payable_days):
     """
-    Считает аренду с учётом простоя.
+    Считает аренду за фактически отработанные дни.
 
-    Итог:
-    (дни периода - дни простоя) × дневная ставка.
+    Приоритет:
+    1. дневная ставка;
+    2. старая недельная ставка, пропорционально дням.
+
+    Для недельной ставки 13 000 ₽:
+    - 7 дней = 13 000 ₽;
+    - 2 дня = round(13 000 × 2 / 7).
     """
-    period_start, period_end = driver_payment_period(car)
+    payable_days = max(int(payable_days or 0), 0)
+    daily_rent = int(getattr(car, "daily_rent", 0) or 0)
+    weekly_payment = int(getattr(car, "weekly_payment", 0) or 0)
+
+    if daily_rent > 0:
+        return daily_rent * payable_days
+
+    if weekly_payment > 0:
+        return round(weekly_payment * payable_days / 7)
+
+    return 0
+
+
+def effective_daily_rent(car):
+    """
+    Ставка для отображения.
+
+    Старые машины, у которых сохранена только недельная сумма,
+    больше не показывают 0 ₽/сутки.
+    """
+    daily_rent = int(getattr(car, "daily_rent", 0) or 0)
+
+    if daily_rent > 0:
+        return daily_rent
+
+    weekly_payment = int(getattr(car, "weekly_payment", 0) or 0)
+
+    if weekly_payment > 0:
+        return round(weekly_payment / 7)
+
+    return 0
+
+
+def calculate_rental_interval(
+    session,
+    car,
+    period_start,
+    period_end,
+):
+    """
+    Считает один интервал [начало, окончание).
+
+    День начала входит в расчёт, дата окончания не входит.
+    """
     total_days = max((period_end - period_start).days, 0)
 
     downtime_days = overlap_downtime_days(
@@ -591,21 +639,7 @@ def calculate_driver_payment(session, car):
     )
 
     payable_days = max(total_days - downtime_days, 0)
-
-    daily_rent = int(
-        getattr(car, "daily_rent", 0)
-        or 0
-    )
-
-    # Совместимость со старыми настройками:
-    # если дневная ставка ещё не указана, используем недельную сумму.
-    if daily_rent > 0:
-        amount_due = payable_days * daily_rent
-    else:
-        weekly_payment = int(car.weekly_payment or 0)
-        amount_due = round(
-            weekly_payment * payable_days / 7
-        ) if total_days else 0
+    amount = rental_amount_for_days(car, payable_days)
 
     return {
         "period_start": period_start.isoformat(),
@@ -613,8 +647,106 @@ def calculate_driver_payment(session, car):
         "total_days": total_days,
         "downtime_days": downtime_days,
         "payable_days": payable_days,
-        "daily_rent": daily_rent,
-        "amount_due": amount_due,
+        "amount": amount,
+    }
+
+
+def calculate_driver_payment(session, car, as_of_date=None):
+    """
+    Текущий расчёт водителя.
+
+    Показывает отдельно:
+    - долг за полностью завершённые и неоплаченные периоды;
+    - начисление за новый текущий период по дням;
+    - общую сумму к оплате.
+
+    Текущий день считается начисленным, если машина не в простое.
+    """
+    today = as_of_date or date.today()
+
+    first_start = parse_iso_date(
+        getattr(car, "last_payment_date", "")
+    )
+    first_due = parse_iso_date(
+        getattr(car, "next_payment_date", "")
+    )
+
+    if not first_due:
+        first_due = today + timedelta(days=7)
+
+    if not first_start:
+        first_start = first_due - timedelta(days=7)
+
+    if first_start >= first_due:
+        first_start = first_due - timedelta(days=7)
+
+    completed_periods = []
+    cursor_start = first_start
+    cursor_due = first_due
+
+    # Все полностью завершённые неоплаченные периоды — старый долг.
+    while cursor_due <= today:
+        period = calculate_rental_interval(
+            session,
+            car,
+            cursor_start,
+            cursor_due,
+        )
+        completed_periods.append(period)
+
+        cursor_start = cursor_due
+        cursor_due = cursor_due + timedelta(days=7)
+
+    previous_debt = sum(
+        int(period["amount"] or 0)
+        for period in completed_periods
+    )
+
+    # Текущий открытый период начисляется постепенно по дням.
+    # today + 1 делает сегодняшний рабочий день начисленным.
+    current_end = min(
+        today + timedelta(days=1),
+        cursor_due,
+    )
+
+    if current_end < cursor_start:
+        current_end = cursor_start
+
+    current_period = calculate_rental_interval(
+        session,
+        car,
+        cursor_start,
+        current_end,
+    )
+
+    current_amount = int(current_period["amount"] or 0)
+    total_due = previous_debt + current_amount
+
+    next_due_date = cursor_due
+
+    return {
+        "period_start": current_period["period_start"],
+        "period_end": current_period["period_end"],
+        "scheduled_period_end": next_due_date.isoformat(),
+        "total_days": current_period["total_days"],
+        "downtime_days": current_period["downtime_days"],
+        "payable_days": current_period["payable_days"],
+        "daily_rent": int(getattr(car, "daily_rent", 0) or 0),
+        "effective_daily_rent": effective_daily_rent(car),
+        "weekly_payment": int(getattr(car, "weekly_payment", 0) or 0),
+        "rate_source": (
+            "daily"
+            if int(getattr(car, "daily_rent", 0) or 0) > 0
+            else "weekly_prorated"
+        ),
+        "previous_debt": previous_debt,
+        "current_amount": current_amount,
+        "amount_due": total_due,
+        "completed_unpaid_periods": len(completed_periods),
+        "completed_period_details": completed_periods,
+        "next_payment_date": next_due_date.isoformat(),
+        "is_overdue": previous_debt > 0,
+        "overdue_days": max((today - first_due).days, 0),
     }
 
 
@@ -705,6 +837,7 @@ def save_payment_settings():
                 "code": car.code,
                 "driver": car.driver,
                 "daily_rent": car.daily_rent,
+                "effective_daily_rent": effective_daily_rent(car),
                 "payment_weekday": car.payment_weekday,
                 "last_payment_date": car.last_payment_date,
                 "next_payment_date": car.next_payment_date,
@@ -766,19 +899,31 @@ def check_driver_payments():
                 .replace(",", " ")
             )
             rate_text = (
-                f"{calculation['daily_rent']:,}"
+                f"{calculation['effective_daily_rent']:,}"
+                .replace(",", " ")
+            )
+            previous_debt_text = (
+                f"{calculation['previous_debt']:,}"
+                .replace(",", " ")
+            )
+            current_amount_text = (
+                f"{calculation['current_amount']:,}"
                 .replace(",", " ")
             )
 
             details = (
-                f"📅 Период: "
+                f"📅 Текущий период: "
                 f"{calculation['period_start']} — "
-                f"{calculation['period_end']}\n"
+                f"{calculation['scheduled_period_end']}\n"
                 f"💵 Ставка: {rate_text} ₽/сутки\n"
-                f"⏸ Простой: "
+                f"⏸ Простой текущего периода: "
                 f"{calculation['downtime_days']} дн.\n"
-                f"✅ Оплачиваемых дней: "
+                f"✅ Начислено дней: "
                 f"{calculation['payable_days']}\n"
+                f"🧾 Долг прошлых периодов: "
+                f"{previous_debt_text} ₽\n"
+                f"➕ Начислено в новом периоде: "
+                f"{current_amount_text} ₽\n"
             )
 
             if days_left == 1:
@@ -873,17 +1018,21 @@ def mark_driver_payment_paid():
 
         calculation = calculate_driver_payment(session, car)
         today = date.today()
-        current_due_date = parse_iso_date(
-            car.next_payment_date
-        ) or today
 
-        car.last_payment_date = current_due_date.isoformat()
+        # Оплата закрывает долг и начисления до сегодняшнего дня включительно.
+        # Новый период начинается завтра.
+        new_period_start = today + timedelta(days=1)
+        car.last_payment_date = new_period_start.isoformat()
 
-        next_date = current_due_date + timedelta(days=7)
+        weekday = int(getattr(car, "payment_weekday", 0) or 0)
+        days_until_due = (weekday - new_period_start.weekday()) % 7
 
-        while next_date <= today:
-            next_date += timedelta(days=7)
+        if days_until_due == 0:
+            days_until_due = 7
 
+        next_date = new_period_start + timedelta(
+            days=days_until_due
+        )
         car.next_payment_date = next_date.isoformat()
 
         session.commit()
@@ -896,9 +1045,7 @@ def mark_driver_payment_paid():
                 .replace(",", " ")
             ),
             "car_code": car.code,
-            "paid_period": {
-                **calculation,
-            },
+            "paid_period": calculation,
             "next_payment_date": car.next_payment_date,
         })
 
@@ -3517,6 +3664,7 @@ def api_cars():
                 "driver": car.driver or "",
                 "weekly_payment": car.weekly_payment or 0,
                 "daily_rent": getattr(car, "daily_rent", 0) or 0,
+                "effective_daily_rent": effective_daily_rent(car),
                 "payment_weekday": car.payment_weekday or 0,
                 "last_payment_date": getattr(car, "last_payment_date", "") or "",
                 "next_payment_date": car.next_payment_date or "",
