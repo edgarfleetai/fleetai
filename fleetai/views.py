@@ -1120,6 +1120,64 @@ body > *{
   }
 }
 
+
+.selected-warehouse-chips{
+  display:none;
+  align-items:center;
+  flex-wrap:wrap;
+  gap:7px;
+  margin-top:10px;
+}
+
+.selected-warehouse-chips.open{
+  display:flex;
+}
+
+.selected-warehouse-label{
+  color:var(--text-soft);
+  font-size:12px;
+  font-weight:650;
+}
+
+.selected-warehouse-chip{
+  display:inline-flex;
+  align-items:center;
+  gap:7px;
+  max-width:100%;
+  padding:7px 9px 7px 11px;
+  border:1px solid var(--line-strong);
+  border-radius:999px;
+  background:var(--surface-soft);
+  color:var(--text);
+  font-size:12px;
+  font-weight:650;
+}
+
+.selected-warehouse-chip button{
+  width:20px;
+  height:20px;
+  min-height:0;
+  padding:0;
+  border-radius:50%;
+  background:#dedad5;
+  color:#5d5751;
+  line-height:1;
+  box-shadow:none;
+}
+
+.selected-warehouse-chip button:hover{
+  background:#cec8c1;
+  transform:none;
+  box-shadow:none;
+}
+
+.warehouse-suggestion-variant{
+  margin-top:2px;
+  color:var(--text-soft);
+  font-size:11px;
+  font-weight:500;
+}
+
 </style>
 </head>
 
@@ -1211,6 +1269,7 @@ body > *{
     <div id="warehouseSuggestions" class="warehouse-suggestions"></div>
   </div>
 
+  <div id="selectedWarehouseChips" class="selected-warehouse-chips"></div>
   <p id="res"></p>
 </div>
 </section>
@@ -2164,7 +2223,7 @@ async function loadOps(){
 let warehouseAutocompleteItems=[];
 let warehouseSuggestionIndex=-1;
 let warehouseAutocompleteTimer=null;
-let selectedWarehouseItemId=null;
+let selectedWarehouseItemIds=[];
 
 function normalizeWarehouseSearch(value){
   let text=String(value||'')
@@ -2303,7 +2362,7 @@ function renderWarehouseSuggestions(){
           <div class="warehouse-suggestion-name">
             ${item.part_name}
             ${item.brand?' · '+item.brand:''}
-            ${item.variant?' · '+item.variant:''}
+            ${item.variant?`<div class="warehouse-suggestion-variant">${item.variant}</div>`:''}
           </div>
           <div class="warehouse-suggestion-meta">
             ${item.shelf?'Полка: '+item.shelf+' · ':''}
@@ -2324,6 +2383,50 @@ function renderWarehouseSuggestions(){
   box.classList.add('open');
 }
 
+function renderSelectedWarehouseChips(){
+  const box=document.getElementById('selectedWarehouseChips');
+
+  if(!box){
+    return;
+  }
+
+  const selected=warehouseAutocompleteItems.filter(
+    item=>selectedWarehouseItemIds.includes(Number(item.id))
+  );
+
+  if(!selected.length){
+    box.innerHTML='';
+    box.classList.remove('open');
+    return;
+  }
+
+  box.classList.add('open');
+  box.innerHTML=`
+    <div class="selected-warehouse-label">
+      Будет списано со склада:
+    </div>
+    ${selected.map(item=>`
+      <span class="selected-warehouse-chip">
+        ${item.part_name}
+        ${item.brand?' · '+item.brand:''}
+        ${item.variant?' · '+item.variant:''}
+        <button
+          type="button"
+          onclick="removeSelectedWarehouseItem(${item.id})"
+          title="Убрать"
+        >×</button>
+      </span>
+    `).join('')}
+  `;
+}
+
+function removeSelectedWarehouseItem(itemId){
+  selectedWarehouseItemIds=selectedWarehouseItemIds.filter(
+    id=>Number(id)!==Number(itemId)
+  );
+  renderSelectedWarehouseChips();
+}
+
 function selectWarehouseSuggestion(itemId){
   const item=warehouseAutocompleteItems.find(
     value=>Number(value.id)===Number(itemId)
@@ -2333,57 +2436,22 @@ function selectWarehouseSuggestion(itemId){
     return;
   }
 
-  selectedWarehouseItemId=Number(item.id);
+  const numericId=Number(item.id);
 
-  const input=document.getElementById('msg');
-  let value=input.value.trim();
-
-  const exactPart=item.part_name.trim();
-  const brandText=item.brand
-    ? ` фирма ${item.brand.trim()}`
-    : '';
-
-  const variantText=item.variant
-    ? ` исполнение ${item.variant.trim()}`
-    : '';
-
-  // Не пытаемся угадать сокращённое название.
-  // Добавляем точное складское название отдельной меткой.
-  if(!normalizeWarehouseSearch(value).includes(
-    normalizeWarehouseSearch(exactPart)
-  )){
-    value+=` деталь ${exactPart}`;
+  if(!selectedWarehouseItemIds.includes(numericId)){
+    selectedWarehouseItemIds.push(numericId);
   }
 
-  if(
-    item.brand &&
-    !normalizeWarehouseSearch(value).includes(
-      normalizeWarehouseSearch(item.brand)
-    )
-  ){
-    value+=brandText;
-  }
-
-  if(
-    item.variant &&
-    !normalizeWarehouseSearch(value).includes(
-      normalizeWarehouseSearch(item.variant)
-    )
-  ){
-    value+=variantText;
-  }
-
-  if(!normalizeWarehouseSearch(value).includes('со склада')){
-    value+=' со склада';
-  }
-
-  input.value=value.replace(/\s+/g,' ').trim()+' ';
+  // Название детали больше не добавляется в строку.
+  // Пользовательский текст остаётся коротким и не смешивается
+  // с длинным складским названием.
+  renderSelectedWarehouseChips();
 
   document
     .getElementById('warehouseSuggestions')
     .classList.remove('open');
 
-  input.focus();
+  document.getElementById('msg').focus();
 }
 function moveWarehouseSuggestion(direction){
   const box=document.getElementById('warehouseSuggestions');
@@ -2436,8 +2504,8 @@ function setupWarehouseAutocomplete(){
   const input=document.getElementById('msg');
 
   input.addEventListener('input',()=>{
-    if(!input.value.trim()){
-      selectedWarehouseItemId=null;
+    if(!input.value.trim() && !selectedWarehouseItemIds.length){
+      renderSelectedWarehouseChips();
     }
 
     clearTimeout(warehouseAutocompleteTimer);
@@ -2487,7 +2555,7 @@ async function add(){
       headers:{'Content-Type':'application/json'},
       body:JSON.stringify({
         message:m,
-        warehouse_item_id:selectedWarehouseItemId
+        warehouse_item_ids:selectedWarehouseItemIds
       })
     });
 
@@ -2495,7 +2563,8 @@ async function add(){
 
     if(r.ok){
       msg.value='';
-      selectedWarehouseItemId=null;
+      selectedWarehouseItemIds=[];
+      renderSelectedWarehouseChips();
       await preloadWarehouseAutocomplete();
     }
 
