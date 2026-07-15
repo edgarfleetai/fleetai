@@ -5309,6 +5309,210 @@ def delete_operation_dependencies(session, operation_id):
             session.delete(row)
 
 
+
+@bp.route("/api/edit-operation/<int:operation_id>", methods=["POST"])
+def api_edit_operation(operation_id):
+    """
+    Изменяет существующую запись ремонта или расхода.
+
+    Складские списания не выполняются повторно:
+    уже созданные WarehouseMovement сохраняются без изменений.
+    После редактирования пересчитываются Expense, Part и пробег.
+    """
+    payload = request.get_json(silent=True) or {}
+    new_message = (payload.get("message") or "").strip()
+    new_date_raw = (payload.get("date") or "").strip()
+
+    if not new_message:
+        return jsonify({
+            "ok": False,
+            "message": "Введите исправленный текст записи",
+        }), 400
+
+    session = Session()
+
+    try:
+        operation = (
+            session.query(Operation)
+            .filter_by(id=operation_id)
+            .first()
+        )
+
+        if not operation:
+            return jsonify({
+                "ok": False,
+                "message": "Операция не найдена",
+            }), 404
+
+        if operation.type not in (
+            "repair",
+            "service",
+            "expense",
+        ):
+            return jsonify({
+                "ok": False,
+                "message": (
+                    "Пока можно изменять только ремонты "
+                    "и обычные расходы"
+                ),
+            }), 400
+
+        parsed = parse_message(new_message)
+        parsed = enforce_repair_total_from_raw(parsed)
+
+        if parsed.get("type") not in (
+            "repair",
+            "service",
+            "expense",
+        ):
+            return jsonify({
+                "ok": False,
+                "message": (
+                    "Исправленная команда должна оставаться "
+                    "ремонтом или расходом"
+                ),
+            }), 400
+
+        car_code = normalize_code(
+            parsed.get("car_code")
+            or operation.car_code
+        )
+        car = find_car(session, car_code)
+
+        if not car:
+            return jsonify({
+                "ok": False,
+                "message": f"Машина {car_code} не найдена",
+            }), 404
+
+        # При отсутствии номера в новом тексте сохраняем старую машину.
+        parsed["car_code"] = car_code
+        parsed["raw"] = new_message
+
+        if new_date_raw:
+            try:
+                new_date = datetime.fromisoformat(new_date_raw)
+            except ValueError:
+                return jsonify({
+                    "ok": False,
+                    "message": "Дата указана неправильно",
+                }), 400
+        else:
+            new_date = operation.date or datetime.now()
+
+        # Удаляем только финансовые и детальные строки ремонта.
+        # WarehouseMovement не трогаем, поэтому склад повторно
+        # не списывается и остатки не меняются.
+        for model in (Expense, Part):
+            for row in (
+                session.query(model)
+                .filter_by(operation_id=operation_id)
+                .all()
+            ):
+                session.delete(row)
+
+        operation.date = new_date
+        operation.car_code = car.code
+        operation.type = parsed.get("type") or operation.type
+        operation.category = parsed.get("category") or "Ремонт"
+        operation.description = (
+            parsed.get("description")
+            or operation.description
+            or "Ремонт / замена"
+        )
+        operation.amount = int(
+            parsed.get("total")
+            or parsed.get("amount")
+            or 0
+        )
+        operation.mileage = parsed.get("mileage")
+        operation.raw_message = new_message
+
+        # Создаём заново Expense и Part на основании нового текста.
+        create_dependencies_from_parsed(
+            session,
+            operation,
+            car,
+            parsed,
+        )
+
+        # Синхронизируем даты связанных записей с датой операции.
+        for expense in (
+            session.query(Expense)
+            .filter_by(operation_id=operation_id)
+            .all()
+        ):
+            expense.date = new_date
+
+        for part in (
+            session.query(Part)
+            .filter_by(operation_id=operation_id)
+            .all()
+        ):
+            part.install_date = new_date
+
+        # Пересчитываем текущий пробег по максимальному известному.
+        known_mileages = [
+            int(value)
+            for value, in (
+                session.query(Operation.mileage)
+                .filter(
+                    func.trim(Operation.car_code)
+                    == normalize_code(car.code),
+                    Operation.mileage.isnot(None),
+                    Operation.mileage > 0,
+                )
+                .all()
+            )
+            if value
+        ]
+
+        if known_mileages:
+            car.current_mileage = max(
+                known_mileages
+                + [int(car.purchase_mileage or 0)]
+            )
+
+        session.commit()
+
+        return jsonify({
+            "ok": True,
+            "message": (
+                f"Операция #{operation_id} изменена. "
+                "Доходы, расходы и детали пересчитаны."
+            ),
+            "operation": {
+                "id": operation.id,
+                "date": operation.date.isoformat(),
+                "car_code": operation.car_code,
+                "type": operation.type,
+                "description": operation.description,
+                "amount": operation.amount,
+                "mileage": operation.mileage,
+                "raw": operation.raw_message,
+            },
+        })
+
+    except Exception as error:
+        session.rollback()
+        print(
+            "Ошибка изменения операции:",
+            type(error).__name__,
+            str(error),
+        )
+
+        return jsonify({
+            "ok": False,
+            "message": (
+                "Не удалось изменить запись: "
+                f"{type(error).__name__}: {error}"
+            ),
+        }), 500
+
+    finally:
+        session.close()
+
+
 @bp.route("/api/delete-operation/<int:operation_id>", methods=["POST"])
 def api_delete_operation(operation_id):
     session = Session()
@@ -5860,7 +6064,13 @@ def api_repair_downtime_statuses():
 def api_operations():
     session = Session()
     rows = [{
-        "id": op.id, "date": op.date.strftime("%d.%m.%Y %H:%M"),
+        "id": op.id,
+        "date": op.date.strftime("%d.%m.%Y %H:%M"),
+        "date_iso": (
+            op.date.strftime("%Y-%m-%dT%H:%M")
+            if op.date
+            else ""
+        ),
         "car_code": op.car_code, "type": op.type,
         "category": op.category, "description": op.description,
         "amount": op.amount, "mileage": op.mileage, "raw": op.raw_message,
