@@ -2327,7 +2327,15 @@ function renderDriverPayments(carsList){
 }
 
 async function loadCars(){
+  try{
+
   let c=await api('/api/cars');
+
+  if(!Array.isArray(c)){
+    throw new Error(
+      c?.message || 'Сервер не вернул список машин'
+    );
+  }
 
   fillPaymentCarSelect(c);
   renderDriverPayments(c);
@@ -2384,6 +2392,29 @@ async function loadCars(){
       </tr>
     `).join('')}
   `;
+
+  }catch(error){
+    console.error('Ошибка загрузки машин:',error);
+
+    paymentCar.innerHTML=
+      '<option value="">Ошибка загрузки машин</option>';
+
+    driverPayments.innerHTML=`
+      <tr>
+        <td class="bad">
+          ${error.message || error}
+        </td>
+      </tr>
+    `;
+
+    cars.innerHTML=`
+      <tr>
+        <td class="bad">
+          ${error.message || error}
+        </td>
+      </tr>
+    `;
+  }
 }
 
 function groupByDate(ops){let g={};ops.forEach(o=>{let d=(o.date||'').split(' ')[0]||'Без даты';if(!g[d])g[d]=[];g[d].push(o)});return g}
