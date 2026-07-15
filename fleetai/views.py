@@ -1252,6 +1252,54 @@ body > *{
   }
 }
 
+
+/* ===== MONTHLY MILEAGE INDICATOR ===== */
+
+.mileage-cell{
+  display:flex;
+  flex-direction:column;
+  align-items:flex-start;
+  gap:5px;
+  min-width:145px;
+}
+
+.mileage-increase{
+  display:inline-flex;
+  align-items:center;
+  min-height:24px;
+  padding:4px 8px;
+  border-radius:8px;
+  font-size:11px;
+  font-weight:750;
+  white-space:nowrap;
+}
+
+.mileage-current{
+  color:var(--text);
+  font-size:13px;
+  font-weight:650;
+}
+
+.mileage-neutral{
+  color:#69645e;
+  background:#efedea;
+}
+
+.mileage-green{
+  color:#3f674d;
+  background:#eaf4ed;
+}
+
+.mileage-yellow{
+  color:#806427;
+  background:#faf1d6;
+}
+
+.mileage-red{
+  color:#a33e3e;
+  background:#fbeaea;
+}
+
 </style>
 </head>
 
@@ -2135,6 +2183,55 @@ async function loadMonthlyFleetFinance(){
   }
 }
 
+
+function mileageIncreaseClass(status){
+  if(status==='green')return 'mileage-green';
+  if(status==='yellow')return 'mileage-yellow';
+  if(status==='red')return 'mileage-red';
+  return 'mileage-neutral';
+}
+
+function mileageCell(car){
+  const current=Number(car.mileage||0);
+  const data=monthlyMileageByCar[String(car.code)]||{};
+  const increase=Number(data.month_increase||0);
+  const status=data.status||'neutral';
+
+  return `
+    <div class="mileage-cell">
+      <div class="mileage-increase ${mileageIncreaseClass(status)}">
+        +${increase.toLocaleString('ru-RU')} км за месяц
+      </div>
+      <div class="mileage-current">
+        ${current
+          ? current.toLocaleString('ru-RU')+' км'
+          : '—'
+        }
+      </div>
+    </div>
+  `;
+}
+
+async function loadMonthlyMileage(){
+  try{
+    const data=await api('/api/cars-monthly-mileage');
+
+    if(!data.ok){
+      monthlyMileageByCar={};
+      return;
+    }
+
+    monthlyMileageByCar={};
+
+    for(const item of data.items||[]){
+      monthlyMileageByCar[String(item.car_code)]=item;
+    }
+  }catch(error){
+    monthlyMileageByCar={};
+    console.error('Не удалось загрузить пробег за месяц',error);
+  }
+}
+
 async function loadCars(){
   let c=await api('/api/cars');
 
@@ -2177,7 +2274,7 @@ async function loadCars(){
         <td>${x.code}</td>
         <td>${x.brand||''} ${x.model||''}</td>
         <td>${x.plate||''}</td>
-        <td>${x.mileage?Number(x.mileage).toLocaleString('ru-RU')+' км':'—'}</td>
+        <td>${mileageCell(x)}</td>
         <td>${x.investor_name||''}</td>
         <td>${x.investor_percent||0}</td>
         <td>${rub(x.income)}</td>
@@ -2416,6 +2513,7 @@ async function loadOps(){
   `;
 }
 
+let monthlyMileageByCar={};
 let warehouseAutocompleteItems=[];
 let warehouseSuggestionIndex=-1;
 let warehouseAutocompleteTimer=null;
@@ -3051,6 +3149,7 @@ async function load(){
   await loadSummary();
   await loadInvestorsSummary();
   await loadInvestors();
+  await loadMonthlyMileage();
   await loadCars();
   await loadMonthlyFleetFinance();
   await loadOps();
