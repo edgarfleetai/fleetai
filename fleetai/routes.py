@@ -164,6 +164,16 @@ def build_investor_report_pdf(
     period_end,
     car_rows,
 ):
+    """
+    Формирует простой отчёт инвестора.
+
+    Главная логика:
+    1. Машины заработали.
+    2. Вычитаются все обычные расходы всех машин, включая убыточные.
+    3. От остатка считается доля инвестора.
+    4. Из доли инвестора удерживаются непокрытые допрасходы и долги.
+    5. Показывается одна понятная сумма к выплате.
+    """
     font_name = register_pdf_font()
     buffer = io.BytesIO()
 
@@ -181,37 +191,38 @@ def build_investor_report_pdf(
     styles = getSampleStyleSheet()
 
     title_style = ParagraphStyle(
-        "ReportTitle",
+        "InvestorReportTitle",
         parent=styles["Title"],
         fontName=font_name,
         fontSize=18,
-        leading=22,
+        leading=23,
         alignment=TA_CENTER,
-        spaceAfter=12,
+        spaceAfter=8,
+    )
+
+    period_style = ParagraphStyle(
+        "InvestorReportPeriod",
+        parent=styles["BodyText"],
+        fontName=font_name,
+        fontSize=10,
+        leading=14,
+        alignment=TA_CENTER,
+        textColor=colors.HexColor("#5F5B55"),
+        spaceAfter=14,
     )
 
     heading_style = ParagraphStyle(
-        "ReportHeading",
+        "InvestorReportHeading",
         parent=styles["Heading2"],
         fontName=font_name,
         fontSize=13,
         leading=17,
-        spaceBefore=10,
+        spaceBefore=12,
         spaceAfter=7,
     )
 
-    subheading_style = ParagraphStyle(
-        "ReportSubheading",
-        parent=styles["Heading3"],
-        fontName=font_name,
-        fontSize=11,
-        leading=15,
-        spaceBefore=8,
-        spaceAfter=5,
-    )
-
     normal_style = ParagraphStyle(
-        "ReportNormal",
+        "InvestorReportNormal",
         parent=styles["BodyText"],
         fontName=font_name,
         fontSize=9,
@@ -219,265 +230,405 @@ def build_investor_report_pdf(
     )
 
     small_style = ParagraphStyle(
-        "ReportSmall",
+        "InvestorReportSmall",
         parent=normal_style,
         fontSize=8,
         leading=11,
+        textColor=colors.HexColor("#5F5B55"),
+    )
+
+    payout_style = ParagraphStyle(
+        "InvestorPayout",
+        parent=styles["Heading1"],
+        fontName=font_name,
+        fontSize=17,
+        leading=21,
+        alignment=TA_CENTER,
+        textColor=colors.HexColor("#234B35"),
+        spaceBefore=8,
+        spaceAfter=8,
+    )
+
+    total_income = sum(
+        int(item.get("income", 0) or 0)
+        for item in car_rows
+    )
+
+    # Все обычные расходы включаются полностью.
+    # Поэтому убыток одной машины уже уменьшает общий остаток.
+    total_expenses = sum(
+        int(item.get("shared_expenses", 0) or 0)
+        for item in car_rows
+    )
+
+    remaining_after_expenses = total_income - total_expenses
+
+    percentages = sorted({
+        int(item.get("percent", 0) or 0)
+        for item in car_rows
+        if int(item.get("percent", 0) or 0) > 0
+    })
+
+    if len(percentages) == 1:
+        investor_percent = percentages[0]
+    elif car_rows:
+        # Защита на случай разных процентов:
+        # используем отношение суммы начислений к положительной
+        # прибыли машин, но не выше 100%.
+        positive_profit = sum(
+            max(int(item.get("profit_for_split", 0) or 0), 0)
+            for item in car_rows
+        )
+        accrued_sum = sum(
+            int(item.get("accrued_to_investor", 0) or 0)
+            for item in car_rows
+        )
+        investor_percent = (
+            round(accrued_sum * 100 / positive_profit)
+            if positive_profit > 0
+            else 0
+        )
+        investor_percent = max(0, min(investor_percent, 100))
+    else:
+        investor_percent = 0
+
+    investor_share = max(
+        round(
+            max(remaining_after_expenses, 0)
+            * investor_percent
+            / 100
+        ),
+        0,
+    )
+
+    previous_debt = sum(
+        int(item.get("previous_investor_debt", 0) or 0)
+        for item in car_rows
+    )
+    extra_expenses = sum(
+        int(item.get("investor_only_expenses", 0) or 0)
+        for item in car_rows
+    )
+    investor_paid = sum(
+        int(item.get("investor_paid_in_period", 0) or 0)
+        for item in car_rows
+    )
+    already_paid = sum(
+        int(item.get("payouts_in_period", 0) or 0)
+        for item in car_rows
+    )
+
+    uncovered_costs = max(
+        previous_debt + extra_expenses - investor_paid,
+        0,
+    )
+
+    withheld = min(investor_share, uncovered_costs)
+
+    amount_to_pay = max(
+        investor_share - withheld - already_paid,
+        0,
     )
 
     story = [
-        Paragraph("Отчёт по расчётному периоду", title_style),
-        Paragraph(f"<b>Инвестор:</b> {investor_name}", normal_style),
         Paragraph(
-            "<b>Период:</b> "
-            f"{period_start.strftime('%d.%m.%Y')} — "
+            f"Отчёт инвестора {investor_name}",
+            title_style,
+        ),
+        Paragraph(
+            "За период с "
+            f"{period_start.strftime('%d.%m.%Y')} по "
             f"{period_display_end(period_end).strftime('%d.%m.%Y')}",
-            normal_style,
+            period_style,
         ),
-        Paragraph(
-            "<b>Сформирован:</b> "
-            f"{datetime.now().strftime('%d.%m.%Y %H:%M')}",
-            normal_style,
-        ),
-        Paragraph(
-            "Долги и выплаты рассчитаны по всему автопарку инвестора: "
-            "долг одной машины сначала погашается суммами к выплате "
-            "по другим машинам.",
-            small_style,
-        ),
-        Spacer(1, 7 * mm),
     ]
 
-    total = {
-        "income": 0,
-        "shared": 0,
-        "profit_for_split": 0,
-        "accrued": 0,
-        "previous_debt": 0,
-        "extra": 0,
-        "investor_paid": 0,
-        "debt_repaid": 0,
-        "payouts": 0,
-        "portfolio_withheld": 0,
-        "available": 0,
-        "owner": 0,
-        "debt": 0,
-        "park_only": 0,
-        "downtime": 0,
-        "closed": 0,
-        "open": 0,
-    }
+    main_rows = [
+        [
+            Paragraph("<b>Машины заработали</b>", normal_style),
+            Paragraph(
+                f"<b>{money(total_income)}</b>",
+                normal_style,
+            ),
+        ],
+        [
+            Paragraph(
+                "<b>Все расходы по машинам "
+                "(включая убыточные машины)</b>",
+                normal_style,
+            ),
+            Paragraph(
+                f"<b>{money(total_expenses)}</b>",
+                normal_style,
+            ),
+        ],
+        [
+            Paragraph(
+                "<b>Осталось после всех расходов</b>",
+                normal_style,
+            ),
+            Paragraph(
+                f"<b>{money(remaining_after_expenses)}</b>",
+                normal_style,
+            ),
+        ],
+        [
+            Paragraph(
+                f"<b>Доля инвестора ({investor_percent}%)</b>",
+                normal_style,
+            ),
+            Paragraph(
+                f"<b>{money(investor_share)}</b>",
+                normal_style,
+            ),
+        ],
+        [
+            Paragraph(
+                "<b>Удержано на покрытие допрасходов "
+                "и долгов</b>",
+                normal_style,
+            ),
+            Paragraph(
+                f"<b>{money(withheld)}</b>",
+                normal_style,
+            ),
+        ],
+    ]
+
+    if already_paid > 0:
+        main_rows.append([
+            Paragraph(
+                "<b>Уже выплачено в этом периоде</b>",
+                normal_style,
+            ),
+            Paragraph(
+                f"<b>{money(already_paid)}</b>",
+                normal_style,
+            ),
+        ])
+
+    main_table = Table(
+        main_rows,
+        colWidths=[120 * mm, 50 * mm],
+    )
+    main_table.setStyle(
+        TableStyle([
+            (
+                "BACKGROUND",
+                (0, 0),
+                (-1, -1),
+                colors.HexColor("#F7F6F3"),
+            ),
+            (
+                "GRID",
+                (0, 0),
+                (-1, -1),
+                0.5,
+                colors.HexColor("#D8D4CE"),
+            ),
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("LEFTPADDING", (0, 0), (-1, -1), 9),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 9),
+            ("TOPPADDING", (0, 0), (-1, -1), 9),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 9),
+        ])
+    )
+    story.append(main_table)
+    story.append(Spacer(1, 5 * mm))
+
+    payout_box = Table(
+        [[
+            Paragraph(
+                f"К выплате инвестору: {money(amount_to_pay)}",
+                payout_style,
+            )
+        ]],
+        colWidths=[170 * mm],
+    )
+    payout_box.setStyle(
+        TableStyle([
+            (
+                "BACKGROUND",
+                (0, 0),
+                (-1, -1),
+                colors.HexColor("#EAF2EC"),
+            ),
+            (
+                "BOX",
+                (0, 0),
+                (-1, -1),
+                1,
+                colors.HexColor("#9DB6A5"),
+            ),
+            ("LEFTPADDING", (0, 0), (-1, -1), 10),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 10),
+            ("TOPPADDING", (0, 0), (-1, -1), 10),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 10),
+        ])
+    )
+    story.append(payout_box)
+
+    story.append(
+        Paragraph(
+            "Расчёт: из общего дохода вычтены расходы всех машин. "
+            "Убыточные машины уже учтены в общей сумме расходов. "
+            "После этого рассчитана доля инвестора и удержаны только "
+            "непокрытые допрасходы и долги.",
+            small_style,
+        )
+    )
+
+    story.append(Paragraph("Кратко по машинам", heading_style))
+
+    cars_table_data = [[
+        Paragraph("<b>Машина</b>", normal_style),
+        Paragraph("<b>Доход</b>", normal_style),
+        Paragraph("<b>Расход</b>", normal_style),
+        Paragraph("<b>Итог</b>", normal_style),
+        Paragraph("<b>Простой</b>", normal_style),
+    ]]
 
     for item in car_rows:
-        total["income"] += item["income"]
-        total["shared"] += item["shared_expenses"]
-        total["profit_for_split"] += item["profit_for_split"]
-        total["accrued"] += item["accrued_to_investor"]
-        total["previous_debt"] += item["previous_investor_debt"]
-        total["extra"] += item["investor_only_expenses"]
-        total["investor_paid"] += item["investor_paid_in_period"]
-        total["debt_repaid"] += item["debt_repaid_by_profit"]
-        total["payouts"] += item["payouts_in_period"]
-        total["portfolio_withheld"] += int(
-            item.get("portfolio_debt_withheld", 0) or 0
-        )
-        total["available"] += item["available_to_pay"]
-        total["owner"] += item["owner_amount"]
-        total["debt"] += item["investor_debt_to_park"]
-        total["park_only"] += item["park_only_expenses"]
-        total["downtime"] += item["downtime_days"]
-
-        if item["period_closed"]:
-            total["closed"] += 1
-        else:
-            total["open"] += 1
-
-        status_text = (
-            "Период закрыт"
-            if item["period_closed"]
-            else "Период ещё не закрыт — показан текущий расчёт"
+        car_profit = (
+            int(item.get("income", 0) or 0)
+            - int(item.get("shared_expenses", 0) or 0)
         )
 
+        cars_table_data.append([
+            Paragraph(
+                f"{item.get('code', '')} "
+                f"{item.get('car_name', '')}",
+                normal_style,
+            ),
+            Paragraph(
+                money(item.get("income", 0)),
+                normal_style,
+            ),
+            Paragraph(
+                money(item.get("shared_expenses", 0)),
+                normal_style,
+            ),
+            Paragraph(
+                money(car_profit),
+                normal_style,
+            ),
+            Paragraph(
+                f"{int(item.get('downtime_days', 0) or 0)} дн.",
+                normal_style,
+            ),
+        ])
+
+    cars_table = Table(
+        cars_table_data,
+        colWidths=[
+            55 * mm,
+            31 * mm,
+            31 * mm,
+            31 * mm,
+            22 * mm,
+        ],
+        repeatRows=1,
+    )
+    cars_table.setStyle(
+        TableStyle([
+            (
+                "BACKGROUND",
+                (0, 0),
+                (-1, 0),
+                colors.HexColor("#E9E7E2"),
+            ),
+            (
+                "GRID",
+                (0, 0),
+                (-1, -1),
+                0.4,
+                colors.HexColor("#D1CEC8"),
+            ),
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("LEFTPADDING", (0, 0), (-1, -1), 5),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 5),
+            ("TOPPADDING", (0, 0), (-1, -1), 6),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+        ])
+    )
+    story.append(cars_table)
+
+    expense_rows = []
+
+    for item in car_rows:
+        for expense in item.get("expense_rows", []):
+            expense_rows.append({
+                "car_code": item.get("code", ""),
+                **expense,
+            })
+
+    if expense_rows:
         story.append(
             Paragraph(
-                f"Машина {item['code']} — {item['car_name']}",
+                "На что ушли деньги",
                 heading_style,
             )
         )
-        story.append(
-            Paragraph(
-                f"<b>Статус:</b> {status_text}",
-                normal_style,
-            )
-        )
 
-        summary_data = [
-            [
-                Paragraph("<b>Показатель</b>", normal_style),
-                Paragraph("<b>Сумма</b>", normal_style),
+        expense_table_data = [[
+            Paragraph("<b>Дата</b>", small_style),
+            Paragraph("<b>Машина</b>", small_style),
+            Paragraph("<b>Описание</b>", small_style),
+            Paragraph("<b>Сумма</b>", small_style),
+        ]]
+
+        for expense in expense_rows:
+            expense_table_data.append([
+                Paragraph(expense.get("date", ""), small_style),
+                Paragraph(
+                    str(expense.get("car_code", "")),
+                    small_style,
+                ),
+                Paragraph(
+                    expense.get("description", ""),
+                    small_style,
+                ),
+                Paragraph(
+                    money(expense.get("amount", 0)),
+                    small_style,
+                ),
+            ])
+
+        expense_table = Table(
+            expense_table_data,
+            colWidths=[
+                25 * mm,
+                20 * mm,
+                100 * mm,
+                25 * mm,
             ],
-            [Paragraph("Доход", normal_style), Paragraph(money(item["income"]), normal_style)],
-            [Paragraph("Обычные расходы", normal_style), Paragraph(money(item["shared_expenses"]), normal_style)],
-            [Paragraph("Прибыль до разделения", normal_style), Paragraph(money(item["profit_for_split"]), normal_style)],
-            [Paragraph(f"Начислено инвестору ({item['percent']}%)", normal_style), Paragraph(money(item["accrued_to_investor"]), normal_style)],
-            [Paragraph("Долг с прошлого периода", normal_style), Paragraph(money(item["previous_investor_debt"]), normal_style)],
-            [Paragraph("Допрасходы инвестора", normal_style), Paragraph(money(item["investor_only_expenses"]), normal_style)],
-            [Paragraph("Инвестор внёс в этом периоде", normal_style), Paragraph(money(item["investor_paid_in_period"]), normal_style)],
-            [Paragraph("Погашено долга из прибыли", normal_style), Paragraph(money(item["debt_repaid_by_profit"]), normal_style)],
-            [Paragraph("Выплачено инвестору", normal_style), Paragraph(money(item["payouts_in_period"]), normal_style)],
-            [Paragraph("Удержано для погашения долга других машин", normal_style), Paragraph(money(item.get("portfolio_debt_withheld", 0)), normal_style)],
-            [Paragraph("Осталось выплатить", normal_style), Paragraph(money(item["available_to_pay"]), normal_style)],
-            [Paragraph("Остаток долга инвестора", normal_style), Paragraph(money(item["investor_debt_to_park"]), normal_style)],
-            [Paragraph("Расходы только парка", normal_style), Paragraph(money(item["park_only_expenses"]), normal_style)],
-            [Paragraph("Доля парка", normal_style), Paragraph(money(item["owner_amount"]), normal_style)],
-            [Paragraph("Дней простоя", normal_style), Paragraph(str(item["downtime_days"]), normal_style)],
-        ]
-
-        summary_table = Table(
-            summary_data,
-            colWidths=[115 * mm, 55 * mm],
             repeatRows=1,
         )
-        summary_table.setStyle(
+        expense_table.setStyle(
             TableStyle([
-                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#E5E7EB")),
-                ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#D1D5DB")),
-                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-                ("LEFTPADDING", (0, 0), (-1, -1), 7),
-                ("RIGHTPADDING", (0, 0), (-1, -1), 7),
-                ("TOPPADDING", (0, 0), (-1, -1), 6),
-                ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+                (
+                    "BACKGROUND",
+                    (0, 0),
+                    (-1, 0),
+                    colors.HexColor("#F0EEEA"),
+                ),
+                (
+                    "GRID",
+                    (0, 0),
+                    (-1, -1),
+                    0.35,
+                    colors.HexColor("#D1CEC8"),
+                ),
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("LEFTPADDING", (0, 0), (-1, -1), 5),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 5),
+                ("TOPPADDING", (0, 0), (-1, -1), 5),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
             ])
         )
-        story.append(summary_table)
+        story.append(expense_table)
 
-        story.append(Paragraph("Куда ушли деньги", subheading_style))
-
-        if item["expense_rows"]:
-            expense_data = [[
-                Paragraph("<b>Дата</b>", small_style),
-                Paragraph("<b>Тип</b>", small_style),
-                Paragraph("<b>Подробности / комментарий</b>", small_style),
-                Paragraph("<b>Сумма</b>", small_style),
-            ]]
-
-            for expense in item["expense_rows"]:
-                expense_data.append([
-                    Paragraph(expense["date"], small_style),
-                    Paragraph(expense["type_label"], small_style),
-                    Paragraph(expense["description"], small_style),
-                    Paragraph(money(expense["amount"]), small_style),
-                ])
-
-            expense_table = Table(
-                expense_data,
-                colWidths=[24 * mm, 33 * mm, 88 * mm, 25 * mm],
-                repeatRows=1,
-            )
-            expense_table.setStyle(
-                TableStyle([
-                    ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#F3F4F6")),
-                    ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#D1D5DB")),
-                    ("VALIGN", (0, 0), (-1, -1), "TOP"),
-                    ("LEFTPADDING", (0, 0), (-1, -1), 5),
-                    ("RIGHTPADDING", (0, 0), (-1, -1), 5),
-                    ("TOPPADDING", (0, 0), (-1, -1), 5),
-                    ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
-                ])
-            )
-            story.append(expense_table)
-        else:
-            story.append(
-                Paragraph(
-                    "За этот период расходов не зарегистрировано.",
-                    normal_style,
-                )
-            )
-
-        story.append(Paragraph("Простой", subheading_style))
-
-        if item["downtime_rows"]:
-            downtime_data = [[
-                Paragraph("<b>Начало</b>", small_style),
-                Paragraph("<b>Окончание</b>", small_style),
-                Paragraph("<b>Дней</b>", small_style),
-                Paragraph("<b>Причина / комментарий</b>", small_style),
-            ]]
-
-            for downtime in item["downtime_rows"]:
-                downtime_data.append([
-                    Paragraph(downtime["start"], small_style),
-                    Paragraph(downtime["end"], small_style),
-                    Paragraph(str(downtime["days"]), small_style),
-                    Paragraph(downtime["reason"], small_style),
-                ])
-
-            downtime_table = Table(
-                downtime_data,
-                colWidths=[30 * mm, 38 * mm, 18 * mm, 84 * mm],
-                repeatRows=1,
-            )
-            downtime_table.setStyle(
-                TableStyle([
-                    ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#FFF7ED")),
-                    ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#D1D5DB")),
-                    ("VALIGN", (0, 0), (-1, -1), "TOP"),
-                    ("LEFTPADDING", (0, 0), (-1, -1), 5),
-                    ("RIGHTPADDING", (0, 0), (-1, -1), 5),
-                    ("TOPPADDING", (0, 0), (-1, -1), 5),
-                    ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
-                ])
-            )
-            story.append(downtime_table)
-        else:
-            story.append(
-                Paragraph(
-                    "За этот период простой не зарегистрирован.",
-                    normal_style,
-                )
-            )
-
-        story.append(Spacer(1, 8 * mm))
-
-    story.append(Paragraph("Общий итог по инвестору", heading_style))
-
-    totals_data = [
-        [Paragraph("<b>Машин в отчёте</b>", normal_style), Paragraph(str(len(car_rows)), normal_style)],
-        [Paragraph("<b>Закрытых периодов</b>", normal_style), Paragraph(str(total["closed"]), normal_style)],
-        [Paragraph("<b>Незакрытых периодов</b>", normal_style), Paragraph(str(total["open"]), normal_style)],
-        [Paragraph("<b>Всего доход</b>", normal_style), Paragraph(money(total["income"]), normal_style)],
-        [Paragraph("<b>Обычные расходы</b>", normal_style), Paragraph(money(total["shared"]), normal_style)],
-        [Paragraph("<b>Прибыль до разделения</b>", normal_style), Paragraph(money(total["profit_for_split"]), normal_style)],
-        [Paragraph("<b>Начислено инвестору</b>", normal_style), Paragraph(money(total["accrued"]), normal_style)],
-        [Paragraph("<b>Долг с прошлых периодов</b>", normal_style), Paragraph(money(total["previous_debt"]), normal_style)],
-        [Paragraph("<b>Допрасходы инвестора</b>", normal_style), Paragraph(money(total["extra"]), normal_style)],
-        [Paragraph("<b>Инвестор внёс</b>", normal_style), Paragraph(money(total["investor_paid"]), normal_style)],
-        [Paragraph("<b>Погашено долга из прибыли</b>", normal_style), Paragraph(money(total["debt_repaid"]), normal_style)],
-        [Paragraph("<b>Выплачено инвестору</b>", normal_style), Paragraph(money(total["payouts"]), normal_style)],
-        [Paragraph("<b>Взаимозачёт долга между машинами</b>", normal_style), Paragraph(money(total["portfolio_withheld"]), normal_style)],
-        [Paragraph("<b>Осталось выплатить после взаимозачёта</b>", normal_style), Paragraph(money(total["available"]), normal_style)],
-        [Paragraph("<b>Остаток долга после взаимозачёта</b>", normal_style), Paragraph(money(total["debt"]), normal_style)],
-        [Paragraph("<b>Расходы только парка</b>", normal_style), Paragraph(money(total["park_only"]), normal_style)],
-        [Paragraph("<b>Доля парка</b>", normal_style), Paragraph(money(total["owner"]), normal_style)],
-        [Paragraph("<b>Всего дней простоя</b>", normal_style), Paragraph(str(total["downtime"]), normal_style)],
-    ]
-
-    totals_table = Table(totals_data, colWidths=[115 * mm, 55 * mm])
-    totals_table.setStyle(
-        TableStyle([
-            ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#F3F4F6")),
-            ("GRID", (0, 0), (-1, -1), 0.6, colors.HexColor("#9CA3AF")),
-            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-            ("LEFTPADDING", (0, 0), (-1, -1), 7),
-            ("RIGHTPADDING", (0, 0), (-1, -1), 7),
-            ("TOPPADDING", (0, 0), (-1, -1), 7),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
-        ])
-    )
-
-    story.append(totals_table)
     document.build(story)
-
     return buffer.getvalue()
 
 
