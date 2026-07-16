@@ -4,6 +4,7 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import func
 
 from .models import (
+    Car,
     Income,
     Expense,
     CarInvestment,
