@@ -8,7 +8,7 @@ from urllib.parse import unquote
 
 from datetime import datetime, date, timedelta
 
-from flask import Blueprint, request, jsonify, render_template_string
+from flask import Blueprint, request, jsonify, render_template_string, send_file
 from sqlalchemy import func
 
 from reportlab.lib import colors
@@ -5777,6 +5777,395 @@ def api_rebuild_calculations():
     return jsonify({"ok": True, "message": f"Пересчет выполнен. Восстановлено записей: {rebuilt}. Пропущено: {skipped}."})
 
 
+
+def collect_investor_report_rows(
+    session,
+    investor_name,
+    period_start,
+    period_end,
+):
+    """
+    Собирает подробности отчёта за любой выбранный период.
+    Используется и для текущего отчёта, и для истории.
+    """
+    cars = (
+        session.query(Car)
+        .filter(
+            Car.owner_type == "investor",
+            func.lower(func.trim(Car.investor_name))
+            == investor_name.lower(),
+        )
+        .order_by(Car.code)
+        .all()
+    )
+
+    if not cars:
+        return [], []
+
+    report_rows = []
+
+    for car in cars:
+        period = (
+            session.query(SettlementPeriod)
+            .filter(
+                func.trim(SettlementPeriod.car_code)
+                == normalize_code(car.code),
+                SettlementPeriod.start_date == period_start,
+                SettlementPeriod.end_date == period_end,
+            )
+            .first()
+        )
+
+        calc = calculate_period_for_car(
+            session,
+            car,
+            period_start,
+            period_end,
+        )
+
+        expense_rows = []
+
+        expenses = (
+            session.query(Expense)
+            .filter(
+                func.trim(Expense.car_code)
+                == normalize_code(car.code),
+                Expense.date >= period_start,
+                Expense.date < period_end,
+            )
+            .order_by(
+                Expense.date.asc(),
+                Expense.id.asc(),
+            )
+            .all()
+        )
+
+        for expense in expenses:
+            operation = None
+            parts = []
+
+            if expense.operation_id:
+                operation = (
+                    session.query(Operation)
+                    .filter_by(id=expense.operation_id)
+                    .first()
+                )
+                parts = (
+                    session.query(Part)
+                    .filter_by(
+                        operation_id=expense.operation_id
+                    )
+                    .order_by(Part.id.asc())
+                    .all()
+                )
+
+            expense_type = (
+                expense.share_type or "shared"
+            ).strip().lower()
+
+            if (
+                operation
+                and operation.type
+                == "investor_expense_split"
+            ):
+                expense_type = "investor_only"
+
+            if expense_type in {
+                "investor_only",
+                "investor",
+                "investor-only",
+                "только инвестор",
+                "допрасход",
+                "доп расход",
+                "доп расходы",
+            }:
+                type_label = "Допрасход инвестора"
+            elif expense_type in {
+                "park_only",
+                "park",
+                "owner_only",
+                "только парк",
+            }:
+                type_label = "Только парк"
+            else:
+                type_label = "Обычный расход"
+
+            details = []
+
+            for part in parts:
+                part_text = part.part_name or "Деталь"
+
+                if part.brand:
+                    part_text += f", фирма {part.brand}"
+                if part.position:
+                    part_text += f", {part.position}"
+                if part.price:
+                    part_text += (
+                        f", деталь {money(part.price)}"
+                    )
+                if part.labor:
+                    part_text += (
+                        f", работа {money(part.labor)}"
+                    )
+                if part.install_mileage:
+                    part_text += (
+                        f", пробег "
+                        f"{int(part.install_mileage):,} км"
+                    ).replace(",", " ")
+
+                details.append(part_text)
+
+            if operation and operation.description:
+                description = operation.description.strip()
+
+                if (
+                    description
+                    and description not in details
+                ):
+                    details.append(description)
+
+            if operation and operation.raw_message:
+                details.append(
+                    "Комментарий: "
+                    f"{operation.raw_message.strip()}"
+                )
+
+            if not details:
+                details.append(
+                    expense.category or "Расход"
+                )
+
+            expense_rows.append({
+                "date": (
+                    expense.date.strftime("%d.%m.%Y")
+                    if expense.date
+                    else ""
+                ),
+                "type_label": type_label,
+                "description": "<br/>".join(details),
+                "amount": expense.amount or 0,
+            })
+
+        downtime_rows = []
+        downtime_days = 0
+
+        for downtime in session.query(Downtime).all():
+            if (
+                normalize_code(downtime.car_code)
+                != normalize_code(car.code)
+            ):
+                continue
+
+            downtime_start = (
+                downtime.start_date or period_start
+            )
+            downtime_end = (
+                moscow_now()
+                if downtime.active
+                else (downtime.end_date or period_end)
+            )
+
+            overlap_start = max(
+                downtime_start,
+                period_start,
+            )
+            overlap_end = min(
+                downtime_end,
+                period_end,
+            )
+
+            if overlap_end <= overlap_start:
+                continue
+
+            days = max(
+                (
+                    overlap_end.date()
+                    - overlap_start.date()
+                ).days,
+                1,
+            )
+            downtime_days += days
+
+            reason_parts = []
+
+            if downtime.reason:
+                reason_parts.append(downtime.reason)
+
+            clean_comment = clean_downtime_comment(
+                downtime
+            )
+
+            if (
+                clean_comment
+                and clean_comment not in reason_parts
+            ):
+                reason_parts.append(
+                    f"Комментарий: {clean_comment}"
+                )
+
+            downtime_rows.append({
+                "start": overlap_start.strftime(
+                    "%d.%m.%Y"
+                ),
+                "end": (
+                    "по настоящее время"
+                    if downtime.active
+                    else overlap_end.strftime(
+                        "%d.%m.%Y"
+                    )
+                ),
+                "days": days,
+                "reason": (
+                    "<br/>".join(reason_parts)
+                    or "Причина не указана"
+                ),
+            })
+
+        report_rows.append({
+            "code": car.code,
+            "car_name": (
+                f"{car.brand or ''} "
+                f"{car.model or ''}"
+            ).strip(),
+            "percent": car.investor_percent or 0,
+            "period_closed": period is not None,
+            "income": calc.get("income", 0) or 0,
+            "shared_expenses": (
+                calc.get("shared_expenses", 0) or 0
+            ),
+            "profit_for_split": (
+                calc.get("profit_for_split", 0) or 0
+            ),
+            "accrued_to_investor": (
+                calc.get(
+                    "accrued_to_investor",
+                    0,
+                )
+                or 0
+            ),
+            "previous_investor_debt": (
+                calc.get(
+                    "previous_investor_debt",
+                    0,
+                )
+                or 0
+            ),
+            "investor_only_expenses": (
+                calc.get(
+                    "investor_only_expenses",
+                    0,
+                )
+                or 0
+            ),
+            "investor_paid_in_period": (
+                calc.get(
+                    "investor_paid_in_period",
+                    0,
+                )
+                or 0
+            ),
+            "debt_repaid_by_profit": (
+                calc.get(
+                    "debt_repaid_by_profit",
+                    0,
+                )
+                or 0
+            ),
+            "payouts_in_period": (
+                calc.get(
+                    "payouts_in_period",
+                    0,
+                )
+                or 0
+            ),
+            "available_to_pay": (
+                calc.get("available_to_pay", 0)
+                or 0
+            ),
+            "investor_debt_to_park": (
+                calc.get(
+                    "investor_debt_to_park",
+                    0,
+                )
+                or 0
+            ),
+            "park_only_expenses": (
+                calc.get(
+                    "park_only_expenses",
+                    0,
+                )
+                or 0
+            ),
+            "owner_amount": (
+                calc.get("owner_amount", 0) or 0
+            ),
+            "expense_rows": expense_rows,
+            "downtime_rows": downtime_rows,
+            "downtime_days": downtime_days,
+        })
+
+    apply_investor_portfolio_netting(report_rows)
+    return cars, report_rows
+
+
+def create_investor_report_bytes(
+    session,
+    investor_name,
+    period_start,
+    period_end,
+):
+    cars, report_rows = collect_investor_report_rows(
+        session,
+        investor_name,
+        period_start,
+        period_end,
+    )
+
+    if not cars:
+        raise ValueError(
+            f"Инвестор «{investor_name}» не найден"
+        )
+
+    pdf_bytes = build_investor_report_pdf(
+        investor_name=investor_name,
+        period_start=period_start,
+        period_end=period_end,
+        car_rows=report_rows,
+    )
+
+    filename = (
+        f"report_{safe_filename(investor_name)}_"
+        f"{period_start.strftime('%Y-%m-%d')}_"
+        f"{period_display_end(period_end).strftime('%Y-%m-%d')}"
+        ".pdf"
+    )
+
+    return pdf_bytes, filename, report_rows
+
+
+def parse_report_period_dates(start_value, end_value):
+    try:
+        period_start = datetime.strptime(
+            start_value,
+            "%Y-%m-%d",
+        )
+        period_end = datetime.strptime(
+            end_value,
+            "%Y-%m-%d",
+        )
+    except (TypeError, ValueError):
+        raise ValueError(
+            "Неправильно указаны даты отчёта"
+        )
+
+    if period_start >= period_end:
+        raise ValueError(
+            "Дата начала должна быть раньше окончания"
+        )
+
+    return period_start, period_end
+
+
 @bp.route(
     "/api/test-investor-report/<path:investor_name>",
     methods=["GET"],
@@ -5787,13 +6176,18 @@ def test_investor_report(investor_name):
 
     try:
         cleanup_legacy_investor_mess(session)
-        reconcile_all_downtimes(session, commit=True)
+        reconcile_all_downtimes(
+            session,
+            commit=True,
+        )
 
         cars = (
             session.query(Car)
             .filter(
                 Car.owner_type == "investor",
-                func.lower(func.trim(Car.investor_name))
+                func.lower(
+                    func.trim(Car.investor_name)
+                )
                 == investor_name.lower(),
             )
             .order_by(Car.code)
@@ -5803,263 +6197,23 @@ def test_investor_report(investor_name):
         if not cars:
             return jsonify({
                 "ok": False,
-                "message": f"Инвестор «{investor_name}» не найден",
+                "message": (
+                    f"Инвестор «{investor_name}» "
+                    "не найден"
+                ),
             }), 404
 
-        # ВАЖНО:
-        # PDF всегда строится за текущий календарный расчётный период.
-        # Последний закрытый SettlementPeriod используется только для
-        # определения статуса машины и истории, но больше не управляет
-        # датами нового отчёта.
-        period_start, period_end = period_bounds_for_investor(cars)
+        period_start, period_end = (
+            period_bounds_for_investor(cars)
+        )
 
-        report_rows = []
-
-        for car in cars:
-            period = (
-                session.query(SettlementPeriod)
-                .filter(
-                    func.trim(SettlementPeriod.car_code)
-                    == normalize_code(car.code),
-                    SettlementPeriod.start_date == period_start,
-                    SettlementPeriod.end_date == period_end,
-                )
-                .first()
-            )
-
-            calc = calculate_period_for_car(
+        pdf_bytes, filename, report_rows = (
+            create_investor_report_bytes(
                 session,
-                car,
+                investor_name,
                 period_start,
                 period_end,
             )
-
-            expense_rows = []
-
-            expenses = (
-                session.query(Expense)
-                .filter(
-                    func.trim(Expense.car_code)
-                    == normalize_code(car.code),
-                    Expense.date >= period_start,
-                    Expense.date < period_end,
-                )
-                .order_by(Expense.date.asc(), Expense.id.asc())
-                .all()
-            )
-
-            for expense in expenses:
-                operation = None
-                parts = []
-
-                if expense.operation_id:
-                    operation = (
-                        session.query(Operation)
-                        .filter_by(id=expense.operation_id)
-                        .first()
-                    )
-                    parts = (
-                        session.query(Part)
-                        .filter_by(operation_id=expense.operation_id)
-                        .order_by(Part.id.asc())
-                        .all()
-                    )
-
-                expense_type = (
-                    expense.share_type or "shared"
-                ).strip().lower()
-
-                if operation and operation.type == "investor_expense_split":
-                    expense_type = "investor_only"
-
-                if expense_type in {
-                    "investor_only",
-                    "investor",
-                    "investor-only",
-                    "только инвестор",
-                    "допрасход",
-                    "доп расход",
-                    "доп расходы",
-                }:
-                    type_label = "Допрасход инвестора"
-                elif expense_type in {
-                    "park_only",
-                    "park",
-                    "owner_only",
-                    "только парк",
-                }:
-                    type_label = "Только парк"
-                else:
-                    type_label = "Обычный расход"
-
-                details = []
-
-                for part in parts:
-                    part_text = part.part_name or "Деталь"
-
-                    if part.brand:
-                        part_text += f", фирма {part.brand}"
-                    if part.position:
-                        part_text += f", {part.position}"
-                    if part.price:
-                        part_text += f", деталь {money(part.price)}"
-                    if part.labor:
-                        part_text += f", работа {money(part.labor)}"
-                    if part.install_mileage:
-                        part_text += (
-                            f", пробег "
-                            f"{int(part.install_mileage):,} км"
-                        ).replace(",", " ")
-
-                    details.append(part_text)
-
-                if operation and operation.description:
-                    description = operation.description.strip()
-                    if description and description not in details:
-                        details.append(description)
-
-                if operation and operation.raw_message:
-                    details.append(
-                        f"Комментарий: {operation.raw_message.strip()}"
-                    )
-
-                if not details:
-                    details.append(expense.category or "Расход")
-
-                expense_rows.append({
-                    "date": (
-                        expense.date.strftime("%d.%m.%Y")
-                        if expense.date
-                        else ""
-                    ),
-                    "type_label": type_label,
-                    "description": "<br/>".join(details),
-                    "amount": expense.amount or 0,
-                })
-
-            downtime_rows = []
-            downtime_days = 0
-
-            for downtime in session.query(Downtime).all():
-                if (
-                    normalize_code(downtime.car_code)
-                    != normalize_code(car.code)
-                ):
-                    continue
-
-                downtime_start = downtime.start_date or period_start
-                downtime_end = (
-                    datetime.now()
-                    if downtime.active
-                    else (downtime.end_date or period_end)
-                )
-
-                overlap_start = max(downtime_start, period_start)
-                overlap_end = min(downtime_end, period_end)
-
-                if overlap_end <= overlap_start:
-                    continue
-
-                days = max(
-                    (overlap_end.date() - overlap_start.date()).days,
-                    1,
-                )
-                downtime_days += days
-
-                reason_parts = []
-                if downtime.reason:
-                    reason_parts.append(downtime.reason)
-                clean_comment = clean_downtime_comment(downtime)
-                if (
-                    clean_comment
-                    and clean_comment not in reason_parts
-                ):
-                    reason_parts.append(
-                        f"Комментарий: {clean_comment}"
-                    )
-
-                downtime_rows.append({
-                    "start": overlap_start.strftime("%d.%m.%Y"),
-                    "end": (
-                        "по настоящее время"
-                        if downtime.active
-                        else overlap_end.strftime("%d.%m.%Y")
-                    ),
-                    "days": days,
-                    "reason": (
-                        "<br/>".join(reason_parts)
-                        or "Причина не указана"
-                    ),
-                })
-
-            report_rows.append({
-                "code": car.code,
-                "car_name": (
-                    f"{car.brand or ''} {car.model or ''}"
-                ).strip(),
-                "percent": car.investor_percent or 0,
-                "period_closed": period is not None,
-
-                "income": calc.get("income", 0) or 0,
-                "shared_expenses": (
-                    calc.get("shared_expenses", 0) or 0
-                ),
-                "profit_for_split": (
-                    calc.get("profit_for_split", 0) or 0
-                ),
-                "accrued_to_investor": (
-                    calc.get("accrued_to_investor", 0) or 0
-                ),
-                "previous_investor_debt": (
-                    calc.get("previous_investor_debt", 0) or 0
-                ),
-                "investor_only_expenses": (
-                    calc.get("investor_only_expenses", 0) or 0
-                ),
-                "investor_paid_in_period": (
-                    calc.get("investor_paid_in_period", 0) or 0
-                ),
-                "debt_repaid_by_profit": (
-                    calc.get("debt_repaid_by_profit", 0) or 0
-                ),
-                "payouts_in_period": (
-                    calc.get("payouts_in_period", 0) or 0
-                ),
-                "available_to_pay": (
-                    calc.get("available_to_pay", 0) or 0
-                ),
-                "investor_debt_to_park": (
-                    calc.get("investor_debt_to_park", 0) or 0
-                ),
-                "park_only_expenses": (
-                    calc.get("park_only_expenses", 0) or 0
-                ),
-                "owner_amount": (
-                    calc.get("owner_amount", 0) or 0
-                ),
-                "expense_rows": expense_rows,
-                "downtime_rows": downtime_rows,
-                "downtime_days": downtime_days,
-            })
-
-        # Применяем к PDF ту же логику взаимозачёта, что и на сайте:
-        # долг одной машины сначала закрывается выплатами по другим машинам
-        # того же инвестора. Пока общей выплаты хватает, долг не показывается.
-        portfolio_result = apply_investor_portfolio_netting(
-            report_rows
-        )
-
-        pdf_bytes = build_investor_report_pdf(
-            investor_name=investor_name,
-            period_start=period_start,
-            period_end=period_end,
-            car_rows=report_rows,
-        )
-
-        filename = (
-            f"report_{safe_filename(investor_name)}_"
-            f"{period_start.strftime('%Y-%m-%d')}_"
-            f"{period_end.strftime('%Y-%m-%d')}.pdf"
         )
 
         sent = send_telegram_document(
@@ -6070,7 +6224,7 @@ def test_investor_report(investor_name):
                 f"Инвестор: {investor_name}\n"
                 f"Период: "
                 f"{period_start.strftime('%d.%m.%Y')} — "
-                f"{period_end.strftime('%d.%m.%Y')}\n"
+                f"{period_display_end(period_end).strftime('%d.%m.%Y')}\n"
                 f"Машин в отчёте: {len(report_rows)}"
             ),
         )
@@ -6087,38 +6241,299 @@ def test_investor_report(investor_name):
         return jsonify({
             "ok": True,
             "message": (
-                "Подробный отчёт сформирован "
+                "Отчёт сформирован "
                 "и отправлен в Telegram"
             ),
             "investor": investor_name,
-            "period_start": period_start.isoformat(),
+            "period_start": (
+                period_start.isoformat()
+            ),
             "period_end": period_end.isoformat(),
             "cars": len(report_rows),
-            "closed_periods": sum(
-                1 for row in report_rows
-                if row["period_closed"]
-            ),
-            "open_periods": sum(
-                1 for row in report_rows
-                if not row["period_closed"]
-            ),
-            "portfolio_available_to_pay": (
-                portfolio_result["net_available"]
-            ),
-            "portfolio_debt": portfolio_result["net_debt"],
-            "portfolio_debt_offset": (
-                portfolio_result["portfolio_withheld"]
-            ),
         })
 
     except Exception as error:
         session.rollback()
-        print(f"Ошибка отчёта инвестора: {error}")
+        print(
+            "Ошибка отчёта инвестора:",
+            type(error).__name__,
+            str(error),
+        )
 
         return jsonify({
-            "period_source": "current_auto",
             "ok": False,
-            "message": f"Ошибка создания отчёта: {error}",
+            "message": (
+                "Ошибка создания отчёта: "
+                f"{error}"
+            ),
+        }), 500
+
+    finally:
+        session.close()
+
+
+@bp.route("/api/investor-report-history")
+def api_investor_report_history():
+    """
+    Список сохранённых расчётных периодов
+    по всем инвесторам.
+    """
+    session = Session()
+
+    try:
+        ensure_all_previous_periods_saved(session)
+
+        investors = (
+            session.query(Car.investor_name)
+            .filter(
+                Car.owner_type == "investor",
+                Car.investor_name != "",
+            )
+            .distinct()
+            .order_by(Car.investor_name)
+            .all()
+        )
+
+        result = []
+
+        for (investor_name,) in investors:
+            cars = (
+                session.query(Car)
+                .filter(
+                    Car.owner_type == "investor",
+                    Car.investor_name
+                    == investor_name,
+                )
+                .order_by(Car.code)
+                .all()
+            )
+
+            car_codes = [
+                normalize_code(car.code)
+                for car in cars
+            ]
+
+            periods = (
+                session.query(
+                    SettlementPeriod.start_date,
+                    SettlementPeriod.end_date,
+                )
+                .filter(
+                    func.trim(
+                        SettlementPeriod.car_code
+                    ).in_(car_codes)
+                )
+                .distinct()
+                .order_by(
+                    SettlementPeriod.end_date.desc()
+                )
+                .all()
+            )
+
+            history = []
+
+            for period_start, period_end in periods:
+                snapshots = (
+                    session.query(SettlementPeriod)
+                    .filter(
+                        func.trim(
+                            SettlementPeriod.car_code
+                        ).in_(car_codes),
+                        SettlementPeriod.start_date
+                        == period_start,
+                        SettlementPeriod.end_date
+                        == period_end,
+                    )
+                    .all()
+                )
+
+                history.append({
+                    "start_iso": period_start.strftime(
+                        "%Y-%m-%d"
+                    ),
+                    "end_iso": period_end.strftime(
+                        "%Y-%m-%d"
+                    ),
+                    "start": period_start.strftime(
+                        "%d.%m.%Y"
+                    ),
+                    "end": period_display_end(
+                        period_end
+                    ).strftime("%d.%m.%Y"),
+                    "cars_saved": len(snapshots),
+                    "cars_total": len(cars),
+                    "complete": (
+                        len(snapshots) == len(cars)
+                    ),
+                    "income": sum(
+                        int(row.income or 0)
+                        for row in snapshots
+                    ),
+                    "expenses": sum(
+                        int(row.expenses or 0)
+                        for row in snapshots
+                    ),
+                    "profit": sum(
+                        int(row.profit or 0)
+                        for row in snapshots
+                    ),
+                })
+
+            result.append({
+                "name": investor_name,
+                "cars_total": len(cars),
+                "periods": history,
+            })
+
+        return jsonify({
+            "ok": True,
+            "investors": result,
+        })
+
+    except Exception as error:
+        session.rollback()
+
+        return jsonify({
+            "ok": False,
+            "message": (
+                "Ошибка истории отчётов: "
+                f"{type(error).__name__}: {error}"
+            ),
+        }), 500
+
+    finally:
+        session.close()
+
+
+@bp.route(
+    "/api/investor-report-file/"
+    "<path:investor_name>/<start_value>/<end_value>",
+    methods=["GET"],
+)
+def download_investor_report(
+    investor_name,
+    start_value,
+    end_value,
+):
+    investor_name = unquote(investor_name).strip()
+    session = Session()
+
+    try:
+        period_start, period_end = (
+            parse_report_period_dates(
+                start_value,
+                end_value,
+            )
+        )
+
+        pdf_bytes, filename, _rows = (
+            create_investor_report_bytes(
+                session,
+                investor_name,
+                period_start,
+                period_end,
+            )
+        )
+
+        return send_file(
+            io.BytesIO(pdf_bytes),
+            mimetype="application/pdf",
+            as_attachment=True,
+            download_name=filename,
+        )
+
+    except ValueError as error:
+        return jsonify({
+            "ok": False,
+            "message": str(error),
+        }), 400
+
+    except Exception as error:
+        session.rollback()
+
+        return jsonify({
+            "ok": False,
+            "message": (
+                "Ошибка скачивания отчёта: "
+                f"{error}"
+            ),
+        }), 500
+
+    finally:
+        session.close()
+
+
+@bp.route(
+    "/api/investor-report-regenerate/"
+    "<path:investor_name>/<start_value>/<end_value>",
+    methods=["POST"],
+)
+def regenerate_investor_report(
+    investor_name,
+    start_value,
+    end_value,
+):
+    investor_name = unquote(investor_name).strip()
+    session = Session()
+
+    try:
+        period_start, period_end = (
+            parse_report_period_dates(
+                start_value,
+                end_value,
+            )
+        )
+
+        pdf_bytes, filename, report_rows = (
+            create_investor_report_bytes(
+                session,
+                investor_name,
+                period_start,
+                period_end,
+            )
+        )
+
+        sent = send_telegram_document(
+            pdf_bytes,
+            filename,
+            caption=(
+                "📄 <b>Пересозданный отчёт</b>\n"
+                f"Инвестор: {investor_name}\n"
+                f"Период: "
+                f"{period_start.strftime('%d.%m.%Y')} — "
+                f"{period_display_end(period_end).strftime('%d.%m.%Y')}\n"
+                f"Машин в отчёте: {len(report_rows)}"
+            ),
+        )
+
+        return jsonify({
+            "ok": sent,
+            "message": (
+                "Отчёт пересоздан и отправлен "
+                "в Telegram"
+                if sent
+                else (
+                    "Отчёт создан, но Telegram "
+                    "не принял файл"
+                )
+            ),
+        }), (200 if sent else 500)
+
+    except ValueError as error:
+        return jsonify({
+            "ok": False,
+            "message": str(error),
+        }), 400
+
+    except Exception as error:
+        session.rollback()
+
+        return jsonify({
+            "ok": False,
+            "message": (
+                "Ошибка пересоздания отчёта: "
+                f"{error}"
+            ),
         }), 500
 
     finally:
