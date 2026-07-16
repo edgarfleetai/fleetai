@@ -3401,23 +3401,42 @@ def current_downtime_for_car(session, car_code):
 
 def ensure_all_previous_periods_saved(session):
     """
-    Сохраняет завершённый период для всех машин.
+    Автоматически сохраняет завершённый период 16-е — 15-е
+    для всех машин.
 
-    Вызывается при загрузке главной и списка машин, поэтому
-    собственные и инвесторские машины закрываются одинаково.
+    Ошибка одной машины не блокирует главную, список машин
+    или раздел инвесторов.
     """
     saved = 0
+    errors = []
 
     for car in session.query(Car).all():
-        _period, created = ensure_previous_period_saved(
-            session,
-            car,
-        )
+        try:
+            _period, created = ensure_previous_period_saved(
+                session,
+                car,
+            )
 
-        if created:
-            saved += 1
+            if created:
+                saved += 1
 
-    return saved
+        except Exception as error:
+            session.rollback()
+
+            message = (
+                f"Машина {getattr(car, 'code', '?')}: "
+                f"{type(error).__name__}: {error}"
+            )
+            errors.append(message)
+            print(
+                "Ошибка автоматического сохранения периода:",
+                message,
+            )
+
+    return {
+        "saved": saved,
+        "errors": errors,
+    }
 
 
 @bp.route("/api/summary")
@@ -4451,6 +4470,7 @@ def apply_investor_portfolio_netting(car_rows):
 @bp.route("/api/investors-summary")
 def api_investors_summary():
     session = Session()
+    ensure_all_previous_periods_saved(session)
 
     try:
         cleanup_legacy_investor_mess(session)
@@ -4601,6 +4621,7 @@ def api_investors_summary():
 @bp.route("/api/investors")
 def api_investors():
     session = Session()
+    ensure_all_previous_periods_saved(session)
 
     try:
         cleanup_legacy_investor_mess(session)
