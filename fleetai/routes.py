@@ -3442,35 +3442,44 @@ def ensure_all_previous_periods_saved(session):
 @bp.route("/api/summary")
 def api_summary():
     session = Session()
-    ensure_all_previous_periods_saved(session)
 
     try:
+        archive_result = ensure_all_previous_periods_saved(session)
+
         cleanup_legacy_investor_mess(session)
         reconcile_all_downtimes(session, commit=True)
 
-        income = (
-            session.query(func.coalesce(func.sum(Income.amount), 0))
-            .scalar()
-            or 0
-        )
-        expenses = (
-            session.query(func.coalesce(func.sum(Expense.amount), 0))
-            .scalar()
-            or 0
-        )
-        investments = (
-            session.query(
-                func.coalesce(func.sum(CarInvestment.amount), 0)
-            )
-            .scalar()
-            or 0
-        )
-
         cars = session.query(Car).order_by(Car.code).all()
+
+        income = 0
+        expenses = 0
+        profit = 0
+        investments = 0
+
         downtime_cars = []
         working_cars = []
 
+        period_start = None
+        period_end = None
+
         for car in cars:
+            start, end = period_bounds_for_car(car)
+            calc = calculate_period_for_car(
+                session,
+                car,
+                start,
+                end,
+            )
+
+            if period_start is None:
+                period_start = start
+                period_end = end
+
+            income += int(calc["income"] or 0)
+            expenses += int(calc["expenses"] or 0)
+            profit += int(calc["profit"] or 0)
+            investments += int(calc["investments"] or 0)
+
             active_downtime = current_downtime_for_car(
                 session,
                 car.code,
@@ -3494,6 +3503,21 @@ def api_summary():
         )
 
         return jsonify({
+            "ok": True,
+            "period_mode": "current_16_to_15",
+            "period_start": (
+                period_start.strftime("%d.%m.%Y")
+                if period_start
+                else ""
+            ),
+            "period_end": (
+                period_display_end(period_end).strftime("%d.%m.%Y")
+                if period_end
+                else ""
+            ),
+            "archived_now": archive_result.get("saved", 0),
+            "archive_errors": archive_result.get("errors", []),
+
             "cars": len(cars),
             "own_cars": sum(
                 1 for car in cars
@@ -3507,16 +3531,27 @@ def api_summary():
             "downtime_cars": len(downtime_cars),
             "working_list": working_cars,
             "downtime_list": downtime_cars,
+
             "income": income,
             "expenses": expenses,
             "investments": investments,
-            "profit": income - expenses,
+            "profit": profit,
             "downtime_days": total_downtime_days,
         })
 
+    except Exception as error:
+        session.rollback()
+
+        return jsonify({
+            "ok": False,
+            "message": (
+                "Ошибка главной панели: "
+                f"{type(error).__name__}: {error}"
+            ),
+        }), 500
+
     finally:
         session.close()
-
 
 
 
@@ -3574,57 +3609,69 @@ def trend_direction(current_value, previous_value):
 @bp.route("/api/cars-monthly-finance")
 def api_cars_monthly_finance():
     """
-    Сравнение текущего и прошлого календарного месяца
-    по доходам, расходам и прибыли всего автопарка.
+    Сравнивает текущий расчётный период 16-е — 15-е
+    с предыдущим сохранённым периодом.
+
+    Название endpoint оставлено старым, чтобы не менять views.py.
     """
     session = Session()
 
     try:
-        today = date.today()
-        bounds = month_bounds(today)
+        archive_result = ensure_all_previous_periods_saved(session)
+        cars = session.query(Car).order_by(Car.code).all()
 
-        current_income = (
-            session.query(func.coalesce(func.sum(Income.amount), 0))
-            .filter(
-                Income.date >= bounds["current_start"],
-                Income.date < bounds["current_end"],
+        current_income = 0
+        current_expenses = 0
+        current_profit = 0
+
+        previous_income = 0
+        previous_expenses = 0
+        previous_profit = 0
+
+        current_start = None
+        current_end = None
+        previous_start = None
+        previous_end = None
+
+        for car in cars:
+            start, end = period_bounds_for_car(car)
+            calc = calculate_period_for_car(
+                session,
+                car,
+                start,
+                end,
             )
-            .scalar()
-            or 0
-        )
 
-        previous_income = (
-            session.query(func.coalesce(func.sum(Income.amount), 0))
-            .filter(
-                Income.date >= bounds["previous_start"],
-                Income.date < bounds["previous_end"],
+            current_income += int(calc["income"] or 0)
+            current_expenses += int(calc["expenses"] or 0)
+            current_profit += int(calc["profit"] or 0)
+
+            if current_start is None:
+                current_start = start
+                current_end = end
+
+            previous = (
+                session.query(SettlementPeriod)
+                .filter(
+                    func.trim(SettlementPeriod.car_code)
+                    == normalize_code(car.code),
+                    SettlementPeriod.end_date <= start,
+                )
+                .order_by(
+                    SettlementPeriod.end_date.desc(),
+                    SettlementPeriod.id.desc(),
+                )
+                .first()
             )
-            .scalar()
-            or 0
-        )
 
-        current_expenses = (
-            session.query(func.coalesce(func.sum(Expense.amount), 0))
-            .filter(
-                Expense.date >= bounds["current_start"],
-                Expense.date < bounds["current_end"],
-            )
-            .scalar()
-            or 0
-        )
+            if previous:
+                previous_income += int(previous.income or 0)
+                previous_expenses += int(previous.expenses or 0)
+                previous_profit += int(previous.profit or 0)
 
-        previous_expenses = (
-            session.query(func.coalesce(func.sum(Expense.amount), 0))
-            .filter(
-                Expense.date >= bounds["previous_start"],
-                Expense.date < bounds["previous_end"],
-            )
-            .scalar()
-            or 0
-        )
-
-        current_profit = current_income - current_expenses
-        previous_profit = previous_income - previous_expenses
+                if previous_start is None:
+                    previous_start = previous.start_date
+                    previous_end = previous.end_date
 
         def metric(current_value, previous_value):
             return {
@@ -3642,134 +3689,55 @@ def api_cars_monthly_finance():
 
         return jsonify({
             "ok": True,
-            "current_month": bounds["current_start"].strftime("%m.%Y"),
-            "previous_month": bounds["previous_start"].strftime("%m.%Y"),
+            "period_mode": "settlement_16_to_15",
+            "archived_now": archive_result.get("saved", 0),
+
+            "current_period": {
+                "start": (
+                    current_start.strftime("%d.%m.%Y")
+                    if current_start
+                    else ""
+                ),
+                "end": (
+                    period_display_end(current_end).strftime("%d.%m.%Y")
+                    if current_end
+                    else ""
+                ),
+            },
+            "previous_period": {
+                "start": (
+                    previous_start.strftime("%d.%m.%Y")
+                    if previous_start
+                    else ""
+                ),
+                "end": (
+                    period_display_end(previous_end).strftime("%d.%m.%Y")
+                    if previous_end
+                    else ""
+                ),
+            },
+
             "income": metric(current_income, previous_income),
-            "expenses": metric(current_expenses, previous_expenses),
+            "expenses": metric(
+                current_expenses,
+                previous_expenses,
+            ),
             "profit": metric(current_profit, previous_profit),
         })
 
     except Exception as error:
+        session.rollback()
+
         return jsonify({
             "ok": False,
-            "message": f"Ошибка расчёта показателей: {error}",
+            "message": (
+                "Ошибка показателей расчётного периода: "
+                f"{type(error).__name__}: {error}"
+            ),
         }), 500
 
     finally:
         session.close()
-
-
-
-def mileage_status(month_increase):
-    """
-    Цветовая зона месячного пробега:
-    - меньше 8 000 км — нейтральный;
-    - 8 000–10 999 км — зелёный;
-    - 11 000–12 000 км — жёлтый;
-    - больше 12 000 км — красный.
-    """
-    value = int(month_increase or 0)
-
-    if value > 12000:
-        return "red"
-    if value >= 11000:
-        return "yellow"
-    if value >= 8000:
-        return "green"
-    return "neutral"
-
-
-def car_monthly_mileage(session, car, reference_date=None):
-    """
-    Считает, насколько вырос пробег машины за текущий месяц.
-
-    Источник истории — пробеги, сохранённые в операциях.
-    Базовый пробег:
-    1. последняя запись до начала месяца;
-    2. если её нет — первая запись текущего месяца;
-    3. если нет записей — текущий пробег машины.
-    """
-    reference_date = reference_date or date.today()
-    month_start = reference_date.replace(day=1)
-
-    next_month = (
-        month_start.replace(
-            year=month_start.year + 1,
-            month=1,
-        )
-        if month_start.month == 12
-        else month_start.replace(month=month_start.month + 1)
-    )
-
-    code = normalize_code(car.code)
-
-    previous_operation = (
-        session.query(Operation)
-        .filter(
-            func.trim(Operation.car_code) == code,
-            Operation.mileage.isnot(None),
-            Operation.mileage > 0,
-            Operation.date < month_start,
-        )
-        .order_by(
-            Operation.date.desc(),
-            Operation.id.desc(),
-        )
-        .first()
-    )
-
-    current_month_operations = (
-        session.query(Operation)
-        .filter(
-            func.trim(Operation.car_code) == code,
-            Operation.mileage.isnot(None),
-            Operation.mileage > 0,
-            Operation.date >= month_start,
-            Operation.date < next_month,
-        )
-        .order_by(
-            Operation.date.asc(),
-            Operation.id.asc(),
-        )
-        .all()
-    )
-
-    current_mileage = int(car.mileage or 0)
-
-    # Если в текущем месяце есть более свежая операция с пробегом,
-    # берём максимальный известный пробег.
-    if current_month_operations:
-        current_mileage = max(
-            [current_mileage]
-            + [
-                int(operation.mileage or 0)
-                for operation in current_month_operations
-            ]
-        )
-
-    if previous_operation:
-        start_mileage = int(previous_operation.mileage or 0)
-        source = "previous_month_record"
-    elif current_month_operations:
-        start_mileage = int(
-            current_month_operations[0].mileage or 0
-        )
-        source = "first_current_month_record"
-    else:
-        start_mileage = current_mileage
-        source = "no_history"
-
-    increase = max(current_mileage - start_mileage, 0)
-
-    return {
-        "car_code": code,
-        "current_mileage": current_mileage,
-        "month_start_mileage": start_mileage,
-        "month_increase": increase,
-        "status": mileage_status(increase),
-        "source": source,
-        "month": month_start.strftime("%m.%Y"),
-    }
 
 
 @bp.route("/api/cars-monthly-mileage")
@@ -3829,17 +3797,27 @@ def api_cars():
             downtime_days = 0
 
             try:
-                (
-                    income,
-                    expenses,
-                    investments,
-                    _payouts,
-                    _investor_invested,
-                    downtime_days,
-                ) = car_finance(session, code)
+                period_start, period_end = period_bounds_for_car(car)
+                period_calc = calculate_period_for_car(
+                    session,
+                    car,
+                    period_start,
+                    period_end,
+                )
+
+                income = int(period_calc["income"] or 0)
+                expenses = int(period_calc["expenses"] or 0)
+                investments = int(
+                    period_calc["investments"] or 0
+                )
+                downtime_days = int(
+                    period_calc["downtime_days"] or 0
+                )
+
             except Exception as error:
                 print(
-                    f"Ошибка финансов машины {code}: "
+                    f"Ошибка финансов текущего периода "
+                    f"машины {code}: "
                     f"{type(error).__name__}: {error}"
                 )
 
@@ -3910,6 +3888,16 @@ def api_cars():
                 "income": int(income or 0),
                 "expenses": int(expenses or 0),
                 "profit": int((income or 0) - (expenses or 0)),
+                "period_start": (
+                    period_start.strftime("%d.%m.%Y")
+                    if 'period_start' in locals()
+                    else ""
+                ),
+                "period_end": (
+                    period_display_end(period_end).strftime("%d.%m.%Y")
+                    if 'period_end' in locals()
+                    else ""
+                ),
 
                 "purchase_price": int(
                     getattr(car, "purchase_price", 0) or 0
