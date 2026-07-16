@@ -330,6 +330,30 @@ def build_investor_report_pdf(
         0,
     )
 
+    remaining_debt = max(
+        uncovered_costs - withheld,
+        0,
+    )
+
+    if amount_to_pay == 0 and withheld > 0:
+        explanation_title = "Почему выплата отсутствует"
+        explanation_text = (
+            "Вся доля инвестора за этот период была направлена "
+            "на погашение дополнительных вложений и задолженности."
+        )
+    elif withheld > 0:
+        explanation_title = "Почему выплата уменьшилась"
+        explanation_text = (
+            "Часть доли инвестора была направлена на погашение "
+            "дополнительных вложений и задолженности."
+        )
+    else:
+        explanation_title = "Удержаний нет"
+        explanation_text = (
+            "Доля инвестора не уменьшалась из-за дополнительных "
+            "вложений или задолженности."
+        )
+
     story = [
         Paragraph(
             f"Отчёт инвестора {investor_name}",
@@ -436,10 +460,88 @@ def build_investor_report_pdf(
     story.append(main_table)
     story.append(Spacer(1, 5 * mm))
 
+    explanation_bg = (
+        colors.HexColor("#FFF4D6")
+        if withheld > 0
+        else colors.HexColor("#F2F1EE")
+    )
+    explanation_border = (
+        colors.HexColor("#D7B85E")
+        if withheld > 0
+        else colors.HexColor("#D8D4CE")
+    )
+
+    story.append(
+        Paragraph(
+            explanation_title,
+            heading_style,
+        )
+    )
+    story.append(
+        Paragraph(
+            explanation_text,
+            normal_style,
+        )
+    )
+    story.append(Spacer(1, 2 * mm))
+
+    explanation_rows = [
+        [
+            Paragraph("<b>Удержано</b>", normal_style),
+            Paragraph(
+                f"<b>{money(withheld)}</b>",
+                normal_style,
+            ),
+        ],
+        [
+            Paragraph(
+                "<b>Остаток задолженности после удержания</b>",
+                normal_style,
+            ),
+            Paragraph(
+                f"<b>{money(remaining_debt)}</b>",
+                normal_style,
+            ),
+        ],
+    ]
+
+    explanation_table = Table(
+        explanation_rows,
+        colWidths=[120 * mm, 50 * mm],
+    )
+    explanation_table.setStyle(
+        TableStyle([
+            (
+                "BACKGROUND",
+                (0, 0),
+                (-1, -1),
+                explanation_bg,
+            ),
+            (
+                "GRID",
+                (0, 0),
+                (-1, -1),
+                0.5,
+                explanation_border,
+            ),
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("LEFTPADDING", (0, 0), (-1, -1), 9),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 9),
+            ("TOPPADDING", (0, 0), (-1, -1), 8),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
+        ])
+    )
+    story.append(explanation_table)
+    story.append(Spacer(1, 5 * mm))
+
     payout_box = Table(
         [[
             Paragraph(
-                f"К выплате инвестору: {money(amount_to_pay)}",
+                (
+                    f"К выплате инвестору: {money(amount_to_pay)}"
+                    if amount_to_pay > 0
+                    else "К выплате инвестору: 0 ₽"
+                ),
                 payout_style,
             )
         ]],
