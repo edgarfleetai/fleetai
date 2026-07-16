@@ -48,6 +48,7 @@ from .parser import parse_message
 from .finance import (
     car_finance,
     investor_balance_for_car,
+    current_period_investor_balance_for_car,
     period_bounds_for_car,
     period_bounds_for_investor,
     period_display_end,
@@ -4510,7 +4511,11 @@ def api_investors_summary():
                     downtime_days,
                 ) = car_finance(session, car.code)
 
-                balance = investor_balance_for_car(session, car)
+                ensure_previous_period_saved(session, car)
+                balance = current_period_investor_balance_for_car(
+                    session,
+                    car,
+                )
 
                 split_profit = balance.get(
                     "normal_profit_for_split",
@@ -4564,6 +4569,7 @@ def api_investors_summary():
                 totals[key] += row.get(key, 0)
 
         return jsonify({
+            "period_mode": "current_16_to_15",
             "investors_count": len(investors),
             "investors": investors,
             **totals,
@@ -4698,7 +4704,11 @@ def api_investors():
                     else:
                         shared_expenses += amount
 
-                balance = investor_balance_for_car(session, car)
+                ensure_previous_period_saved(session, car)
+                balance = current_period_investor_balance_for_car(
+                    session,
+                    car,
+                )
 
                 available_to_pay = (
                     balance.get("available_to_pay", 0) or 0
