@@ -562,23 +562,104 @@ def downtime_days_by_period(session, car_code, start, end):
     return total
 
 
-def _previous_period_debt(session, car_code, before_date):
-    previous = (
-        session.query(SettlementPeriod)
+def _previous_investor_portfolio_carry(
+    session,
+    car,
+    before_date,
+):
+    """
+    Возвращает итог прошлого периода по всему портфелю инвестора.
+
+    Раньше отрицательный итог каждой машины переносился как долг
+    отдельно. Поэтому положительная выплата по другим машинам
+    терялась, а на новом периоде появлялся искусственный долг.
+
+    Теперь сначала выполняется взаимозачёт всех машин инвестора:
+    - положительные итоги = парк должен инвестору;
+    - отрицательные итоги = инвестор должен парку;
+    - переносится только чистый остаток.
+
+    Чтобы остаток не продублировался на каждой машине, он
+    прикрепляется только к первой машине инвестора по коду.
+    """
+    if car.owner_type != "investor":
+        return {
+            "investor_debt_to_park": 0,
+            "park_debt_to_investor": 0,
+        }
+
+    investor_name = (car.investor_name or "").strip()
+
+    if not investor_name:
+        return {
+            "investor_debt_to_park": 0,
+            "park_debt_to_investor": 0,
+        }
+
+    latest_end = (
+        session.query(func.max(SettlementPeriod.end_date))
         .filter(
-            func.trim(SettlementPeriod.car_code)
-            == normalize_code(car_code),
+            SettlementPeriod.investor_name == investor_name,
             SettlementPeriod.end_date <= before_date,
         )
-        .order_by(SettlementPeriod.end_date.desc())
-        .first()
+        .scalar()
     )
 
-    if not previous:
-        return 0
+    if not latest_end:
+        return {
+            "investor_debt_to_park": 0,
+            "park_debt_to_investor": 0,
+        }
 
-    investor_amount = previous.investor_amount or 0
-    return abs(investor_amount) if investor_amount < 0 else 0
+    period_rows = (
+        session.query(SettlementPeriod)
+        .filter(
+            SettlementPeriod.investor_name == investor_name,
+            SettlementPeriod.end_date == latest_end,
+        )
+        .all()
+    )
+
+    gross_available = sum(
+        max(int(row.investor_amount or 0), 0)
+        for row in period_rows
+    )
+    gross_debt = sum(
+        max(-int(row.investor_amount or 0), 0)
+        for row in period_rows
+    )
+
+    net_available = max(gross_available - gross_debt, 0)
+    net_debt = max(gross_debt - gross_available, 0)
+
+    investor_cars = (
+        session.query(Car)
+        .filter(
+            Car.owner_type == "investor",
+            Car.investor_name == investor_name,
+        )
+        .all()
+    )
+
+    anchor_code = min(
+        (
+            normalize_code(item.code)
+            for item in investor_cars
+            if normalize_code(item.code)
+        ),
+        default=normalize_code(car.code),
+    )
+
+    if normalize_code(car.code) != anchor_code:
+        return {
+            "investor_debt_to_park": 0,
+            "park_debt_to_investor": 0,
+        }
+
+    return {
+        "investor_debt_to_park": net_debt,
+        "park_debt_to_investor": net_available,
+    }
 
 
 def calculate_period_for_car(session, car, start, end):
@@ -637,16 +718,23 @@ def calculate_period_for_car(session, car, start, end):
     accrued_to_investor = max(investor_share_raw, 0)
     investor_shared_loss = max(-investor_share_raw, 0)
 
-    previous_debt = (
-        _previous_period_debt(session, car.code, start)
-        if car.owner_type == "investor"
-        else 0
+    previous_carry = _previous_investor_portfolio_carry(
+        session,
+        car,
+        start,
     )
+
+    previous_debt = previous_carry[
+        "investor_debt_to_park"
+    ]
+    previous_park_debt = previous_carry[
+        "park_debt_to_investor"
+    ]
 
     # Явные взаиморасчёты за период.
     settlement_operation_ids = set()
     settlement_investor_paid = 0
-    park_debt_to_investor = 0
+    park_debt_to_investor = previous_park_debt
 
     for row in session.query(InvestorSettlement).all():
         if not _same_car(row, car_code):
@@ -775,6 +863,7 @@ def calculate_period_for_car(session, car, start, end):
         "investor_share_total": accrued_to_investor,
 
         "previous_investor_debt": previous_debt,
+        "previous_park_debt_to_investor": previous_park_debt,
         "investor_shared_loss": investor_shared_loss,
         "debt_before_payments": debt_before_payments,
         "investor_paid_in_period": investor_paid_in_period,
