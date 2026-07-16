@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import func
 
@@ -144,7 +145,7 @@ def car_finance(session, code):
 
         if row.active and row.start_date:
             downtime_days += max(
-                (datetime.now().date() - row.start_date.date()).days,
+                (moscow_now().date() - row.start_date.date()).days,
                 1,
             )
         else:
@@ -313,6 +314,20 @@ def investor_balance_for_car(session, car):
     }
 
 
+
+MOSCOW_TZ = ZoneInfo("Europe/Moscow")
+
+
+def moscow_now():
+    """
+    Текущее московское время.
+
+    Render обычно работает в UTC. Без этой функции в Москве уже
+    может наступить 16-е число, а сервер ещё будет считать 15-е.
+    """
+    return datetime.now(MOSCOW_TZ).replace(tzinfo=None)
+
+
 def period_bounds_for_car(car, now=None):
     """
     Расчётный период идёт с 16-го числа по 15-е включительно.
@@ -323,7 +338,7 @@ def period_bounds_for_car(car, now=None):
     Поэтому все операции 15-го числа входят в старый период,
     а новый период начинается 16-го числа.
     """
-    now = now or datetime.now()
+    now = now or moscow_now()
 
     closing_day = max(
         1,
@@ -530,10 +545,10 @@ def downtime_days_by_period(session, car_code, start, end):
             continue
 
         downtime_start = row.start_date or start
-        downtime_end = row.end_date or datetime.now()
+        downtime_end = row.end_date or moscow_now()
 
         if row.active:
-            downtime_end = datetime.now()
+            downtime_end = moscow_now()
 
         overlap_start = max(downtime_start, start)
         overlap_end = min(downtime_end, end)
@@ -776,6 +791,45 @@ def calculate_period_for_car(session, car, start, end):
         "investor_amount": investor_amount,
         "owner_amount": owner_amount,
         "downtime_days": downtime_days,
+    }
+
+
+
+def current_period_investor_balance_for_car(session, car, now=None):
+    """
+    Баланс инвестора только за текущий период 16-е — 15-е.
+
+    Нужен для сайта: после наступления нового периода старые доходы
+    и расходы больше не остаются в текущих карточках, а сохраняются
+    в истории SettlementPeriod.
+    """
+    start, end = period_bounds_for_car(car, now=now)
+    calc = calculate_period_for_car(
+        session,
+        car,
+        start,
+        end,
+    )
+
+    return {
+        "period_start": start,
+        "period_end": end,
+        "investor_debt_to_park": calc["investor_debt_to_park"],
+        "park_debt_to_investor": calc["park_debt_to_investor"],
+        "investor_share_total": calc["accrued_to_investor"],
+        "paid_to_investor": calc["payouts_in_period"],
+        "debt_repaid_by_profit": calc["debt_repaid_by_profit"],
+        "available_to_pay": calc["available_to_pay"],
+        "normal_profit_for_split": calc["profit_for_split"],
+        "debt_base": calc["debt_before_payments"],
+        "investor_extra_paid": calc["investor_paid_in_period"],
+        "extra_expenses": calc["investor_only_expenses"],
+        "shared_expenses": calc["shared_expenses"],
+        "investor_only_expenses": calc["investor_only_expenses"],
+        "park_only_expenses": calc["park_only_expenses"],
+        "park_share_total": calc["owner_amount"],
+        "income": calc["income"],
+        "expenses": calc["expenses"],
     }
 
 
