@@ -918,7 +918,9 @@ def calculate_driver_payment(session, car, as_of_date=None):
     - текущий открытый период отдельно;
     - общую сумму только как справочный итог.
     """
-    today = as_of_date or date.today()
+    # Используем московскую дату, чтобы начисление не зависело
+    # от UTC-времени сервера Render.
+    today = as_of_date or moscow_now().date()
 
     first_start = parse_iso_date(
         getattr(car, "last_payment_date", "")
@@ -964,9 +966,20 @@ def calculate_driver_payment(session, car, as_of_date=None):
         cursor_start = cursor_due
         cursor_due = cursor_due + timedelta(days=7)
 
-    # Новый период начисляется по дням и отдельно от старых недель.
+    # Новый период начисляется только после того, как сутки
+    # полностью прошли.
+    #
+    # Пример:
+    # водитель начал 16.07:
+    # - 16.07 начислено 0 суток;
+    # - 17.07 начислена 1 завершённая сутка;
+    # - 18.07 начислены 2 завершённые сутки.
+    #
+    # calculate_rental_interval использует интервал
+    # [начало, окончание), поэтому окончанием ставим сегодня,
+    # а не завтра.
     current_end = min(
-        today + timedelta(days=1),
+        today,
         cursor_due,
     )
 
@@ -1012,6 +1025,7 @@ def calculate_driver_payment(session, car, as_of_date=None):
         "overdue_total": overdue_total,
 
         # Текущая неделя — отдельный объект.
+        # Сумма включает только полностью завершённые сутки.
         "current_period": current_period,
         "current_amount": current_amount,
 
