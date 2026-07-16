@@ -49,6 +49,7 @@ from .finance import (
     car_finance,
     investor_balance_for_car,
     current_period_investor_balance_for_car,
+    moscow_now,
     period_bounds_for_car,
     period_bounds_for_investor,
     period_display_end,
@@ -3397,9 +3398,32 @@ def current_downtime_for_car(session, car_code):
     }
 
 
+
+def ensure_all_previous_periods_saved(session):
+    """
+    Сохраняет завершённый период для всех машин.
+
+    Вызывается при загрузке главной и списка машин, поэтому
+    собственные и инвесторские машины закрываются одинаково.
+    """
+    saved = 0
+
+    for car in session.query(Car).all():
+        _period, created = ensure_previous_period_saved(
+            session,
+            car,
+        )
+
+        if created:
+            saved += 1
+
+    return saved
+
+
 @bp.route("/api/summary")
 def api_summary():
     session = Session()
+    ensure_all_previous_periods_saved(session)
 
     try:
         cleanup_legacy_investor_mess(session)
@@ -3771,6 +3795,7 @@ def api_cars():
     не может скрыть весь автопарк.
     """
     session = Session()
+    ensure_all_previous_periods_saved(session)
 
     try:
         cars_query = session.query(Car).order_by(Car.code.asc()).all()
@@ -4475,17 +4500,7 @@ def api_investors_summary():
                 "name": name,
                 "cars_count": len(cars),
                 "total_invested": 0,
-                "total_payouts": (
-                    session.query(
-                        func.coalesce(
-                            func.sum(InvestorPayout.amount),
-                            0,
-                        )
-                    )
-                    .filter_by(investor_name=name)
-                    .scalar()
-                    or 0
-                ),
+                "total_payouts": 0,
                 "income": 0,
                 "expenses": 0,
                 "profit": 0,
@@ -4498,62 +4513,53 @@ def api_investors_summary():
             }
 
             for car in cars:
-                row["total_invested"] += (
-                    investor_total_invested_for_car(session, car)
+                # При первом запросе после 16-го предыдущий период
+                # автоматически сохраняется в истории.
+                ensure_previous_period_saved(session, car)
+
+                start, end = period_bounds_for_car(car)
+                calc = calculate_period_for_car(
+                    session,
+                    car,
+                    start,
+                    end,
                 )
 
-                (
-                    income,
-                    expenses,
-                    investments,
-                    payouts,
-                    investor_invested,
-                    downtime_days,
-                ) = car_finance(session, car.code)
-
-                ensure_previous_period_saved(session, car)
-                balance = current_period_investor_balance_for_car(
+                car_total_invested = investor_total_invested_for_car(
                     session,
                     car,
                 )
 
-                split_profit = balance.get(
-                    "normal_profit_for_split",
-                    income - expenses,
-                )
-                investor_share = (
-                    balance.get("investor_share_total", 0) or 0
-                )
-                available = (
-                    balance.get("available_to_pay", 0) or 0
-                )
-                debt = (
-                    balance.get("investor_debt_to_park", 0) or 0
-                )
+                income = calc["income"]
+                expenses = calc["expenses"]
+                profit_for_split = calc["profit_for_split"]
+                investor_share = calc["accrued_to_investor"]
+                available = calc["available_to_pay"]
+                debt = calc["investor_debt_to_park"]
+                park_debt = calc["park_debt_to_investor"]
+                payouts = calc["payouts_in_period"]
+                owner_share = calc["owner_amount"]
 
                 car_rows.append({
                     "available_to_pay": available,
                     "investor_debt_to_park": debt,
                     "withheld": max(
                         investor_share
-                        + (balance.get("park_debt_to_investor", 0) or 0)
+                        + park_debt
                         - payouts
                         - available,
                         0,
                     ),
                 })
 
+                row["total_invested"] += car_total_invested
+                row["total_payouts"] += payouts
                 row["income"] += income
                 row["expenses"] += expenses
-                row["profit"] += split_profit
+                row["profit"] += profit_for_split
                 row["investor_share"] += investor_share
-                row["owner_share"] += balance.get(
-                    "park_share_total",
-                    max(split_profit - investor_share, 0),
-                )
-                row["park_debt_to_investor"] += (
-                    balance.get("park_debt_to_investor", 0) or 0
-                )
+                row["owner_share"] += owner_share
+                row["park_debt_to_investor"] += park_debt
 
             portfolio = apply_investor_portfolio_netting(car_rows)
 
@@ -4570,10 +4576,23 @@ def api_investors_summary():
 
         return jsonify({
             "period_mode": "current_16_to_15",
+            "server_date_moscow": moscow_now().strftime(
+                "%d.%m.%Y %H:%M"
+            ),
             "investors_count": len(investors),
             "investors": investors,
             **totals,
         })
+
+    except Exception as error:
+        session.rollback()
+        return jsonify({
+            "ok": False,
+            "message": (
+                "Ошибка текущего периода инвесторов: "
+                f"{type(error).__name__}: {error}"
+            ),
+        }), 500
 
     finally:
         session.close()
@@ -4618,17 +4637,7 @@ def api_investors():
                 "total_income": 0,
                 "total_shared_expenses": 0,
                 "total_investor_only_expenses": 0,
-                "total_payouts": (
-                    session.query(
-                        func.coalesce(
-                            func.sum(InvestorPayout.amount),
-                            0,
-                        )
-                    )
-                    .filter_by(investor_name=name)
-                    .scalar()
-                    or 0
-                ),
+                "total_payouts": 0,
                 "total_profit_for_split": 0,
                 "total_accrued": 0,
                 "total_withheld": 0,
@@ -4638,111 +4647,36 @@ def api_investors():
                 "available_to_pay": 0,
             }
 
+            portfolio_rows = []
+
             for car in cars:
-                car_code = normalize_code(car.code)
+                ensure_previous_period_saved(session, car)
+
+                start, end = period_bounds_for_car(car)
+                calc = calculate_period_for_car(
+                    session,
+                    car,
+                    start,
+                    end,
+                )
 
                 car_total_invested = investor_total_invested_for_car(
                     session,
                     car,
                 )
 
-                income = 0
-                shared_expenses = 0
-                investor_only_expenses = 0
-                park_only_expenses = 0
-
-                for row in session.query(Income).all():
-                    if normalize_code(row.car_code) == car_code:
-                        income += row.amount or 0
-
-                for row in session.query(Expense).all():
-                    if normalize_code(row.car_code) != car_code:
-                        continue
-
-                    amount = row.amount or 0
-
-                    operation = None
-
-                    if row.operation_id:
-                        operation = (
-                            session.query(Operation)
-                            .filter_by(id=row.operation_id)
-                            .first()
-                        )
-
-                    if (
-                        operation
-                        and operation.type
-                        == "investor_expense_split"
-                    ):
-                        investor_only_expenses += amount
-                        continue
-                        
-                    expense_type = (
-                        row.share_type or "shared"
-                    ).strip().lower()
-
-                    if expense_type in {
-                        "investor_only",
-                        "investor",
-                        "investor-only",
-                        "только инвестор",
-                        "допрасход",
-                        "доп расход",
-                        "доп расходы",
-                    }:
-                        investor_only_expenses += amount
-
-                    elif expense_type in {
-                        "park_only",
-                        "owner_only",
-                        "park",
-                        "только парк",
-                    }:
-                        park_only_expenses += amount
-
-                    else:
-                        shared_expenses += amount
-
-                ensure_previous_period_saved(session, car)
-                balance = current_period_investor_balance_for_car(
-                    session,
-                    car,
+                income = calc["income"]
+                shared_expenses = calc["shared_expenses"]
+                investor_only_expenses = (
+                    calc["investor_only_expenses"]
                 )
-
-                available_to_pay = (
-                    balance.get("available_to_pay", 0) or 0
-                )
-
-                investor_debt = (
-                    balance.get("investor_debt_to_park", 0) or 0
-                )
-
-                investor_share = (
-                    balance.get("investor_share_total", 0) or 0
-                )
-
-                car_payouts = sum(
-                    (row.amount or 0)
-                    for row in session.query(InvestorPayout).all()
-                    if normalize_code(row.car_code) == car_code
-                )
-
-                profit_for_split = (
-                    balance.get(
-                        "normal_profit_for_split",
-                        income - shared_expenses,
-                    )
-                    or 0
-                )
-
-                park_share = (
-                    balance.get("park_share_total", 0) or 0
-                )
-
-                park_debt = (
-                    balance.get("park_debt_to_investor", 0) or 0
-                )
+                profit_for_split = calc["profit_for_split"]
+                investor_share = calc["accrued_to_investor"]
+                available_to_pay = calc["available_to_pay"]
+                investor_debt = calc["investor_debt_to_park"]
+                car_payouts = calc["payouts_in_period"]
+                park_share = calc["owner_amount"]
+                park_debt = calc["park_debt_to_investor"]
 
                 withheld = max(
                     investor_share
@@ -4752,12 +4686,19 @@ def api_investors():
                     0,
                 )
 
+                portfolio_rows.append({
+                    "available_to_pay": available_to_pay,
+                    "investor_debt_to_park": investor_debt,
+                    "withheld": withheld,
+                })
+
                 totals["total_invested"] += car_total_invested
                 totals["total_income"] += income
                 totals["total_shared_expenses"] += shared_expenses
                 totals[
                     "total_investor_only_expenses"
                 ] += investor_only_expenses
+                totals["total_payouts"] += car_payouts
                 totals["total_profit_for_split"] += profit_for_split
                 totals["total_accrued"] += investor_share
                 totals["total_withheld"] += withheld
@@ -4772,46 +4713,39 @@ def api_investors():
                         f"{car.brand or ''} {car.model or ''}"
                     ).strip(),
                     "percent": car.investor_percent or 0,
-
+                    "period_start": start.strftime("%d.%m.%Y"),
+                    "period_end": period_display_end(
+                        end
+                    ).strftime("%d.%m.%Y"),
                     "invested": car_total_invested,
                     "income": income,
-
+                    "shared_expenses": shared_expenses,
                     "investor_only_expenses":
                         investor_only_expenses,
-
-                    "shared_expenses": shared_expenses,
-                    "park_only_expenses": park_only_expenses,
-
                     "profit_for_split": profit_for_split,
                     "accrued_to_investor": investor_share,
                     "withheld": withheld,
-                    "paid_to_investor": car_payouts,
-                    "park_share": park_share,
-                    "park_debt_to_investor": park_debt,
+                    "paid": car_payouts,
                     "available_to_pay": available_to_pay,
                     "investor_debt_to_park": investor_debt,
+                    "park_debt_to_investor": park_debt,
+                    "park_share": park_share,
                 })
 
-            portfolio = apply_investor_portfolio_netting(details)
+            portfolio = apply_investor_portfolio_netting(
+                portfolio_rows
+            )
 
             totals["available_to_pay"] = portfolio["net_available"]
             totals["investor_debt_to_park"] = portfolio["net_debt"]
-            totals["total_withheld"] = sum(
-                int(row.get("withheld", 0) or 0)
-                for row in details
-            )
-            totals["portfolio_debt_offset"] = (
+            totals["total_withheld"] = (
                 portfolio["portfolio_withheld"]
-            )
-            totals["gross_available_before_offset"] = (
-                portfolio["gross_available"]
-            )
-            totals["gross_debt_before_offset"] = (
-                portfolio["gross_debt"]
             )
 
             result.append({
                 "name": name,
+                "cars_count": len(cars),
+                "period_mode": "current_16_to_15",
                 "cars": details,
                 **totals,
             })
@@ -4820,16 +4754,16 @@ def api_investors():
 
     except Exception as error:
         session.rollback()
-        print(f"Ошибка /api/investors: {error}")
-
         return jsonify({
             "ok": False,
-            "message": "Ошибка расчёта инвесторов",
+            "message": (
+                "Ошибка списка инвесторов: "
+                f"{type(error).__name__}: {error}"
+            ),
         }), 500
 
     finally:
         session.close()
-
 
 
 @bp.route("/api/warehouse/check-match", methods=["POST"])
