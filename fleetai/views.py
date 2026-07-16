@@ -1615,6 +1615,128 @@ body > *{
   margin-top:16px;
 }
 
+
+/* ===== INVESTOR REPORT HISTORY ===== */
+
+.investor-report-history-card{
+  margin-top:14px;
+}
+
+.report-history-investor{
+  padding:14px 0;
+  border-top:1px solid var(--line);
+}
+
+.report-history-investor:first-child{
+  border-top:0;
+  padding-top:0;
+}
+
+.report-history-investor-head{
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+  margin-bottom:9px;
+}
+
+.report-history-investor-head > div{
+  display:flex;
+  flex-direction:column;
+  gap:3px;
+}
+
+.report-history-investor-head b{
+  font-size:16px;
+}
+
+.report-history-investor-head span{
+  color:var(--text-soft);
+  font-size:11px;
+}
+
+.report-history-list{
+  display:flex;
+  flex-direction:column;
+  gap:8px;
+}
+
+.report-history-row{
+  display:grid;
+  grid-template-columns:
+    minmax(165px,1.1fr)
+    minmax(255px,1.5fr)
+    auto
+    auto;
+  align-items:center;
+  gap:12px;
+  padding:12px;
+  border:1px solid var(--line);
+  border-radius:13px;
+  background:var(--surface-soft);
+}
+
+.report-history-period{
+  display:flex;
+  flex-direction:column;
+  gap:4px;
+}
+
+.report-history-period span{
+  color:var(--text-soft);
+  font-size:11px;
+}
+
+.report-history-values{
+  display:grid;
+  grid-template-columns:repeat(3,minmax(0,1fr));
+  gap:7px;
+}
+
+.report-history-values > div{
+  display:flex;
+  flex-direction:column;
+  gap:3px;
+}
+
+.report-history-values span{
+  color:var(--text-soft);
+  font-size:10px;
+}
+
+.report-history-values b{
+  font-size:13px;
+}
+
+.report-history-actions{
+  display:flex;
+  gap:6px;
+}
+
+@media(max-width:1050px){
+  .report-history-row{
+    grid-template-columns:1fr 1fr;
+  }
+
+  .report-history-actions{
+    justify-content:flex-end;
+  }
+}
+
+@media(max-width:700px){
+  .report-history-row{
+    grid-template-columns:1fr;
+  }
+
+  .report-history-values{
+    grid-template-columns:repeat(3,1fr);
+  }
+
+  .report-history-actions{
+    justify-content:flex-start;
+    flex-wrap:wrap;
+  }
+}
+
 </style>
 </head>
 
@@ -1740,6 +1862,29 @@ body > *{
 
   <div id="investorsSummary"></div>
   <div id="investors"></div>
+</div>
+
+<div class="card investor-report-history-card">
+  <div class="section-head">
+    <div>
+      <h2>История отчётов</h2>
+      <p class="raw">
+        Старые расчётные периоды можно скачать
+        или пересоздать и отправить в Telegram.
+      </p>
+    </div>
+
+    <button
+      class="secondary"
+      onclick="loadInvestorReportHistory()"
+    >
+      Обновить
+    </button>
+  </div>
+
+  <div id="investorReportHistory">
+    <p class="raw">Загрузка истории…</p>
+  </div>
 </div>
 
 </section>
@@ -2409,7 +2554,181 @@ async function sendInvestorReport(name){
   alert(r.message||'Готово');
 }
 
+
+function downloadInvestorReport(
+  investorName,
+  startIso,
+  endIso
+){
+  const url=
+    '/api/investor-report-file/'
+    +encodeURIComponent(investorName)
+    +'/'+startIso
+    +'/'+endIso;
+
+  window.open(url,'_blank');
+}
+
+async function regenerateInvestorReport(
+  investorName,
+  startIso,
+  endIso
+){
+  const confirmed=confirm(
+    `Пересоздать отчёт ${startIso} — ${endIso} `
+    +`для инвестора ${investorName}?`
+  );
+
+  if(!confirmed){
+    return;
+  }
+
+  const result=await api(
+    '/api/investor-report-regenerate/'
+    +encodeURIComponent(investorName)
+    +'/'+startIso
+    +'/'+endIso,
+    {
+      method:'POST'
+    }
+  );
+
+  alert(result.message||'Готово');
+}
+
+async function loadInvestorReportHistory(){
+  const container=document.getElementById(
+    'investorReportHistory'
+  );
+
+  if(!container){
+    return;
+  }
+
+  container.innerHTML=
+    '<p class="raw">Загрузка истории…</p>';
+
+  try{
+    const data=await api(
+      '/api/investor-report-history'
+    );
+
+    if(!data.ok){
+      throw new Error(
+        data.message ||
+        'Не удалось загрузить историю'
+      );
+    }
+
+    const investorsList=data.investors||[];
+
+    if(!investorsList.length){
+      container.innerHTML=
+        '<p class="raw">Сохранённых отчётов пока нет.</p>';
+      return;
+    }
+
+    container.innerHTML=investorsList.map(investor=>`
+      <div class="report-history-investor">
+        <div class="report-history-investor-head">
+          <div>
+            <b>${investor.name}</b>
+            <span>
+              ${investor.periods.length}
+              сохранённых периодов
+            </span>
+          </div>
+        </div>
+
+        ${
+          investor.periods.length
+            ? `
+              <div class="report-history-list">
+                ${investor.periods.map(period=>`
+                  <div class="report-history-row">
+                    <div class="report-history-period">
+                      <b>
+                        ${period.start} — ${period.end}
+                      </b>
+                      <span>
+                        Сохранено машин:
+                        ${period.cars_saved}
+                        из ${period.cars_total}
+                      </span>
+                    </div>
+
+                    <div class="report-history-values">
+                      <div>
+                        <span>Доход</span>
+                        <b>${rub(period.income||0)}</b>
+                      </div>
+                      <div>
+                        <span>Расход</span>
+                        <b>${rub(period.expenses||0)}</b>
+                      </div>
+                      <div>
+                        <span>Итог</span>
+                        <b>${rub(period.profit||0)}</b>
+                      </div>
+                    </div>
+
+                    <div class="report-history-status">
+                      <span class="badge ${
+                        period.complete
+                          ? 'badge-working'
+                          : 'badge-downtime'
+                      }">
+                        ${
+                          period.complete
+                            ? 'Период сохранён'
+                            : 'Сохранён не полностью'
+                        }
+                      </span>
+                    </div>
+
+                    <div class="report-history-actions">
+                      <button
+                        class="secondary small"
+                        onclick="downloadInvestorReport(
+                          '${String(investor.name).replace(/'/g,"\\'")}',
+                          '${period.start_iso}',
+                          '${period.end_iso}'
+                        )"
+                      >
+                        Скачать PDF
+                      </button>
+
+                      <button
+                        class="small"
+                        onclick="regenerateInvestorReport(
+                          '${String(investor.name).replace(/'/g,"\\'")}',
+                          '${period.start_iso}',
+                          '${period.end_iso}'
+                        )"
+                      >
+                        Пересоздать
+                      </button>
+                    </div>
+                  </div>
+                `).join('')}
+              </div>
+            `
+            : '<p class="raw">Периодов пока нет.</p>'
+        }
+      </div>
+    `).join('');
+
+  }catch(error){
+    container.innerHTML=`
+      <p class="bad">
+        ${error.message||error}
+      </p>
+    `;
+  }
+}
+
 async function loadInvestors(){
+  loadInvestorReportHistory();
   const data=await api('/api/investors');
 
   if(!Array.isArray(data)){
