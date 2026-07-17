@@ -31,7 +31,7 @@ td,th{padding:9px;border-bottom:1px solid #eee;text-align:left}
 .event.repair,.event.service,.event.expense{border-left-color:#dc2626}
 .event.downtime{border-left-color:#f97316}
 .raw{font-size:13px;color:#6b7280}
-.payment-form{display:grid;grid-template-columns:repeat(5,minmax(160px,1fr));gap:8px;align-items:end}
+.payment-form{display:grid;grid-template-columns:repeat(6,minmax(150px,1fr));gap:8px;align-items:end}
 
 .investor-summary-grid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:12px;margin:14px 0}
 .investor-kpi{background:#111827;color:white;border-radius:16px;padding:16px}
@@ -1930,6 +1930,15 @@ body > *{
         <input id="payment_daily_rent" type="number" min="0" placeholder="2000">
       </label>
 
+      <label>Залог
+        <input
+          id="payment_driver_deposit"
+          type="number"
+          min="0"
+          placeholder="Например 30 000"
+        >
+      </label>
+
       <label>День расчёта
         <select id="payment_weekday">
           <option value="0">Понедельник</option>
@@ -2885,6 +2894,30 @@ payment_car.addEventListener('change',()=>{
   payment_weekday.value=String(car.payment_weekday||0);
 });
 
+function fillDriverPaymentFormFromCar(){
+  const code=payment_car.value;
+  const car=(window.cachedCars||[]).find(
+    item=>String(item.code)===String(code)
+  );
+
+  if(!car){
+    return;
+  }
+
+  payment_driver.value=car.driver||'';
+  payment_daily_rent.value=Number(car.daily_rent||0);
+  payment_driver_deposit.value=Number(car.driver_deposit||0);
+  payment_weekday.value=Number(car.payment_weekday||0);
+  payment_date.value=car.next_payment_date||'';
+}
+
+document.addEventListener('change',event=>{
+  if(event.target && event.target.id==='payment_car'){
+    fillDriverPaymentFormFromCar();
+  }
+});
+
+
 async function saveDriverPayment(){
   if(!payment_car.value){paymentRes.innerText='Сначала выбери машину';return}
   if(!payment_daily_rent.value){paymentRes.innerText='Укажи стоимость аренды в сутки';return}
@@ -2894,6 +2927,7 @@ async function saveDriverPayment(){
     car_code:payment_car.value,
     driver:payment_driver.value,
     daily_rent:Number(payment_daily_rent.value),
+    driver_deposit:Number(payment_driver_deposit.value||0),
     payment_weekday:Number(payment_weekday.value),
     next_payment_date:payment_date.value
   };
@@ -3027,6 +3061,7 @@ function renderDriverPayments(carsList){
       <th>Машина</th>
       <th>Водитель</th>
       <th>Ставка</th>
+      <th>Залог</th>
       <th>Просроченные недели</th>
       <th>Текущий период</th>
       <th>Начислено сейчас</th>
@@ -3059,6 +3094,13 @@ function renderDriverPayments(carsList){
           <td>
             ${rub(rate)} / сутки
             ${rateNote}
+          </td>
+
+          <td>
+            <b>${rub(car.driver_deposit||0)}</b>
+            <div class="raw">
+              не входит в доход
+            </div>
           </td>
 
           <td>
