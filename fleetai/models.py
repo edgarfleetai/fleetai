@@ -29,6 +29,7 @@ class Car(Base):
     last_payment_date = Column(String, default="")
     next_payment_date = Column(String, default="")
     payment_notifications = Column(Integer, default=1)
+    driver_deposit = Column(Integer, default=0)
 
 
 class Operation(Base):
