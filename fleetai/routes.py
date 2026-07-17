@@ -1053,6 +1053,7 @@ def save_payment_settings():
 
     try:
         daily_rent = int(data.get("daily_rent") or 0)
+        driver_deposit = int(data.get("driver_deposit") or 0)
         payment_weekday = int(data.get("payment_weekday") or 0)
     except (TypeError, ValueError):
         return jsonify({
@@ -1070,6 +1071,12 @@ def save_payment_settings():
         return jsonify({
             "ok": False,
             "message": "Ставка не может быть отрицательной",
+        }), 400
+
+    if driver_deposit < 0:
+        return jsonify({
+            "ok": False,
+            "message": "Залог не может быть отрицательным",
         }), 400
 
     if payment_weekday < 0 or payment_weekday > 6:
@@ -1105,6 +1112,7 @@ def save_payment_settings():
         car.payment_weekday = payment_weekday
         car.next_payment_date = next_payment_date
         car.payment_notifications = 1
+        car.driver_deposit = driver_deposit
 
         # При первой настройке начало периода — за 7 дней до расчёта.
         if payment_date and (
@@ -1126,6 +1134,9 @@ def save_payment_settings():
                 "code": car.code,
                 "driver": car.driver,
                 "daily_rent": car.daily_rent,
+                "driver_deposit": int(
+                    getattr(car, "driver_deposit", 0) or 0
+                ),
                 "effective_daily_rent": effective_daily_rent(car),
                 "payment_weekday": car.payment_weekday,
                 "last_payment_date": car.last_payment_date,
@@ -1219,8 +1230,15 @@ def check_driver_payments():
                 else "Просроченных недель нет"
             )
 
+            deposit_text = (
+                f"{int(getattr(car, 'driver_deposit', 0) or 0):,}"
+                .replace(",", " ")
+            )
+
             details = (
                 f"💵 Ставка: {rate_text} ₽/сутки\n"
+                f"🔒 Залог: {deposit_text} ₽ "
+                f"(не входит в доход и долг)\n"
                 f"🧾 Просроченные недели:\n"
                 f"{overdue_text}\n"
                 f"📅 Текущий период: "
@@ -4190,6 +4208,9 @@ def api_cars():
                 ),
                 "daily_rent": int(
                     getattr(car, "daily_rent", 0) or 0
+                ),
+                "driver_deposit": int(
+                    getattr(car, "driver_deposit", 0) or 0
                 ),
                 "effective_daily_rent": (
                     effective_daily_rent(car)
