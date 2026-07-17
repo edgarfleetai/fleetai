@@ -53,6 +53,7 @@ def run_migrations():
         "ALTER TABLE cars ADD COLUMN last_payment_date VARCHAR DEFAULT ''",
         "ALTER TABLE cars ADD COLUMN next_payment_date VARCHAR DEFAULT ''",
         "ALTER TABLE cars ADD COLUMN payment_notifications INTEGER DEFAULT 1",
+        "ALTER TABLE cars ADD COLUMN driver_deposit INTEGER DEFAULT 0",
 
         "ALTER TABLE expenses ADD COLUMN share_type VARCHAR DEFAULT 'shared'",
         "ALTER TABLE car_investments ADD COLUMN investor_name VARCHAR DEFAULT ''",
