@@ -918,8 +918,6 @@ def calculate_driver_payment(session, car, as_of_date=None):
     - текущий открытый период отдельно;
     - общую сумму только как справочный итог.
     """
-    # Используем московскую дату, чтобы начисление не зависело
-    # от UTC-времени сервера Render.
     today = as_of_date or moscow_now().date()
 
     first_start = parse_iso_date(
@@ -966,18 +964,7 @@ def calculate_driver_payment(session, car, as_of_date=None):
         cursor_start = cursor_due
         cursor_due = cursor_due + timedelta(days=7)
 
-    # Новый период начисляется только после того, как сутки
-    # полностью прошли.
-    #
-    # Пример:
-    # водитель начал 16.07:
-    # - 16.07 начислено 0 суток;
-    # - 17.07 начислена 1 завершённая сутка;
-    # - 18.07 начислены 2 завершённые сутки.
-    #
-    # calculate_rental_interval использует интервал
-    # [начало, окончание), поэтому окончанием ставим сегодня,
-    # а не завтра.
+    # Начисляем только полностью завершённые сутки.
     current_end = min(
         today,
         cursor_due,
@@ -1025,7 +1012,6 @@ def calculate_driver_payment(session, car, as_of_date=None):
         "overdue_total": overdue_total,
 
         # Текущая неделя — отдельный объект.
-        # Сумма включает только полностью завершённые сутки.
         "current_period": current_period,
         "current_amount": current_amount,
 
@@ -1317,13 +1303,6 @@ def check_driver_payments():
 
 @bp.route("/api/mark-driver-period-paid", methods=["POST"])
 def mark_driver_period_paid():
-    """
-    Закрывает только один выбранный расчётный период.
-
-    Для просроченной машины кнопка у каждой недели закрывает
-    именно эту неделю. Остальные просроченные периоды и текущая
-    неделя остаются без изменений.
-    """
     data = request.get_json(silent=True) or request.form
 
     car_code = normalize_code(
@@ -1338,21 +1317,6 @@ def mark_driver_period_paid():
             "message": "Не указан номер машины",
         }), 400
 
-    period_start = parse_iso_date(period_start_raw)
-    period_end = parse_iso_date(period_end_raw)
-
-    if not period_start or not period_end:
-        return jsonify({
-            "ok": False,
-            "message": "Не указан расчётный период",
-        }), 400
-
-    if period_start >= period_end:
-        return jsonify({
-            "ok": False,
-            "message": "Период указан неправильно",
-        }), 400
-
     session = Session()
 
     try:
@@ -1364,41 +1328,45 @@ def mark_driver_period_paid():
                 "message": f"Машина {car_code} не найдена",
             }), 404
 
-        calculation = calculate_rental_interval(
-            session,
-            car,
-            period_start,
-            period_end,
-        )
+        calculation = calculate_driver_payment(session, car)
+        overdue_periods = calculation.get("overdue_periods") or []
 
-        current_start = parse_iso_date(
-            getattr(car, "last_payment_date", "")
-        )
-        current_due = parse_iso_date(
-            getattr(car, "next_payment_date", "")
-        )
-
-        if not current_start or not current_due:
+        if not overdue_periods:
             return jsonify({
                 "ok": False,
-                "message": "У машины не настроен расчётный период",
+                "message": "У этой машины нет просроченного периода",
             }), 400
 
-        # Разрешаем закрывать только самый ранний неоплаченный период.
-        # Это сохраняет правильную последовательность периодов.
-        if period_start != current_start or period_end != current_due:
+        earliest = overdue_periods[0]
+        expected_start = parse_iso_date(earliest.get("period_start"))
+        expected_end = parse_iso_date(earliest.get("period_end"))
+
+        requested_start = parse_iso_date(period_start_raw) or expected_start
+        requested_end = parse_iso_date(period_end_raw) or expected_end
+
+        if (
+            requested_start != expected_start
+            or requested_end != expected_end
+        ):
             return jsonify({
                 "ok": False,
                 "message": (
-                    "Сначала закрой самый ранний неоплаченный период "
-                    f"{current_start.isoformat()} — {current_due.isoformat()}."
+                    "Сначала нужно закрыть самую раннюю неделю: "
+                    f"{expected_start.strftime('%d.%m.%Y')} — "
+                    f"{expected_end.strftime('%d.%m.%Y')}"
                 ),
             }), 400
 
-        # Сдвигаем начало расчётов ровно на один период.
-        car.last_payment_date = period_end.isoformat()
+        paid_period = calculate_rental_interval(
+            session,
+            car,
+            expected_start,
+            expected_end,
+        )
+
+        car.last_payment_date = expected_end.isoformat()
         car.next_payment_date = (
-            period_end + timedelta(days=7)
+            expected_end + timedelta(days=7)
         ).isoformat()
 
         session.commit()
@@ -1406,22 +1374,23 @@ def mark_driver_period_paid():
         return jsonify({
             "ok": True,
             "message": (
-                f"Период {period_start.strftime('%d.%m.%Y')} — "
-                f"{period_end.strftime('%d.%m.%Y')} закрыт. "
-                f"Оплачено {calculation['amount']:,} ₽."
+                f"Неделя {expected_start.strftime('%d.%m.%Y')} — "
+                f"{expected_end.strftime('%d.%m.%Y')} оплачена. "
+                f"Сумма: {int(paid_period['amount'] or 0):,} ₽"
             ).replace(",", " "),
             "car_code": car.code,
-            "paid_period": calculation,
+            "paid_period": paid_period,
             "next_payment_date": car.next_payment_date,
         })
 
     except Exception as error:
         session.rollback()
-        print(f"Ошибка закрытия периода: {error}")
-
         return jsonify({
             "ok": False,
-            "message": f"Не удалось закрыть период: {error}",
+            "message": (
+                "Не удалось закрыть неделю: "
+                f"{type(error).__name__}: {error}"
+            ),
         }), 500
 
     finally:
@@ -1453,7 +1422,7 @@ def mark_driver_payment_paid():
             }), 404
 
         calculation = calculate_driver_payment(session, car)
-        today = date.today()
+        today = moscow_now().date()
 
         # Оплата закрывает долг и начисления до сегодняшнего дня включительно.
         # Новый период начинается завтра.
