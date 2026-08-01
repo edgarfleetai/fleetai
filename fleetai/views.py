@@ -2873,10 +2873,26 @@ function paymentStatus(nextDate){
 }
 
 function fillPaymentCarSelect(carsList){
-  const selected=payment_car.value;
-  paymentCars=carsList;
-  payment_car.innerHTML='<option value="">Выбери машину</option>'+carsList.map(car=>`<option value="${car.code}">${car.code} ${car.brand||''} ${car.model||''}</option>`).join('');
-  if(carsList.some(car=>car.code===selected))payment_car.value=selected;
+  const select=document.getElementById('payment_car');
+  if(!select)return;
+
+  const selected=String(select.value||'');
+  paymentCars=Array.isArray(carsList)?carsList:[];
+
+  select.innerHTML='<option value="">Выбери машину</option>'+paymentCars.map(car=>{
+    const driver=(car.driver||'').trim();
+    const label=[
+      car.code,
+      car.brand||'',
+      car.model||'',
+      driver?`— водитель: ${driver}`:'— свободна'
+    ].filter(Boolean).join(' ');
+    return `<option value="${car.code}">${label}</option>`;
+  }).join('');
+
+  if(paymentCars.some(car=>String(car.code)===selected)){
+    select.value=selected;
+  }
 }
 
 payment_car.addEventListener('change',()=>{
@@ -2916,6 +2932,31 @@ document.addEventListener('change',event=>{
     fillDriverPaymentFormFromCar();
   }
 });
+
+
+function editDriverPayment(carCode){
+  const select=document.getElementById('payment_car');
+  const panel=document.getElementById('paymentsPanel');
+
+  if(panel && !panel.classList.contains('open')){
+    togglePaymentsPanel();
+  }
+
+  if(select){
+    select.value=String(carCode);
+    fillDriverPaymentFormFromCar();
+  }
+
+  const form=document.querySelector('#paymentsPanel .payment-form');
+  if(form){
+    form.scrollIntoView({behavior:'smooth',block:'start'});
+  }
+
+  const result=document.getElementById('paymentRes');
+  if(result){
+    result.innerText='Можно изменить водителя, ставку или ближайшую дату расчёта и нажать «Сохранить расчёт».';
+  }
+}
 
 
 async function saveDriverPayment(){
@@ -3143,6 +3184,9 @@ function renderDriverPayments(carsList){
           </td>
 
           <td>
+            <button class="secondary" onclick="editDriverPayment('${car.code}')">
+              Изменить
+            </button>
             ${
               Number(calc.overdue_periods_count||0)>0
                 ? '<span class="raw">Закрой недели по очереди</span>'
@@ -3315,7 +3359,7 @@ async function loadCars(){
   }
 
   const carsTable=document.getElementById('cars');
-  const paymentSelect=document.getElementById('paymentCar');
+  const paymentSelect=document.getElementById('payment_car');
   const paymentsTable=document.getElementById('driverPayments');
 
   try{
