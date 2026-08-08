@@ -42,6 +42,8 @@ from .models import (
     InvestorSettlement,
     WarehouseItem,
     WarehouseMovement,
+    DriverDebt,
+    DriverDebtPayment,
 )
 from .utils import only_int, normalize_code, find_car
 from .parser import parse_message
@@ -1037,6 +1039,236 @@ def calculate_driver_payment(session, car, as_of_date=None):
         "completed_unpaid_periods": len(overdue_periods),
         "completed_period_details": overdue_periods,
     }
+
+
+
+
+def driver_debt_summary(session, driver_name=None):
+    query = session.query(DriverDebt)
+    if driver_name:
+        query = query.filter(
+            func.lower(func.trim(DriverDebt.driver_name))
+            == driver_name.strip().lower()
+        )
+
+    rows = query.order_by(DriverDebt.created_at.desc()).all()
+    result = []
+
+    for row in rows:
+        original = max(int(row.original_amount or 0), 0)
+        paid = max(int(row.paid_amount or 0), 0)
+        balance = max(int(row.balance or (original - paid)), 0)
+
+        result.append({
+            "id": row.id,
+            "driver_name": row.driver_name or "",
+            "car_code": row.car_code or "",
+            "original_amount": original,
+            "paid_amount": paid,
+            "balance": balance,
+            "status": row.status or ("closed" if balance <= 0 else "open"),
+            "reason": row.reason or "",
+            "comment": row.comment or "",
+            "created_at": row.created_at.isoformat() if row.created_at else "",
+            "closed_at": row.closed_at.isoformat() if row.closed_at else "",
+        })
+
+    return result
+
+
+@bp.route("/api/driver-debts", methods=["GET"])
+def api_driver_debts():
+    session = Session()
+    try:
+        include_closed = str(request.args.get("all", "0")) == "1"
+        rows = driver_debt_summary(session)
+        if not include_closed:
+            rows = [row for row in rows if row["balance"] > 0]
+
+        return jsonify({
+            "ok": True,
+            "items": rows,
+            "total_debt": sum(row["balance"] for row in rows),
+            "debtors_count": len({
+                row["driver_name"].strip().lower()
+                for row in rows
+                if row["balance"] > 0 and row["driver_name"].strip()
+            }),
+        })
+    finally:
+        session.close()
+
+
+@bp.route("/api/driver-debt-from-car", methods=["POST"])
+def api_driver_debt_from_car():
+    data = request.get_json(silent=True) or request.form
+    car_code = normalize_code(data.get("car_code") or data.get("code") or "")
+    detach_driver = bool(data.get("detach_driver", False))
+    reason = (data.get("reason") or "Долг по аренде").strip()
+    comment = (data.get("comment") or "").strip()
+
+    if not car_code:
+        return jsonify({"ok": False, "message": "Не указана машина"}), 400
+
+    session = Session()
+    try:
+        car = find_car(session, car_code)
+        if not car:
+            return jsonify({"ok": False, "message": "Машина не найдена"}), 404
+
+        driver_name = (getattr(car, "driver", "") or "").strip()
+        if not driver_name:
+            return jsonify({
+                "ok": False,
+                "message": "У машины не указан водитель",
+            }), 400
+
+        calculation = calculate_driver_payment(session, car)
+        calculated_due = max(int(calculation.get("amount_due", 0) or 0), 0)
+
+        raw_amount = data.get("amount")
+        if raw_amount in (None, ""):
+            amount = calculated_due
+        else:
+            try:
+                amount = max(int(raw_amount), 0)
+            except (TypeError, ValueError):
+                return jsonify({"ok": False, "message": "Некорректная сумма долга"}), 400
+
+        if amount <= 0:
+            return jsonify({
+                "ok": False,
+                "message": "Сумма долга должна быть больше нуля",
+            }), 400
+
+        debt = DriverDebt(
+            driver_name=driver_name,
+            car_code=car.code,
+            original_amount=amount,
+            paid_amount=0,
+            balance=amount,
+            status="open",
+            reason=reason,
+            comment=comment,
+        )
+        session.add(debt)
+
+        if detach_driver:
+            car.driver = ""
+            car.last_payment_date = ""
+            car.next_payment_date = ""
+            car.payment_notifications = 0
+            car.driver_deposit = 0
+
+        session.commit()
+
+        return jsonify({
+            "ok": True,
+            "message": (
+                f"Долг {driver_name}: {amount:,} ₽ сохранён"
+                + (". Водитель снят с машины." if detach_driver else ".")
+            ).replace(",", " "),
+            "debt_id": debt.id,
+            "driver_name": driver_name,
+            "car_code": car.code,
+            "balance": amount,
+            "detached": detach_driver,
+        })
+
+    except Exception as error:
+        session.rollback()
+        return jsonify({
+            "ok": False,
+            "message": f"Не удалось сохранить долг: {error}",
+        }), 500
+    finally:
+        session.close()
+
+
+@bp.route("/api/driver-debt-payment", methods=["POST"])
+def api_driver_debt_payment():
+    data = request.get_json(silent=True) or request.form
+    try:
+        debt_id = int(data.get("debt_id") or 0)
+        amount = int(data.get("amount") or 0)
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "message": "Некорректные данные платежа"}), 400
+
+    comment = (data.get("comment") or "Частичная оплата долга").strip()
+    if debt_id <= 0 or amount <= 0:
+        return jsonify({"ok": False, "message": "Укажи долг и сумму оплаты"}), 400
+
+    session = Session()
+    try:
+        debt = session.query(DriverDebt).filter(DriverDebt.id == debt_id).first()
+        if not debt:
+            return jsonify({"ok": False, "message": "Долг не найден"}), 404
+
+        current_balance = max(int(debt.balance or 0), 0)
+        if current_balance <= 0:
+            return jsonify({"ok": False, "message": "Этот долг уже закрыт"}), 400
+
+        applied = min(amount, current_balance)
+        debt.paid_amount = int(debt.paid_amount or 0) + applied
+        debt.balance = max(current_balance - applied, 0)
+
+        if debt.balance == 0:
+            debt.status = "closed"
+            debt.closed_at = moscow_now().replace(tzinfo=None)
+        else:
+            debt.status = "open"
+
+        session.add(DriverDebtPayment(
+            debt_id=debt.id,
+            driver_name=debt.driver_name or "",
+            car_code=debt.car_code or "",
+            amount=applied,
+            comment=comment,
+        ))
+        session.commit()
+
+        return jsonify({
+            "ok": True,
+            "message": (
+                f"Оплата {applied:,} ₽ записана. Остаток долга: "
+                f"{int(debt.balance or 0):,} ₽"
+            ).replace(",", " "),
+            "debt_id": debt.id,
+            "balance": int(debt.balance or 0),
+            "paid_amount": int(debt.paid_amount or 0),
+        })
+
+    except Exception as error:
+        session.rollback()
+        return jsonify({"ok": False, "message": f"Ошибка оплаты долга: {error}"}), 500
+    finally:
+        session.close()
+
+
+@bp.route("/api/driver-debt-payments/<int:debt_id>", methods=["GET"])
+def api_driver_debt_payments(debt_id):
+    session = Session()
+    try:
+        rows = (
+            session.query(DriverDebtPayment)
+            .filter(DriverDebtPayment.debt_id == debt_id)
+            .order_by(DriverDebtPayment.date.desc())
+            .all()
+        )
+        return jsonify({
+            "ok": True,
+            "items": [
+                {
+                    "id": row.id,
+                    "amount": int(row.amount or 0),
+                    "date": row.date.isoformat() if row.date else "",
+                    "comment": row.comment or "",
+                }
+                for row in rows
+            ],
+        })
+    finally:
+        session.close()
 
 
 @bp.route("/api/payment-settings", methods=["POST"])

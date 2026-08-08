@@ -186,6 +186,35 @@ class SettlementPeriod(Base):
     closed_at = Column(DateTime, default=datetime.now)
     comment = Column(Text)
 
+
+class DriverDebt(Base):
+    __tablename__ = "driver_debts"
+
+    id = Column(Integer, primary_key=True)
+    driver_name = Column(String, nullable=False)
+    car_code = Column(String, default="")
+    original_amount = Column(Integer, default=0)
+    paid_amount = Column(Integer, default=0)
+    balance = Column(Integer, default=0)
+    status = Column(String, default="open")
+    reason = Column(String, default="")
+    comment = Column(Text)
+    created_at = Column(DateTime, default=datetime.now)
+    closed_at = Column(DateTime)
+
+
+class DriverDebtPayment(Base):
+    __tablename__ = "driver_debt_payments"
+
+    id = Column(Integer, primary_key=True)
+    debt_id = Column(Integer, nullable=False)
+    driver_name = Column(String, default="")
+    car_code = Column(String, default="")
+    amount = Column(Integer, default=0)
+    comment = Column(Text)
+    date = Column(DateTime, default=datetime.now)
+
+
 class WarehouseItem(Base):
     __tablename__ = "warehouse_items"
 
