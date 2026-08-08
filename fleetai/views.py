@@ -3297,14 +3297,14 @@ async function saveDriverDebt(carCode,detach){
   const calc=car.driver_payment||{};
   const suggested=Number(calc.amount_due||0);
   const entered=prompt(
-    `Долг водителя ${car.driver} по машине ${carCode}.\n`+
-    `Расчёт системы: ${rub(suggested)}.\n`+
+    `Долг водителя ${car.driver} по машине ${carCode}.\\n`+
+    `Расчёт системы: ${rub(suggested)}.\\n`+
     `Укажи сумму долга:`,
     String(suggested||'')
   );
   if(entered===null)return;
 
-  const amount=Number(String(entered).replace(/\s/g,''));
+  const amount=Number(String(entered).replace(/\\s/g,''));
   if(!Number.isFinite(amount) || amount<=0){
     alert('Укажи правильную сумму долга');
     return;
@@ -3336,12 +3336,12 @@ async function saveDriverDebt(carCode,detach){
 
 async function payDriverDebt(debtId,balance){
   const entered=prompt(
-    `Остаток долга: ${rub(balance)}.\nСколько оплатил водитель?`,
+    `Остаток долга: ${rub(balance)}.\\nСколько оплатил водитель?`,
     ''
   );
   if(entered===null)return;
 
-  const amount=Number(String(entered).replace(/\s/g,''));
+  const amount=Number(String(entered).replace(/\\s/g,''));
   if(!Number.isFinite(amount) || amount<=0){
     alert('Укажи сумму оплаты');
     return;
@@ -3366,10 +3366,10 @@ async function showDriverDebtHistory(debtId,driverName){
     return;
   }
   alert(
-    `История оплат — ${driverName}\n\n`+
+    `История оплат — ${driverName}\\n\\n`+
     rows.map(row=>
       `${driverDebtDate(row.date)} — ${rub(row.amount)}${row.comment?' — '+row.comment:''}`
-    ).join('\n')
+    ).join('\\n')
   );
 }
 
