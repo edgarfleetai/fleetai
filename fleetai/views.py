@@ -18,6 +18,7 @@ input.msg{width:78%;font-size:18px}
 button{padding:10px 14px;font-size:15px;border:0;border-radius:10px;background:#2563eb;color:white;cursor:pointer}
 .danger{background:#dc2626}
 .small{padding:6px 9px;font-size:12px}
+.driver-period-actions{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}
 table{width:100%;border-collapse:collapse}
 td,th{padding:9px;border-bottom:1px solid #eee;text-align:left}
 .badge{padding:4px 8px;border-radius:999px;background:#e0f2fe;color:#0369a1;font-size:12px}
@@ -3031,6 +3032,50 @@ async function markDriverPeriodPaid(
   }
 }
 
+async function markDriverPeriodPartial(
+  carCode,
+  periodStart,
+  periodEnd,
+  periodAmount
+){
+  const entered=prompt(
+    `Сумма недели: ${rub(periodAmount)}.\nСколько водитель оплатил сейчас?`,
+    ''
+  );
+  if(entered===null)return;
+
+  const amount=Number(String(entered).replace(/\s/g,''));
+  if(!Number.isFinite(amount) || amount<=0){
+    alert('Укажи сумму частичной оплаты');
+    return;
+  }
+  if(amount>=Number(periodAmount||0)){
+    alert('Для полной оплаты используй кнопку «Оплачено»');
+    return;
+  }
+
+  if(!confirm(
+    `Записать частичную оплату ${rub(amount)}? Остаток перейдёт в базу должников.`
+  ))return;
+
+  const result=await api('/api/mark-driver-period-partial',{
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({
+      car_code:carCode,
+      period_start:periodStart,
+      period_end:periodEnd,
+      amount:Math.round(amount)
+    })
+  });
+
+  alert(result.message||'');
+  if(result.ok){
+    await loadCars();
+    await loadDriverDebts();
+  }
+}
+
 async function markPaymentPaid(code){
   if(!confirm(`Подтвердить получение оплаты от машины ${code}?`))return;
   const result=await api('/api/mark-driver-payment-paid',{
@@ -3074,16 +3119,29 @@ function overduePeriodsHtml(carCode,calc){
             ${
               index===0
                 ? `
-                  <button
-                    class="small"
-                    onclick="markDriverPeriodPaid(
-                      '${carCode}',
-                      '${period.period_start}',
-                      '${period.period_end}'
-                    )"
-                  >
-                    Оплачено
-                  </button>
+                  <div class="driver-period-actions">
+                    <button
+                      class="small"
+                      onclick="markDriverPeriodPaid(
+                        '${carCode}',
+                        '${period.period_start}',
+                        '${period.period_end}'
+                      )"
+                    >
+                      Оплачено
+                    </button>
+                    <button
+                      class="secondary small"
+                      onclick="markDriverPeriodPartial(
+                        '${carCode}',
+                        '${period.period_start}',
+                        '${period.period_end}',
+                        ${Number(period.amount||0)}
+                      )"
+                    >
+                      Оплачено частично
+                    </button>
+                  </div>
                 `
                 : `
                   <span class="raw">
@@ -3177,6 +3235,11 @@ function renderDriverPayments(carsList){
             <div class="raw">
               начисляется по дням
             </div>
+            ${
+              Number(calc.overdue_periods_count||0)===0 && Number(calc.current_amount||0)>0
+                ? `<button class="small" onclick="markPaymentPaid('${car.code}')">Оплачено</button>`
+                : ''
+            }
           </td>
 
           <td>
@@ -3202,21 +3265,14 @@ function renderDriverPayments(carsList){
               Изменить
             </button>
             ${car.driver ? `
-              <button class="secondary" onclick="saveDriverDebt('${car.code}',false)">
+              <button class="danger" onclick="saveDriverDebt('${car.code}',true)">
                 Зафиксировать долг
-              </button>
-              <button class="danger small" onclick="saveDriverDebt('${car.code}',true)">
-                Снять + долг
               </button>
             ` : ''}
             ${
               Number(calc.overdue_periods_count||0)>0
-                ? '<span class="raw">Закрой недели по очереди</span>'
-                : `
-                  <button onclick="markPaymentPaid('${car.code}')">
-                    Оплачено
-                  </button>
-                `
+                ? '<span class="raw">Оплату отмечай рядом с долгом</span>'
+                : ''
             }
           </td>
         </tr>
@@ -3313,7 +3369,7 @@ async function saveDriverDebt(carCode,detach){
   const reason=prompt('Причина долга:','Долг по аренде')||'Долг по аренде';
 
   if(detach && !confirm(
-    `Сохранить долг ${rub(amount)} за ${car.driver} и снять водителя с машины ${carCode}?`
+    `Машина ${carCode} забрана у ${car.driver}. Зафиксировать долг ${rub(amount)} и освободить машину?`
   ))return;
 
   const result=await api('/api/driver-debt-from-car',{

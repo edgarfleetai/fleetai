@@ -1551,6 +1551,130 @@ def check_driver_payments():
 
 
 
+@bp.route("/api/mark-driver-period-partial", methods=["POST"])
+def mark_driver_period_partial():
+    data = request.get_json(silent=True) or request.form
+
+    car_code = normalize_code(
+        data.get("car_code") or data.get("code") or ""
+    )
+    period_start_raw = (data.get("period_start") or "").strip()
+    period_end_raw = (data.get("period_end") or "").strip()
+
+    try:
+        payment_amount = int(data.get("amount") or 0)
+    except (TypeError, ValueError):
+        payment_amount = 0
+
+    if not car_code:
+        return jsonify({"ok": False, "message": "Не указан номер машины"}), 400
+
+    if payment_amount <= 0:
+        return jsonify({"ok": False, "message": "Укажи сумму частичной оплаты"}), 400
+
+    session = Session()
+
+    try:
+        car = find_car(session, car_code)
+        if not car:
+            return jsonify({"ok": False, "message": f"Машина {car_code} не найдена"}), 404
+
+        driver_name = (getattr(car, "driver", "") or "").strip()
+        if not driver_name:
+            return jsonify({"ok": False, "message": "У машины не указан водитель"}), 400
+
+        calculation = calculate_driver_payment(session, car)
+        overdue_periods = calculation.get("overdue_periods") or []
+        if not overdue_periods:
+            return jsonify({"ok": False, "message": "У этой машины нет просроченного периода"}), 400
+
+        earliest = overdue_periods[0]
+        expected_start = parse_iso_date(earliest.get("period_start"))
+        expected_end = parse_iso_date(earliest.get("period_end"))
+        requested_start = parse_iso_date(period_start_raw) or expected_start
+        requested_end = parse_iso_date(period_end_raw) or expected_end
+
+        if requested_start != expected_start or requested_end != expected_end:
+            return jsonify({
+                "ok": False,
+                "message": (
+                    "Сначала нужно обработать самую раннюю неделю: "
+                    f"{expected_start.strftime('%d.%m.%Y')} — "
+                    f"{expected_end.strftime('%d.%m.%Y')}"
+                ),
+            }), 400
+
+        period = calculate_rental_interval(session, car, expected_start, expected_end)
+        full_amount = max(int(period.get("amount") or 0), 0)
+
+        if full_amount <= 0:
+            return jsonify({"ok": False, "message": "За этот период нет суммы к оплате"}), 400
+
+        if payment_amount >= full_amount:
+            return jsonify({
+                "ok": False,
+                "message": "Это уже полная оплата. Нажми «Оплачено».",
+            }), 400
+
+        remaining = full_amount - payment_amount
+        period_label = (
+            f"{expected_start.strftime('%d.%m.%Y')} — "
+            f"{expected_end.strftime('%d.%m.%Y')}"
+        )
+
+        debt = DriverDebt(
+            driver_name=driver_name,
+            car_code=car.code,
+            original_amount=full_amount,
+            paid_amount=payment_amount,
+            balance=remaining,
+            status="open",
+            reason=f"Недоплата аренды за период {period_label}",
+            comment=(
+                f"Частичная оплата {payment_amount} ₽ из {full_amount} ₽. "
+                f"Остаток {remaining} ₽."
+            ),
+        )
+        session.add(debt)
+        session.flush()
+
+        session.add(DriverDebtPayment(
+            debt_id=debt.id,
+            driver_name=driver_name,
+            car_code=car.code,
+            amount=payment_amount,
+            comment=f"Частичная оплата аренды за период {period_label}",
+        ))
+
+        # Период переносим в историю задолженности, чтобы он не висел второй раз
+        # среди просроченных недель. Оставшаяся сумма живёт в DriverDebt.
+        car.last_payment_date = expected_end.isoformat()
+        car.next_payment_date = (expected_end + timedelta(days=7)).isoformat()
+
+        session.commit()
+
+        return jsonify({
+            "ok": True,
+            "message": (
+                f"Частичная оплата {payment_amount:,} ₽ записана. "
+                f"Остаток долга: {remaining:,} ₽"
+            ).replace(",", " "),
+            "debt_id": debt.id,
+            "balance": remaining,
+            "paid_amount": payment_amount,
+            "period_amount": full_amount,
+        })
+
+    except Exception as error:
+        session.rollback()
+        return jsonify({
+            "ok": False,
+            "message": f"Не удалось записать частичную оплату: {type(error).__name__}: {error}",
+        }), 500
+    finally:
+        session.close()
+
+
 @bp.route("/api/mark-driver-period-paid", methods=["POST"])
 def mark_driver_period_paid():
     data = request.get_json(silent=True) or request.form
