@@ -2,6 +2,7 @@ import os
 import io
 import re
 import requests
+import uuid
 
 from pathlib import Path
 from urllib.parse import unquote
@@ -45,6 +46,7 @@ from .models import (
     DriverDebt,
     DriverDebtPayment,
     DriverWalletTransaction,
+    DriverBankPayment,
 )
 from .utils import only_int, normalize_code, find_car
 from .parser import parse_message
@@ -7089,6 +7091,81 @@ def api_driver_mvp(code):
         return jsonify({"ok": True, "car": {"code": car.code, "brand": car.brand or "", "model": car.model or "", "plate": car.plate or "", "driver": car.driver or "", "daily_rent": effective_daily_rent(car)}, **driver_wallet_snapshot(session, car), "blocking": driver_blocking_preview(session, car)})
     finally: session.close()
 
+def _apply_driver_bank_payment(session, car, payment):
+    """Post a confirmed bank payment exactly once."""
+    if payment.status == "paid":
+        return False, 0
+    now = moscow_now().replace(tzinfo=None)
+    amount = int(payment.amount or 0)
+    session.add(DriverWalletTransaction(
+        driver_name=car.driver or payment.driver_name or "", car_code=car.code,
+        amount=amount, transaction_type="topup", source="bank_simulator",
+        external_id=payment.payment_id,
+        comment="Оплата через эмулятор банковского webhook", date=now,
+    ))
+    op = Operation(
+        date=now, car_code=car.code, type="income", category="Аренда",
+        description=f"Оплата аренды водителем {car.driver or payment.driver_name or ''} (банк)",
+        amount=amount, raw_message=f"[BANK_SIMULATOR] {payment.payment_id} {car.code} +{amount} ₽",
+    )
+    session.add(op); session.flush()
+    session.add(Income(operation_id=op.id, car_code=car.code, date=now, amount=amount,
+                       income_type="Оплата аренды через банк"))
+    calculation = calculate_driver_payment(session, car)
+    due_before = max(int(calculation.get("amount_due", 0) or 0), 0)
+    applied = 0
+    if due_before > 0 and amount >= due_before:
+        today = moscow_now().date(); new_period_start = today + timedelta(days=1)
+        car.last_payment_date = new_period_start.isoformat()
+        weekday = int(getattr(car, "payment_weekday", 0) or 0)
+        days_until_due = (weekday - new_period_start.weekday()) % 7 or 7
+        car.next_payment_date = (new_period_start + timedelta(days=days_until_due)).isoformat()
+        applied = due_before
+        session.add(DriverWalletTransaction(
+            driver_name=car.driver or "", car_code=car.code, amount=-applied,
+            transaction_type="rent_payment", source="bank_simulator_system",
+            external_id=payment.payment_id, comment="Зачтено в оплату аренды (банк)", date=now,
+        ))
+    payment.status="paid"; payment.paid_at=now
+    return True, applied
+
+@bp.route("/api/driver-mvp/<code>/bank-payment", methods=["POST"])
+def api_driver_create_bank_payment(code):
+    allowed=os.getenv("DRIVER_MVP_CAR","665")
+    if normalize_code(code)!=normalize_code(allowed): return jsonify({"ok":False,"message":"MVP включён только для тестовой машины"}),403
+    data=request.get_json(silent=True) or {}
+    try: amount=int(data.get("amount") or 0)
+    except (TypeError,ValueError): amount=0
+    if amount<=0 or amount>200000: return jsonify({"ok":False,"message":"Сумма должна быть от 1 до 200 000 ₽"}),400
+    session=Session()
+    try:
+        car=find_car(session,code)
+        if not car: return jsonify({"ok":False,"message":"Машина не найдена"}),404
+        pid="pay_"+uuid.uuid4().hex[:20]
+        row=DriverBankPayment(payment_id=pid,car_code=car.code,driver_name=car.driver or "",amount=amount,status="pending",provider="simulator",created_at=moscow_now().replace(tzinfo=None))
+        session.add(row); session.commit()
+        return jsonify({"ok":True,"payment_id":pid,"amount":amount,"status":"pending","message":"Платёж создан. Пока деньги НЕ зачислены."})
+    except Exception as e:
+        session.rollback(); return jsonify({"ok":False,"message":f"Ошибка создания платежа: {e}"}),500
+    finally: session.close()
+
+@bp.route("/api/bank-simulator/webhook", methods=["POST"])
+def api_bank_simulator_webhook():
+    data=request.get_json(silent=True) or {}; pid=(data.get("payment_id") or "").strip()
+    session=Session()
+    try:
+        payment=session.query(DriverBankPayment).filter(DriverBankPayment.payment_id==pid).first()
+        if not payment: return jsonify({"ok":False,"message":"Неизвестный payment_id"}),404
+        car=find_car(session,payment.car_code)
+        if not car: return jsonify({"ok":False,"message":"Машина не найдена"}),404
+        if payment.status=="paid":
+            return jsonify({"ok":True,"duplicate":True,"message":"Webhook уже обработан ранее. Повторного зачисления нет.","payment_id":pid,**driver_wallet_snapshot(session,car)})
+        posted,applied=_apply_driver_bank_payment(session,car,payment); session.commit()
+        return jsonify({"ok":True,"duplicate":False,"message":f"Банк подтвердил +{payment.amount:,} ₽. Платёж зачислен один раз.","payment_id":pid,"payment_applied":applied,**driver_wallet_snapshot(session,car)})
+    except Exception as e:
+        session.rollback(); return jsonify({"ok":False,"message":f"Ошибка webhook: {e}"}),500
+    finally: session.close()
+
 @bp.route("/api/driver-mvp/<code>/test-topup", methods=["POST"])
 def api_driver_mvp_test_topup(code):
     allowed = os.getenv("DRIVER_MVP_CAR", "665")
@@ -7244,10 +7321,28 @@ def api_driver_mvp_clear_test_debt(code):
             session.delete(op)
             ledger_deleted += 1
 
+        # Clear bank-simulator records and their mirrored finance rows too.
+        bank_rows = session.query(DriverBankPayment).filter(func.trim(DriverBankPayment.car_code) == code_n).all()
+        bank_deleted = len(bank_rows)
+        for row in bank_rows:
+            session.delete(row)
+        bank_wallet = session.query(DriverWalletTransaction).filter(
+            func.trim(DriverWalletTransaction.car_code) == code_n,
+            DriverWalletTransaction.source.in_(["bank_simulator", "bank_simulator_system"])
+        ).all()
+        for row in bank_wallet:
+            session.delete(row); wallet_deleted += 1
+        bank_ops = session.query(Operation).filter(
+            func.trim(Operation.car_code) == code_n, Operation.raw_message.like("[BANK_SIMULATOR]%")
+        ).all()
+        for op in bank_ops:
+            session.query(Income).filter(Income.operation_id == op.id).delete(synchronize_session=False)
+            session.delete(op); ledger_deleted += 1
+
         session.commit()
         return jsonify({
             "ok": True,
-            "message": f"Тест очищен: удалено {wallet_deleted} тестовых записей и {ledger_deleted} тестовых оплат",
+            "message": f"Тест очищен: {wallet_deleted} записей кошелька, {ledger_deleted} тестовых оплат, {bank_deleted} банковских тестов",
             **driver_wallet_snapshot(session, car),
             "blocking": driver_blocking_preview(session, car),
         })
@@ -7292,8 +7387,8 @@ def api_driver_blocking_preview(code):
 def driver_portal_mvp():
     code = os.getenv("DRIVER_MVP_CAR", "665")
     html = r'''<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Клевер Парк — водитель</title><style>
-*{box-sizing:border-box}body{margin:0;background:#f4f7f6;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#17211d}.wrap{max-width:520px;margin:auto;padding:20px}.brand{font-size:25px;font-weight:800;margin:8px 0 20px}.card{background:#fff;border-radius:18px;padding:20px;margin-bottom:14px;box-shadow:0 6px 24px rgba(0,0,0,.06)}.muted{color:#708078;font-size:14px}.car{font-size:20px;font-weight:750}.balance{font-size:36px;font-weight:850;margin:8px 0}.good{color:#14804a}.bad{color:#c23b32}.grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:14px}.mini{background:#f5f7f6;border-radius:12px;padding:12px}.mini b{display:block;font-size:18px;margin-top:5px}.amounts{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}.amounts button{border:1px solid #dce4e0;background:#fff;border-radius:11px;padding:12px;font-weight:700}.tx{display:flex;justify-content:space-between;border-top:1px solid #edf0ee;padding:12px 0}.notice{font-size:13px;background:#fff5d8;border-radius:12px;padding:12px;margin-bottom:14px}.spinner{text-align:center;padding:30px}</style></head><body><div class="wrap"><div class="brand">🍀 Клевер Парк</div><div class="notice">Тестовый кабинет машины __CODE__. Реальных банковских списаний пока нет. <b>Версия V5.3</b></div><div id="app" class="spinner">Загрузка…</div></div><script>
-const code='__CODE__',rub=n=>new Intl.NumberFormat('ru-RU').format(n||0)+' ₽';async function load(){const r=await fetch('/api/driver-mvp/'+code),d=await r.json();if(!d.ok){app.innerHTML=d.message;return}render(d)}function render(d){const b=d.balance||0;app.className='';app.innerHTML=`<div class="card"><div class="muted">${d.car.driver||'Водитель'}</div><div class="car">${d.car.brand} ${d.car.model} · ${d.car.code}</div><div class="muted">${d.car.plate||''}</div></div><div class="card"><b>${d.blocking.status==='active'?'🟢 Автомобиль активен':'🟡 Есть задолженность'}</b><div class="muted" style="margin-top:6px">${d.blocking.status_text}</div></div><div class="card"><div class="muted">Баланс после начислений</div><div class="balance ${b>=0?'good':'bad'}">${rub(b)}</div><div class="grid"><div class="mini"><span class="muted">Пополнено</span><b>${rub(d.wallet_total)}</b></div><div class="mini"><span class="muted">К оплате</span><b>${rub(d.total_due)}</b></div><div class="mini"><span class="muted">Аренда / сутки</span><b>${rub(d.car.daily_rent)}</b></div><div class="mini"><span class="muted">Отдельный долг</span><b>${rub(d.separate_debt)}</b></div></div></div><div class="card"><b>Тест задолженности</b><p class="muted">Не меняет реальные финансы и не отправляет команду Wialon.</p><div class="amounts"><button onclick="testDebt()">🧪 Создать долг</button><button onclick="clearTestDebt()">🧹 Очистить все тесты</button></div></div><div class="card"><b>Тестовое пополнение</b><p class="muted">Имитирует будущий платёж банка.</p><div class="amounts"><button onclick="topup(1857)">1 857</button><button onclick="topup(5000)">5 000</button><button onclick="topup(13000)">13 000</button></div></div><div class="card"><b>История пополнений</b>${d.transactions.length?d.transactions.map(t=>`<div class="tx"><div><b>${t.amount>=0?'+':''}${rub(t.amount)}</b><div class="muted">${t.date}</div></div><div class="muted">${t.source}</div></div>`).join(''):'<p class="muted">Пока пусто</p>'}</div>`}async function testDebt(){if(!confirm('Создать тестовый долг? Реальные финансы и Wialon не изменятся.'))return;const r=await fetch('/api/driver-mvp/'+code+'/test-debt',{method:'POST'}),d=await r.json();if(!d.ok){alert(d.message);return}load()}async function clearTestDebt(){if(!confirm('Удалить ВСЕ тестовые долги, пополнения и списания 665? Реальные записи не будут удалены.'))return;const r=await fetch('/api/driver-mvp/'+code+'/clear-test-debt',{method:'POST'}),d=await r.json();if(!d.ok){alert(d.message);return}alert(d.message);load()}async function topup(amount){if(!confirm('Тестово пополнить баланс на '+rub(amount)+'?'))return;const r=await fetch('/api/driver-mvp/'+code+'/test-topup',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({amount})}),d=await r.json();if(!d.ok){alert(d.message);return}load()}load();</script></body></html>'''
+*{box-sizing:border-box}body{margin:0;background:#f4f7f6;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#17211d}.wrap{max-width:520px;margin:auto;padding:20px}.brand{font-size:25px;font-weight:800;margin:8px 0 20px}.card{background:#fff;border-radius:18px;padding:20px;margin-bottom:14px;box-shadow:0 6px 24px rgba(0,0,0,.06)}.muted{color:#708078;font-size:14px}.car{font-size:20px;font-weight:750}.balance{font-size:36px;font-weight:850;margin:8px 0}.good{color:#14804a}.bad{color:#c23b32}.grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:14px}.mini{background:#f5f7f6;border-radius:12px;padding:12px}.mini b{display:block;font-size:18px;margin-top:5px}.amounts{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}.amounts button{border:1px solid #dce4e0;background:#fff;border-radius:11px;padding:12px;font-weight:700}.tx{display:flex;justify-content:space-between;border-top:1px solid #edf0ee;padding:12px 0}.notice{font-size:13px;background:#fff5d8;border-radius:12px;padding:12px;margin-bottom:14px}.spinner{text-align:center;padding:30px}</style></head><body><div class="wrap"><div class="brand">🍀 Клевер Парк</div><div class="notice">Тестовый кабинет машины __CODE__. Реальных банковских списаний пока нет. <b>Версия V6</b></div><div id="app" class="spinner">Загрузка…</div></div><script>
+const code='__CODE__',rub=n=>new Intl.NumberFormat('ru-RU').format(n||0)+' ₽';async function load(){const r=await fetch('/api/driver-mvp/'+code),d=await r.json();if(!d.ok){app.innerHTML=d.message;return}render(d)}function render(d){const b=d.balance||0;app.className='';app.innerHTML=`<div class="card"><div class="muted">${d.car.driver||'Водитель'}</div><div class="car">${d.car.brand} ${d.car.model} · ${d.car.code}</div><div class="muted">${d.car.plate||''}</div></div><div class="card"><b>${d.blocking.status==='active'?'🟢 Автомобиль активен':'🟡 Есть задолженность'}</b><div class="muted" style="margin-top:6px">${d.blocking.status_text}</div></div><div class="card"><div class="muted">Баланс после начислений</div><div class="balance ${b>=0?'good':'bad'}">${rub(b)}</div><div class="grid"><div class="mini"><span class="muted">Пополнено</span><b>${rub(d.wallet_total)}</b></div><div class="mini"><span class="muted">К оплате</span><b>${rub(d.total_due)}</b></div><div class="mini"><span class="muted">Аренда / сутки</span><b>${rub(d.car.daily_rent)}</b></div><div class="mini"><span class="muted">Отдельный долг</span><b>${rub(d.separate_debt)}</b></div></div></div><div class="card"><b>Тест задолженности</b><p class="muted">Не меняет реальные финансы и не отправляет команду Wialon.</p><div class="amounts"><button onclick="testDebt()">🧪 Создать долг</button><button onclick="clearTestDebt()">🧹 Очистить все тесты</button></div></div><div class="card"><b>🏦 Оплата через банк — V6</b><p class="muted">Шаг 1 создаёт уникальный payment_id. Шаг 2 имитирует webhook банка.</p><div class="amounts"><button onclick="createBankPayment(5000)">Создать платёж 5 000 ₽</button></div><div id="bankbox" class="muted" style="margin-top:10px">Платёж ещё не создан.</div></div><div class="card"><b>Старое тестовое пополнение</b><p class="muted">Оставлено для сравнения.</p><div class="amounts"><button onclick="topup(1857)">1 857</button><button onclick="topup(5000)">5 000</button><button onclick="topup(13000)">13 000</button></div></div><div class="card"><b>История пополнений</b>${d.transactions.length?d.transactions.map(t=>`<div class="tx"><div><b>${t.amount>=0?'+':''}${rub(t.amount)}</b><div class="muted">${t.date}</div></div><div class="muted">${t.source}</div></div>`).join(''):'<p class="muted">Пока пусто</p>'}</div>`}async function testDebt(){if(!confirm('Создать тестовый долг? Реальные финансы и Wialon не изменятся.'))return;const r=await fetch('/api/driver-mvp/'+code+'/test-debt',{method:'POST'}),d=await r.json();if(!d.ok){alert(d.message);return}load()}async function clearTestDebt(){if(!confirm('Удалить ВСЕ тестовые долги, пополнения и списания 665? Реальные записи не будут удалены.'))return;const r=await fetch('/api/driver-mvp/'+code+'/clear-test-debt',{method:'POST'}),d=await r.json();if(!d.ok){alert(d.message);return}alert(d.message);load()}let pendingPaymentId=null;async function createBankPayment(amount){const r=await fetch('/api/driver-mvp/'+code+'/bank-payment',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({amount})}),d=await r.json();if(!d.ok){alert(d.message);return}pendingPaymentId=d.payment_id;bankbox.innerHTML='<b>Ожидает оплаты:</b> '+d.amount.toLocaleString('ru-RU')+' ₽<br><small>'+d.payment_id+'</small><br><button style="margin-top:8px" onclick="confirmBankPayment()">🏦 Банк сообщил: ОПЛАЧЕНО</button><button style="margin-top:8px" onclick="confirmBankPayment()">🔁 Повторить тот же webhook</button>'}async function confirmBankPayment(){if(!pendingPaymentId){alert('Сначала создайте платёж');return}const r=await fetch('/api/bank-simulator/webhook',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({payment_id:pendingPaymentId})}),d=await r.json();alert(d.message);load()}async function topup(amount){if(!confirm('Тестово пополнить баланс на '+rub(amount)+'?'))return;const r=await fetch('/api/driver-mvp/'+code+'/test-topup',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({amount})}),d=await r.json();if(!d.ok){alert(d.message);return}load()}load();</script></body></html>'''
     response = make_response(render_template_string(html.replace("__CODE__", code)))
     response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
     response.headers["Pragma"] = "no-cache"

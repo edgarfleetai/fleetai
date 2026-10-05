@@ -228,6 +228,19 @@ class DriverWalletTransaction(Base):
     date = Column(DateTime, default=datetime.now)
 
 
+
+class DriverBankPayment(Base):
+    __tablename__ = "driver_bank_payments"
+    id = Column(Integer, primary_key=True)
+    payment_id = Column(String, unique=True, nullable=False)
+    car_code = Column(String, nullable=False)
+    driver_name = Column(String, default="")
+    amount = Column(Integer, default=0)
+    status = Column(String, default="pending")
+    provider = Column(String, default="simulator")
+    created_at = Column(DateTime, default=datetime.now)
+    paid_at = Column(DateTime)
+
 class WarehouseItem(Base):
     __tablename__ = "warehouse_items"
 
