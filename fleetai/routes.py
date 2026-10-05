@@ -7669,7 +7669,7 @@ def api_tbank_payment_test():
             "ok": False,
             "message": str(error),
         }), 500
- @bp.route("/api/tbank/webhook", methods=["POST"])
+@bp.route("/api/tbank/webhook", methods=["POST"])
 def tbank_webhook():
     from .tbank import verify_notification
 
