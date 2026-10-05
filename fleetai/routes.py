@@ -7174,3 +7174,69 @@ def driver_portal_mvp():
 *{box-sizing:border-box}body{margin:0;background:#f4f7f6;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#17211d}.wrap{max-width:520px;margin:auto;padding:20px}.brand{font-size:25px;font-weight:800;margin:8px 0 20px}.card{background:#fff;border-radius:18px;padding:20px;margin-bottom:14px;box-shadow:0 6px 24px rgba(0,0,0,.06)}.muted{color:#708078;font-size:14px}.car{font-size:20px;font-weight:750}.balance{font-size:36px;font-weight:850;margin:8px 0}.good{color:#14804a}.bad{color:#c23b32}.grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:14px}.mini{background:#f5f7f6;border-radius:12px;padding:12px}.mini b{display:block;font-size:18px;margin-top:5px}.amounts{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}.amounts button{border:1px solid #dce4e0;background:#fff;border-radius:11px;padding:12px;font-weight:700}.tx{display:flex;justify-content:space-between;border-top:1px solid #edf0ee;padding:12px 0}.notice{font-size:13px;background:#fff5d8;border-radius:12px;padding:12px;margin-bottom:14px}.spinner{text-align:center;padding:30px}</style></head><body><div class="wrap"><div class="brand">🍀 Клевер Парк</div><div class="notice">Тестовый кабинет машины __CODE__. Реальных банковских списаний пока нет.</div><div id="app" class="spinner">Загрузка…</div></div><script>
 const code='__CODE__',rub=n=>new Intl.NumberFormat('ru-RU').format(n||0)+' ₽';async function load(){const r=await fetch('/api/driver-mvp/'+code),d=await r.json();if(!d.ok){app.innerHTML=d.message;return}render(d)}function render(d){const b=d.balance||0;app.className='';app.innerHTML=`<div class="card"><div class="muted">${d.car.driver||'Водитель'}</div><div class="car">${d.car.brand} ${d.car.model} · ${d.car.code}</div><div class="muted">${d.car.plate||''}</div></div><div class="card"><div class="muted">Баланс после начислений</div><div class="balance ${b>=0?'good':'bad'}">${rub(b)}</div><div class="grid"><div class="mini"><span class="muted">Пополнено</span><b>${rub(d.wallet_total)}</b></div><div class="mini"><span class="muted">К оплате</span><b>${rub(d.total_due)}</b></div><div class="mini"><span class="muted">Аренда / сутки</span><b>${rub(d.car.daily_rent)}</b></div><div class="mini"><span class="muted">Отдельный долг</span><b>${rub(d.separate_debt)}</b></div></div></div><div class="card"><b>Тестовое пополнение</b><p class="muted">Имитирует будущий платёж банка.</p><div class="amounts"><button onclick="topup(1857)">1 857</button><button onclick="topup(5000)">5 000</button><button onclick="topup(13000)">13 000</button></div></div><div class="card"><b>История пополнений</b>${d.transactions.length?d.transactions.map(t=>`<div class="tx"><div><b>${t.amount>=0?'+':''}${rub(t.amount)}</b><div class="muted">${t.date}</div></div><div class="muted">${t.source}</div></div>`).join(''):'<p class="muted">Пока пусто</p>'}</div>`}async function topup(amount){if(!confirm('Тестово пополнить баланс на '+rub(amount)+'?'))return;const r=await fetch('/api/driver-mvp/'+code+'/test-topup',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({amount})}),d=await r.json();if(!d.ok){alert(d.message);return}load()}load();</script></body></html>'''
     return render_template_string(html.replace("__CODE__", code))
+
+# --- Wialon diagnostic integration (V3) ---
+WIALON_API_URL = os.environ.get("WIALON_API_URL", "https://hst-api.wialon.com/wialon/ajax.html")
+
+
+def _wialon_call(svc, params, sid=None):
+    payload = {
+        "svc": svc,
+        "params": __import__("json").dumps(params, ensure_ascii=False),
+    }
+    if sid:
+        payload["sid"] = sid
+    response = requests.get(WIALON_API_URL, params=payload, timeout=20)
+    response.raise_for_status()
+    return response.json()
+
+
+@bp.route("/api/wialon/units", methods=["GET"])
+def api_wialon_units():
+    """Safely test Wialon token and list visible AVL units without exposing the token."""
+    token = (os.environ.get("WIALON_TOKEN") or "").strip()
+    if not token:
+        return jsonify({"ok": False, "message": "WIALON_TOKEN не задан в Render Environment"}), 500
+
+    try:
+        login = _wialon_call("token/login", {"token": token})
+        if not isinstance(login, dict) or login.get("error") is not None:
+            return jsonify({"ok": False, "stage": "login", "wialon": login}), 502
+
+        sid = login.get("eid")
+        if not sid:
+            return jsonify({"ok": False, "stage": "login", "message": "Wialon не вернул session id"}), 502
+
+        found = _wialon_call("core/search_items", {
+            "spec": {
+                "itemsType": "avl_unit",
+                "propName": "sys_name",
+                "propValueMask": "*",
+                "sortType": "sys_name",
+                "propType": "property",
+                "or_logic": False,
+            },
+            "force": 1,
+            "flags": 1,
+            "from": 0,
+            "to": 0,
+        }, sid=sid)
+
+        if not isinstance(found, dict) or found.get("error") is not None:
+            return jsonify({"ok": False, "stage": "search", "wialon": found}), 502
+
+        units = []
+        for item in found.get("items", []) or []:
+            units.append({"id": item.get("id"), "name": item.get("nm", "")})
+
+        target = next((u for u in units if "665" in (u.get("name") or "")), None)
+        return jsonify({
+            "ok": True,
+            "count": len(units),
+            "target_665": target,
+            "units": units,
+        })
+    except requests.RequestException as exc:
+        return jsonify({"ok": False, "stage": "http", "message": str(exc)}), 502
+    except Exception as exc:
+        return jsonify({"ok": False, "stage": "internal", "message": str(exc)}), 500
