@@ -7669,3 +7669,15 @@ def api_tbank_payment_test():
             "ok": False,
             "message": str(error),
         }), 500
+@bp.route("/api/tbank/webhook", methods=["POST"])
+def tbank_webhook():
+    try:
+        data = request.get_json(silent=True) or {}
+
+        print("T-BANK WEBHOOK:", data, flush=True)
+
+        return "OK", 200
+
+    except Exception as error:
+        print("T-BANK WEBHOOK ERROR:", str(error), flush=True)
+        return "ERROR", 500
