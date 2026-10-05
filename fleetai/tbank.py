@@ -124,11 +124,12 @@ def create_payment(amount_rubles, order_id, description="Оплата аренд
         raise ValueError("Сумма платежа должна быть больше 0")
 
     payload = {
-        "TerminalKey": TBANK_TERMINAL_KEY,
-        "Amount": amount_kopecks,
-        "OrderId": str(order_id),
-        "Description": description,
-    }
+    "TerminalKey": TBANK_TERMINAL_KEY,
+    "Amount": amount_kopecks,
+    "OrderId": str(order_id),
+    "Description": description,
+    "NotificationURL": "https://fleetai-1.onrender.com/api/tbank/webhook",
+}
     payload["Token"] = _acquiring_token(payload)
 
     response = requests.post(
