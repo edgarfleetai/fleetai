@@ -7480,41 +7480,36 @@ def _wialon_login_sid():
 
 
 def _send_665_engine_command(command_type):
-    if command_type not in ("block_engine", "unblock_engine"):
+    """
+    Отправляет машине 665 ровно те custom TCP-команды,
+    которые настроены для этого объекта в Wialon.
+    """
+    commands = {
+        "block_engine": {
+            "name": "Блокировка",
+            "param": "S20,163017,1,1",
+        },
+        "unblock_engine": {
+            "name": "Снять блокировку",
+            "param": "S20,161052,0,0",
+        },
+    }
+
+    if command_type not in commands:
         raise ValueError("Недопустимая команда")
 
+    command = commands[command_type]
     sid = _wialon_login_sid()
 
     return _wialon_call("unit/send_cmd", {
         "itemId": WIALON_665_UNIT_ID,
-        "commandType": command_type,
-        "commandName": command_type,
-        "linkType": "",
-        "param": "",
+        "commandType": "custom_msg",
+        "commandName": command["name"],
+        "linkType": "tcp",
+        "param": command["param"],
         "timeout": 60,
         "flags": 0,
     }, sid=sid)
-
-
-# Диагностика объекта 665. Никаких команд автомобилю не отправляет.
-@bp.route("/api/wialon/665/diagnostic", methods=["GET"])
-def api_wialon_665_diagnostic():
-    try:
-        sid = _wialon_login_sid()
-        result = _wialon_call("core/search_item", {
-            "id": WIALON_665_UNIT_ID,
-            "flags": 4294967295,
-        }, sid=sid)
-
-        return jsonify({
-            "ok": True,
-            "unit_id": WIALON_665_UNIT_ID,
-            "data": result,
-        })
-    except requests.RequestException as exc:
-        return jsonify({"ok": False, "stage": "http", "message": str(exc)}), 502
-    except Exception as exc:
-        return jsonify({"ok": False, "stage": "internal", "message": str(exc)}), 500
 
 
 @bp.route("/api/wialon/665/command", methods=["POST"])
