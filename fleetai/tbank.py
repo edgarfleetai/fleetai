@@ -42,3 +42,41 @@ def get_accounts():
         )
 
     return response.json()
+from datetime import datetime, timedelta, timezone
+import uuid
+
+
+def get_statement(days=7):
+    account_number = "40802810300009284135"
+
+    now = datetime.now(timezone.utc)
+    date_from = now - timedelta(days=days)
+
+    url = f"{BASE_URL}/api/v1/statement"
+
+    params = {
+        "accountNumber": account_number,
+        "from": date_from.isoformat(),
+        "to": now.isoformat(),
+        "operationStatus": "Transaction",
+        "limit": 100,
+        "withBalances": "true",
+    }
+
+    headers = {
+        "Authorization": f"Bearer {TOKEN}",
+        "Accept": "application/json",
+        "X-Request-Id": str(uuid.uuid4()),
+    }
+
+    response = requests.get(
+        url,
+        headers=headers,
+        params=params,
+        timeout=30,
+        verify=CA_BUNDLE,
+    )
+
+    response.raise_for_status()
+
+    return response.json()
