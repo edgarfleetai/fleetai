@@ -7241,3 +7241,75 @@ def api_wialon_units():
         return jsonify({"ok": False, "stage": "http", "message": str(exc)}), 502
     except Exception as exc:
         return jsonify({"ok": False, "stage": "internal", "message": str(exc)}), 500
+
+# --- Wialon manual control pilot for unit 665 (V4) ---
+WIALON_665_UNIT_ID = int(os.environ.get("WIALON_665_UNIT_ID", "49896"))
+
+
+def _wialon_login_sid():
+    token = (os.environ.get("WIALON_TOKEN") or "").strip()
+    if not token:
+        raise RuntimeError("WIALON_TOKEN не задан в Render Environment")
+    login = _wialon_call("token/login", {"token": token})
+    if not isinstance(login, dict) or login.get("error") is not None:
+        raise RuntimeError(f"Ошибка авторизации Wialon: {login}")
+    sid = login.get("eid")
+    if not sid:
+        raise RuntimeError("Wialon не вернул session id")
+    return sid
+
+
+def _send_665_engine_command(command_type):
+    if command_type not in ("block_engine", "unblock_engine"):
+        raise ValueError("Недопустимая команда")
+    sid = _wialon_login_sid()
+    return _wialon_call("unit/send_cmd", {
+        "itemId": WIALON_665_UNIT_ID,
+        "commandType": command_type,
+        "commandName": command_type,
+        "linkType": "",
+        "param": "",
+        "timeout": 60,
+        "flags": 0,
+    }, sid=sid)
+
+
+@bp.route("/api/wialon/665/command", methods=["POST"])
+def api_wialon_665_command():
+    """Manual pilot only. Blocking requires explicit confirmation that 665 is parked and engine is off."""
+    data = request.get_json(silent=True) or {}
+    action = (data.get("action") or "").strip().lower()
+    if action not in ("block", "unblock"):
+        return jsonify({"ok": False, "message": "action должен быть block или unblock"}), 400
+
+    if action == "block" and data.get("safety_confirmation") != "PARKED_ENGINE_OFF_665":
+        return jsonify({
+            "ok": False,
+            "message": "Блокировка не отправлена: подтвердите, что 665 припаркована и двигатель выключен."
+        }), 409
+
+    command_type = "block_engine" if action == "block" else "unblock_engine"
+    try:
+        result = _send_665_engine_command(command_type)
+        if isinstance(result, dict) and result.get("error") is not None:
+            return jsonify({"ok": False, "stage": "send_cmd", "wialon": result}), 502
+        return jsonify({
+            "ok": True,
+            "unit_id": WIALON_665_UNIT_ID,
+            "action": action,
+            "message": "Команда передана Wialon. Проверьте фактическое состояние автомобиля 665."
+        })
+    except requests.RequestException as exc:
+        return jsonify({"ok": False, "stage": "http", "message": str(exc)}), 502
+    except Exception as exc:
+        return jsonify({"ok": False, "stage": "internal", "message": str(exc)}), 500
+
+
+@bp.route("/wialon-665")
+def wialon_665_control_page():
+    html = r'''<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>FleetAI — Wialon 665</title><style>
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#f4f7f6;color:#17211d;margin:0}.wrap{max-width:620px;margin:40px auto;padding:18px}.card{background:white;border-radius:18px;padding:22px;box-shadow:0 6px 24px rgba(0,0,0,.07)}h1{margin-top:0}.meta{color:#6d7b74}.warn{background:#fff3cd;border-radius:12px;padding:14px;margin:18px 0}.buttons{display:grid;grid-template-columns:1fr 1fr;gap:12px}.btn{border:0;border-radius:12px;padding:15px;font-size:16px;font-weight:750;cursor:pointer}.block{background:#b42318;color:#fff}.unblock{background:#157347;color:#fff}.result{margin-top:16px;padding:14px;border-radius:12px;background:#eef2f0;white-space:pre-wrap}.check{display:flex;gap:10px;align-items:flex-start;margin:14px 0} @media(max-width:520px){.buttons{grid-template-columns:1fr}}
+</style></head><body><div class="wrap"><div class="card"><h1>Управление 665</h1><div class="meta">Kia C665ХК 716 · Wialon Unit ID 49896</div><div class="warn"><b>Тестовый ручной режим.</b><br>Не отправляйте блокировку во время движения. Для первого теста автомобиль должен быть припаркован, двигатель выключен, ключ/зажигание выключены.</div><label class="check"><input id="safe" type="checkbox"> <span>Подтверждаю: машина 665 припаркована и двигатель выключен.</span></label><div class="buttons"><button class="btn block" onclick="send('block')">🔒 Заблокировать запуск</button><button class="btn unblock" onclick="send('unblock')">🔓 Разблокировать</button></div><div id="result" class="result">Команды ещё не отправлялись.</div></div></div><script>
+async function send(action){if(action==='block'&&!safe.checked){alert('Сначала подтвердите, что 665 припаркована и двигатель выключен.');return}if(!confirm(action==='block'?'Отправить команду блокировки запуска 665?':'Отправить команду разблокировки 665?'))return;result.textContent='Отправка…';const body={action};if(action==='block')body.safety_confirmation='PARKED_ENGINE_OFF_665';try{const r=await fetch('/api/wialon/665/command',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});const d=await r.json();result.textContent=JSON.stringify(d,null,2)}catch(e){result.textContent='Ошибка: '+e}}
+</script></body></html>'''
+    return render_template_string(html)
