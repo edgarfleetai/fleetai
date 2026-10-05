@@ -215,6 +215,19 @@ class DriverDebtPayment(Base):
     date = Column(DateTime, default=datetime.now)
 
 
+class DriverWalletTransaction(Base):
+    __tablename__ = "driver_wallet_transactions"
+    id = Column(Integer, primary_key=True)
+    driver_name = Column(String, default="")
+    car_code = Column(String, nullable=False)
+    amount = Column(Integer, default=0)
+    transaction_type = Column(String, default="topup")
+    source = Column(String, default="manual")
+    external_id = Column(String, default="")
+    comment = Column(Text)
+    date = Column(DateTime, default=datetime.now)
+
+
 class WarehouseItem(Base):
     __tablename__ = "warehouse_items"
 

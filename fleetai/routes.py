@@ -44,6 +44,7 @@ from .models import (
     WarehouseMovement,
     DriverDebt,
     DriverDebtPayment,
+    DriverWalletTransaction,
 )
 from .utils import only_int, normalize_code, find_car
 from .parser import parse_message
@@ -7058,3 +7059,59 @@ def api_operations():
     } for op in session.query(Operation).order_by(Operation.id.desc()).limit(80).all()]
     session.close()
     return jsonify(rows)
+
+# --- Driver portal MVP: test car 665 ---------------------------------------
+def driver_wallet_snapshot(session, car):
+    code = normalize_code(car.code)
+    wallet_total = session.query(func.coalesce(func.sum(DriverWalletTransaction.amount), 0)).filter(func.trim(DriverWalletTransaction.car_code) == code).scalar() or 0
+    calc = calculate_driver_payment(session, car)
+    rental_due = int(calc.get("amount_due", 0) or 0)
+    debt_rows = driver_debt_summary(session, car.driver or "") if car.driver else []
+    separate_debt = sum(int(row.get("balance", 0) or 0) for row in debt_rows)
+    total_due = rental_due + separate_debt
+    txs = session.query(DriverWalletTransaction).filter(func.trim(DriverWalletTransaction.car_code) == code).order_by(DriverWalletTransaction.id.desc()).limit(30).all()
+    return {
+        "wallet_total": int(wallet_total), "rental_due": rental_due,
+        "separate_debt": separate_debt, "total_due": total_due,
+        "balance": int(wallet_total) - total_due, "calculation": calc,
+        "transactions": [{"id": r.id, "amount": int(r.amount or 0), "type": r.transaction_type or "", "source": r.source or "", "comment": r.comment or "", "date": r.date.strftime("%d.%m.%Y %H:%M") if r.date else ""} for r in txs],
+    }
+
+@bp.route("/api/driver-mvp/<code>")
+def api_driver_mvp(code):
+    allowed = os.getenv("DRIVER_MVP_CAR", "665")
+    if normalize_code(code) != normalize_code(allowed):
+        return jsonify({"ok": False, "message": "MVP включён только для тестовой машины"}), 403
+    session = Session()
+    try:
+        car = find_car(session, code)
+        if not car: return jsonify({"ok": False, "message": "Машина не найдена"}), 404
+        return jsonify({"ok": True, "car": {"code": car.code, "brand": car.brand or "", "model": car.model or "", "plate": car.plate or "", "driver": car.driver or "", "daily_rent": effective_daily_rent(car)}, **driver_wallet_snapshot(session, car)})
+    finally: session.close()
+
+@bp.route("/api/driver-mvp/<code>/test-topup", methods=["POST"])
+def api_driver_mvp_test_topup(code):
+    allowed = os.getenv("DRIVER_MVP_CAR", "665")
+    if normalize_code(code) != normalize_code(allowed): return jsonify({"ok": False, "message": "MVP включён только для тестовой машины"}), 403
+    data = request.get_json(silent=True) or {}
+    try: amount = int(data.get("amount") or 0)
+    except (TypeError, ValueError): amount = 0
+    if amount <= 0 or amount > 200000: return jsonify({"ok": False, "message": "Сумма должна быть от 1 до 200 000 ₽"}), 400
+    session = Session()
+    try:
+        car = find_car(session, code)
+        if not car: return jsonify({"ok": False, "message": "Машина не найдена"}), 404
+        session.add(DriverWalletTransaction(driver_name=car.driver or "", car_code=car.code, amount=amount, transaction_type="topup", source="test", comment="Тестовое пополнение водительского кабинета"))
+        session.commit()
+        return jsonify({"ok": True, "message": f"Тестовое пополнение +{amount:,} ₽", **driver_wallet_snapshot(session, car)})
+    except Exception as error:
+        session.rollback(); return jsonify({"ok": False, "message": f"Ошибка пополнения: {error}"}), 500
+    finally: session.close()
+
+@bp.route("/driver")
+def driver_portal_mvp():
+    code = os.getenv("DRIVER_MVP_CAR", "665")
+    html = r'''<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Клевер Парк — водитель</title><style>
+*{box-sizing:border-box}body{margin:0;background:#f4f7f6;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#17211d}.wrap{max-width:520px;margin:auto;padding:20px}.brand{font-size:25px;font-weight:800;margin:8px 0 20px}.card{background:#fff;border-radius:18px;padding:20px;margin-bottom:14px;box-shadow:0 6px 24px rgba(0,0,0,.06)}.muted{color:#708078;font-size:14px}.car{font-size:20px;font-weight:750}.balance{font-size:36px;font-weight:850;margin:8px 0}.good{color:#14804a}.bad{color:#c23b32}.grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:14px}.mini{background:#f5f7f6;border-radius:12px;padding:12px}.mini b{display:block;font-size:18px;margin-top:5px}.amounts{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}.amounts button{border:1px solid #dce4e0;background:#fff;border-radius:11px;padding:12px;font-weight:700}.tx{display:flex;justify-content:space-between;border-top:1px solid #edf0ee;padding:12px 0}.notice{font-size:13px;background:#fff5d8;border-radius:12px;padding:12px;margin-bottom:14px}.spinner{text-align:center;padding:30px}</style></head><body><div class="wrap"><div class="brand">🍀 Клевер Парк</div><div class="notice">Тестовый кабинет машины __CODE__. Реальных банковских списаний пока нет.</div><div id="app" class="spinner">Загрузка…</div></div><script>
+const code='__CODE__',rub=n=>new Intl.NumberFormat('ru-RU').format(n||0)+' ₽';async function load(){const r=await fetch('/api/driver-mvp/'+code),d=await r.json();if(!d.ok){app.innerHTML=d.message;return}render(d)}function render(d){const b=d.balance||0;app.className='';app.innerHTML=`<div class="card"><div class="muted">${d.car.driver||'Водитель'}</div><div class="car">${d.car.brand} ${d.car.model} · ${d.car.code}</div><div class="muted">${d.car.plate||''}</div></div><div class="card"><div class="muted">Баланс после начислений</div><div class="balance ${b>=0?'good':'bad'}">${rub(b)}</div><div class="grid"><div class="mini"><span class="muted">Пополнено</span><b>${rub(d.wallet_total)}</b></div><div class="mini"><span class="muted">К оплате</span><b>${rub(d.total_due)}</b></div><div class="mini"><span class="muted">Аренда / сутки</span><b>${rub(d.car.daily_rent)}</b></div><div class="mini"><span class="muted">Отдельный долг</span><b>${rub(d.separate_debt)}</b></div></div></div><div class="card"><b>Тестовое пополнение</b><p class="muted">Имитирует будущий платёж банка.</p><div class="amounts"><button onclick="topup(1857)">1 857</button><button onclick="topup(5000)">5 000</button><button onclick="topup(13000)">13 000</button></div></div><div class="card"><b>История пополнений</b>${d.transactions.length?d.transactions.map(t=>`<div class="tx"><div><b>+${rub(t.amount)}</b><div class="muted">${t.date}</div></div><div class="muted">${t.source}</div></div>`).join(''):'<p class="muted">Пока пусто</p>'}</div>`}async function topup(amount){if(!confirm('Тестово пополнить баланс на '+rub(amount)+'?'))return;const r=await fetch('/api/driver-mvp/'+code+'/test-topup',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({amount})}),d=await r.json();if(!d.ok){alert(d.message);return}load()}load();</script></body></html>'''
+    return render_template_string(html.replace("__CODE__", code))
