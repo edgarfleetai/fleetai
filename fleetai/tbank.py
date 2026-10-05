@@ -151,30 +151,47 @@ def verify_notification(data):
     """
     Проверяет Token входящего уведомления T-Банка.
     """
+
     if not TBANK_TERMINAL_PASSWORD:
         raise RuntimeError(
             "TBANK_EACQ_PASSWORD не задан в Render"
         )
 
     received_token = str(data.get("Token") or "")
+
     if not received_token:
         return False
 
     token_data = {}
 
     for key, value in data.items():
+
+        # Token самого уведомления в подпись не входит
         if key == "Token":
             continue
 
+        # Вложенные объекты/массивы в подпись не входят
         if isinstance(value, (dict, list)):
             continue
 
-        token_data[key] = value
+        # null не участвует
+        if value is None:
+            continue
 
+        # ВАЖНО:
+        # JSON true/false должны остаться true/false,
+        # а не Python True/False
+        if isinstance(value, bool):
+            value = "true" if value else "false"
+
+        token_data[key] = str(value)
+
+    # Добавляем пароль терминала
     token_data["Password"] = TBANK_TERMINAL_PASSWORD
 
+    # Сортировка по ключам + склейка значений
     token_string = "".join(
-        str(token_data[key])
+        token_data[key]
         for key in sorted(token_data.keys())
     )
 
@@ -182,4 +199,4 @@ def verify_notification(data):
         token_string.encode("utf-8")
     ).hexdigest()
 
-    return expected_token == received_token
+    return expected_token.lower() == received_token.lower()
