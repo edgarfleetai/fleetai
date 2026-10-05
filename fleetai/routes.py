@@ -7131,23 +7131,71 @@ def _apply_driver_bank_payment(session, car, payment):
 
 @bp.route("/api/driver-mvp/<code>/bank-payment", methods=["POST"])
 def api_driver_create_bank_payment(code):
-    allowed=os.getenv("DRIVER_MVP_CAR","665")
-    if normalize_code(code)!=normalize_code(allowed): return jsonify({"ok":False,"message":"MVP включён только для тестовой машины"}),403
-    data=request.get_json(silent=True) or {}
-    try: amount=int(data.get("amount") or 0)
-    except (TypeError,ValueError): amount=0
-    if amount<=0 or amount>200000: return jsonify({"ok":False,"message":"Сумма должна быть от 1 до 200 000 ₽"}),400
-    session=Session()
+    from .tbank import create_payment
+
+    allowed = os.getenv("DRIVER_MVP_CAR", "665")
+    if normalize_code(code) != normalize_code(allowed):
+        return jsonify({"ok": False, "message": "MVP включён только для тестовой машины"}), 403
+
+    data = request.get_json(silent=True) or {}
     try:
-        car=find_car(session,code)
-        if not car: return jsonify({"ok":False,"message":"Машина не найдена"}),404
-        pid="pay_"+uuid.uuid4().hex[:20]
-        row=DriverBankPayment(payment_id=pid,car_code=car.code,driver_name=car.driver or "",amount=amount,status="pending",provider="simulator",created_at=moscow_now().replace(tzinfo=None))
-        session.add(row); session.commit()
-        return jsonify({"ok":True,"payment_id":pid,"amount":amount,"status":"pending","message":"Платёж создан. Пока деньги НЕ зачислены."})
-    except Exception as e:
-        session.rollback(); return jsonify({"ok":False,"message":f"Ошибка создания платежа: {e}"}),500
-    finally: session.close()
+        amount = int(data.get("amount") or 0)
+    except (TypeError, ValueError):
+        amount = 0
+
+    if amount <= 0 or amount > 200000:
+        return jsonify({"ok": False, "message": "Сумма должна быть от 1 до 200 000 ₽"}), 400
+
+    session = Session()
+    try:
+        car = find_car(session, code)
+        if not car:
+            return jsonify({"ok": False, "message": "Машина не найдена"}), 404
+
+        order_id = f"fleetai-{normalize_code(car.code)}-{uuid.uuid4().hex[:16]}"
+        payment = create_payment(
+            amount_rubles=amount,
+            order_id=order_id,
+            description=f"Оплата аренды автомобиля {car.code}",
+        )
+
+        payment_id = str(payment.get("PaymentId") or "").strip()
+        payment_url = str(payment.get("PaymentURL") or "").strip()
+        status = str(payment.get("Status") or "NEW").strip()
+
+        if not payment_id:
+            return jsonify({
+                "ok": False,
+                "message": "T-Банк не вернул PaymentId",
+                "tbank": payment,
+            }), 502
+
+        row = DriverBankPayment(
+            payment_id=payment_id,
+            car_code=car.code,
+            driver_name=car.driver or "",
+            amount=amount,
+            status="pending",
+            provider="tbank",
+            created_at=moscow_now().replace(tzinfo=None),
+        )
+        session.add(row)
+        session.commit()
+
+        return jsonify({
+            "ok": True,
+            "payment_id": payment_id,
+            "order_id": order_id,
+            "amount": amount,
+            "status": status,
+            "payment_url": payment_url,
+            "message": "Платёж создан в T-Банке",
+        })
+    except Exception as error:
+        session.rollback()
+        return jsonify({"ok": False, "message": f"Ошибка создания платежа: {error}"}), 500
+    finally:
+        session.close()
 
 @bp.route("/api/bank-simulator/webhook", methods=["POST"])
 def api_bank_simulator_webhook():
