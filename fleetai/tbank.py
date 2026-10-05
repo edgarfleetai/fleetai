@@ -88,3 +88,111 @@ def get_statement(days=7):
         )
 
     return response.json()
+# ============================================================
+# T-BANK INTERNET ACQUIRING
+# ============================================================
+
+import hashlib
+
+
+TBANK_TERMINAL_KEY = os.getenv("TBANK_TERMINAL_KEY", "")
+TBANK_TERMINAL_PASSWORD = os.getenv("TBANK_TERMINAL_PASSWORD", "")
+
+TBANK_ACQUIRING_URL = "https://securepay.tinkoff.ru/v2"
+
+
+def _acquiring_token(payload):
+    """
+    Формирует Token для интернет-эквайринга T-Банка.
+    В подпись входят только параметры верхнего уровня.
+    """
+    if not TBANK_TERMINAL_KEY:
+        raise RuntimeError(
+            "TBANK_TERMINAL_KEY не задан в Render"
+        )
+
+    if not TBANK_TERMINAL_PASSWORD:
+        raise RuntimeError(
+            "TBANK_TERMINAL_PASSWORD не задан в Render"
+        )
+
+    token_data = {}
+
+    for key, value in payload.items():
+        if key == "Token":
+            continue
+
+        # Вложенные объекты и массивы в подпись не входят
+        if isinstance(value, (dict, list)):
+            continue
+
+        token_data[key] = value
+
+    token_data["Password"] = TBANK_TERMINAL_PASSWORD
+
+    token_string = "".join(
+        str(token_data[key])
+        for key in sorted(token_data.keys())
+    )
+
+    return hashlib.sha256(
+        token_string.encode("utf-8")
+    ).hexdigest()
+
+
+def create_payment(
+    amount_rubles,
+    order_id,
+    description="Оплата аренды автомобиля",
+):
+    """
+    Создаёт платёж T-Банка.
+
+    amount_rubles — сумма в рублях.
+    order_id — уникальный ID платежа FleetAI.
+    """
+
+    if not TBANK_TERMINAL_KEY:
+        raise RuntimeError(
+            "TBANK_TERMINAL_KEY не задан в Render"
+        )
+
+    amount_kopecks = int(
+        round(float(amount_rubles) * 100)
+    )
+
+    if amount_kopecks <= 0:
+        raise ValueError(
+            "Сумма платежа должна быть больше 0"
+        )
+
+    payload = {
+        "TerminalKey": TBANK_TERMINAL_KEY,
+        "Amount": amount_kopecks,
+        "OrderId": str(order_id),
+        "Description": description,
+    }
+
+    payload["Token"] = _acquiring_token(payload)
+
+    response = requests.post(
+        f"{TBANK_ACQUIRING_URL}/Init",
+        json=payload,
+        timeout=30,
+    )
+
+    if not response.ok:
+        raise RuntimeError(
+            f"T-Bank acquiring HTTP error "
+            f"{response.status_code}: {response.text}"
+        )
+
+    result = response.json()
+
+    if not result.get("Success"):
+        raise RuntimeError(
+            "T-Bank acquiring error: "
+            + str(result)
+        )
+
+    return result
