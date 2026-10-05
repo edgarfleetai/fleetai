@@ -7062,8 +7062,37 @@ def api_operations():
     session.close()
     return jsonify(rows)
 
-# --- Driver portal MVP: test car 665 ---------------------------------------
+# --- Driver portal V7: wallet + daily rent + T-Bank ------------------------
+def _driver_payment_quote(amount):
+    amount = int(amount or 0)
+    if amount <= 0: raise ValueError("Сумма должна быть больше 0")
+    if amount < 14000: return amount, int(round(amount * 1.01)), "Комиссия 1%"
+    if amount <= 26000: return amount, amount, "Без комиссии"
+    return amount, int(round(amount * 0.98)), "Скидка 2%"
+
+def _sync_daily_rent(session, car):
+    code=normalize_code(car.code); today=moscow_now().date(); daily=max(int(effective_daily_rent(car) or 0),0)
+    if not daily: return
+    rows=session.query(DriverWalletTransaction).filter(func.trim(DriverWalletTransaction.car_code)==code, DriverWalletTransaction.transaction_type=="daily_rent").all()
+    if not rows:
+        session.add(DriverWalletTransaction(driver_name=car.driver or "",car_code=car.code,amount=0,transaction_type="daily_rent",source="system",comment=f"V7_START:{today.isoformat()}",date=moscow_now().replace(tzinfo=None))); session.commit(); return
+    start=None; done=set()
+    for r in rows:
+        c=r.comment or ""
+        try:
+            if c.startswith("V7_START:"): start=datetime.strptime(c.split(":",1)[1],"%Y-%m-%d").date()
+            elif c.startswith("DAILY_RENT:"): done.add(datetime.strptime(c.split(":",1)[1],"%Y-%m-%d").date())
+        except Exception: pass
+    if start is None: start=today
+    day=start+timedelta(days=1)
+    while day<=today:
+        if day not in done:
+            session.add(DriverWalletTransaction(driver_name=car.driver or "",car_code=car.code,amount=-daily,transaction_type="daily_rent",source="system",comment=f"DAILY_RENT:{day.isoformat()}",date=datetime.combine(day,datetime.min.time()).replace(hour=12)))
+        day+=timedelta(days=1)
+    session.commit()
+
 def driver_wallet_snapshot(session, car):
+    _sync_daily_rent(session, car)
     code = normalize_code(car.code)
     wallet_total = session.query(func.coalesce(func.sum(DriverWalletTransaction.amount), 0)).filter(func.trim(DriverWalletTransaction.car_code) == code).scalar() or 0
     calc = calculate_driver_payment(session, car)
@@ -7075,7 +7104,7 @@ def driver_wallet_snapshot(session, car):
     return {
         "wallet_total": int(wallet_total), "rental_due": rental_due,
         "separate_debt": separate_debt, "total_due": total_due,
-        "balance": int(wallet_total) - total_due, "calculation": calc,
+        "balance": int(wallet_total), "calculation": calc, "daily_rent": int(effective_daily_rent(car) or 0), "days_left": max(int(wallet_total) // max(int(effective_daily_rent(car) or 0), 1), 0),
         "transactions": [{"id": r.id, "amount": int(r.amount or 0), "type": r.transaction_type or "", "source": r.source or "", "comment": r.comment or "", "date": r.date.strftime("%d.%m.%Y %H:%M") if r.date else ""} for r in txs],
     }
 
@@ -7152,9 +7181,10 @@ def api_driver_create_bank_payment(code):
         if not car:
             return jsonify({"ok": False, "message": "Машина не найдена"}), 404
 
+        nominal, bank_amount, pricing_label = _driver_payment_quote(amount)
         order_id = f"fleetai-{normalize_code(car.code)}-{uuid.uuid4().hex[:16]}"
         payment = create_payment(
-            amount_rubles=amount,
+            amount_rubles=bank_amount,
             order_id=order_id,
             description=f"Оплата аренды автомобиля {car.code}",
         )
@@ -7187,6 +7217,8 @@ def api_driver_create_bank_payment(code):
             "payment_id": payment_id,
             "order_id": order_id,
             "amount": amount,
+            "bank_amount": bank_amount,
+            "pricing_label": pricing_label,
             "status": status,
             "payment_url": payment_url,
             "message": "Платёж создан в T-Банке",
@@ -7435,8 +7467,8 @@ def api_driver_blocking_preview(code):
 def driver_portal_mvp():
     code = os.getenv("DRIVER_MVP_CAR", "665")
     html = r'''<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Клевер Парк — водитель</title><style>
-*{box-sizing:border-box}body{margin:0;background:#f4f7f6;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#17211d}.wrap{max-width:520px;margin:auto;padding:20px}.brand{font-size:25px;font-weight:800;margin:8px 0 20px}.card{background:#fff;border-radius:18px;padding:20px;margin-bottom:14px;box-shadow:0 6px 24px rgba(0,0,0,.06)}.muted{color:#708078;font-size:14px}.car{font-size:20px;font-weight:750}.balance{font-size:36px;font-weight:850;margin:8px 0}.good{color:#14804a}.bad{color:#c23b32}.grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:14px}.mini{background:#f5f7f6;border-radius:12px;padding:12px}.mini b{display:block;font-size:18px;margin-top:5px}.amounts{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}.amounts button{border:1px solid #dce4e0;background:#fff;border-radius:11px;padding:12px;font-weight:700}.tx{display:flex;justify-content:space-between;border-top:1px solid #edf0ee;padding:12px 0}.notice{font-size:13px;background:#fff5d8;border-radius:12px;padding:12px;margin-bottom:14px}.spinner{text-align:center;padding:30px}</style></head><body><div class="wrap"><div class="brand">🍀 Клевер Парк</div><div class="notice">Тестовый кабинет машины __CODE__. Реальных банковских списаний пока нет. <b>Версия V6</b></div><div id="app" class="spinner">Загрузка…</div></div><script>
-const code='__CODE__',rub=n=>new Intl.NumberFormat('ru-RU').format(n||0)+' ₽';async function load(){const r=await fetch('/api/driver-mvp/'+code),d=await r.json();if(!d.ok){app.innerHTML=d.message;return}render(d)}function render(d){const b=d.balance||0;app.className='';app.innerHTML=`<div class="card"><div class="muted">${d.car.driver||'Водитель'}</div><div class="car">${d.car.brand} ${d.car.model} · ${d.car.code}</div><div class="muted">${d.car.plate||''}</div></div><div class="card"><b>${d.blocking.status==='active'?'🟢 Автомобиль активен':'🟡 Есть задолженность'}</b><div class="muted" style="margin-top:6px">${d.blocking.status_text}</div></div><div class="card"><div class="muted">Баланс после начислений</div><div class="balance ${b>=0?'good':'bad'}">${rub(b)}</div><div class="grid"><div class="mini"><span class="muted">Пополнено</span><b>${rub(d.wallet_total)}</b></div><div class="mini"><span class="muted">К оплате</span><b>${rub(d.total_due)}</b></div><div class="mini"><span class="muted">Аренда / сутки</span><b>${rub(d.car.daily_rent)}</b></div><div class="mini"><span class="muted">Отдельный долг</span><b>${rub(d.separate_debt)}</b></div></div></div><div class="card"><b>Тест задолженности</b><p class="muted">Не меняет реальные финансы и не отправляет команду Wialon.</p><div class="amounts"><button onclick="testDebt()">🧪 Создать долг</button><button onclick="clearTestDebt()">🧹 Очистить все тесты</button></div></div><div class="card"><b>🏦 Оплата через T-Банк</b><p class="muted">Введите сумму или выберите быстрый вариант. После создания платежа вы перейдёте на защищённую страницу T-Банка.</p><input id="bankAmount" type="number" min="1" max="200000" step="1" placeholder="Сумма оплаты, ₽" style="width:100%;box-sizing:border-box;padding:13px 14px;border:1px solid #d8dfdc;border-radius:12px;font-size:16px;margin:10px 0"><div class="amounts"><button onclick="setBankAmount(1857)">1 857 ₽</button><button onclick="setBankAmount(5000)">5 000 ₽</button><button onclick="setBankAmount(13000)">13 000 ₽</button></div><button style="width:100%;margin-top:12px" onclick="createBankPayment()">Перейти к оплате</button><div id="bankbox" class="muted" style="margin-top:10px">Платёж ещё не создан.</div></div><div class="card"><b>История пополнений</b>${d.transactions.length?d.transactions.map(t=>`<div class="tx"><div><b>${t.amount>=0?'+':''}${rub(t.amount)}</b><div class="muted">${t.date}</div></div><div class="muted">${t.source}</div></div>`).join(''):'<p class="muted">Пока пусто</p>'}</div>`}async function testDebt(){if(!confirm('Создать тестовый долг? Реальные финансы и Wialon не изменятся.'))return;const r=await fetch('/api/driver-mvp/'+code+'/test-debt',{method:'POST'}),d=await r.json();if(!d.ok){alert(d.message);return}load()}async function clearTestDebt(){if(!confirm('Удалить ВСЕ тестовые долги, пополнения и списания 665? Реальные записи не будут удалены.'))return;const r=await fetch('/api/driver-mvp/'+code+'/clear-test-debt',{method:'POST'}),d=await r.json();if(!d.ok){alert(d.message);return}alert(d.message);load()}function setBankAmount(amount){document.getElementById('bankAmount').value=amount}async function createBankPayment(){const input=document.getElementById('bankAmount');const amount=parseInt(input.value||'0',10);if(!amount||amount<1||amount>200000){alert('Введите сумму от 1 до 200 000 ₽');return}const btn=event&&event.target?event.target:null;if(btn){btn.disabled=true;btn.textContent='Создаём платёж…'}try{const r=await fetch('/api/driver-mvp/'+code+'/bank-payment',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({amount})}),d=await r.json();if(!d.ok){alert(d.message||'Не удалось создать платёж');return}if(!d.payment_url){alert('T-Банк не вернул ссылку на оплату');return}bankbox.innerHTML='<b>Платёж создан:</b> '+Number(d.amount||amount).toLocaleString('ru-RU')+' ₽<br><small>'+d.payment_id+'</small><br><span>Переходим в T-Банк…</span>';window.location.href=d.payment_url}catch(e){alert('Ошибка создания платежа: '+e)}finally{if(btn){btn.disabled=false;btn.textContent='Перейти к оплате'}}}async function topup(amount){if(!confirm('Тестово пополнить баланс на '+rub(amount)+'?'))return;const r=await fetch('/api/driver-mvp/'+code+'/test-topup',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({amount})}),d=await r.json();if(!d.ok){alert(d.message);return}load()}load();</script></body></html>'''
+*{box-sizing:border-box}body{margin:0;background:#f4f7f6;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#17211d}.wrap{max-width:520px;margin:auto;padding:20px}.brand{font-size:25px;font-weight:800;margin:8px 0 20px}.card{background:#fff;border-radius:18px;padding:20px;margin-bottom:14px;box-shadow:0 6px 24px rgba(0,0,0,.06)}.muted{color:#708078;font-size:14px}.car{font-size:20px;font-weight:750}.balance{font-size:36px;font-weight:850;margin:8px 0}.good{color:#14804a}.bad{color:#c23b32}.grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:14px}.mini{background:#f5f7f6;border-radius:12px;padding:12px}.mini b{display:block;font-size:18px;margin-top:5px}.amounts{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}.amounts button{border:1px solid #dce4e0;background:#fff;border-radius:11px;padding:12px;font-weight:700}.tx{display:flex;justify-content:space-between;border-top:1px solid #edf0ee;padding:12px 0}.notice{font-size:13px;background:#fff5d8;border-radius:12px;padding:12px;margin-bottom:14px}.spinner{text-align:center;padding:30px}</style></head><body><div class="wrap"><div class="brand">🍀 Клевер Парк</div><div class="notice">Личный кабинет водителя · <b>Версия V7</b></div><div id="app" class="spinner">Загрузка…</div></div><script>
+const code='__CODE__',rub=n=>new Intl.NumberFormat('ru-RU').format(n||0)+' ₽';async function load(){const r=await fetch('/api/driver-mvp/'+code),d=await r.json();if(!d.ok){app.innerHTML=d.message;return}render(d)}function render(d){const b=d.balance||0;app.className='';app.innerHTML=`<div class="card"><div class="muted">${d.car.driver||'Водитель'}</div><div class="car">${d.car.brand} ${d.car.model} · ${d.car.code}</div><div class="muted">${d.car.plate||''}</div></div><div class="card"><b>${d.blocking.status==='active'?'🟢 Автомобиль активен':'🟡 Есть задолженность'}</b><div class="muted" style="margin-top:6px">${d.blocking.status_text}</div></div><div class="card"><div class="muted">Баланс после начислений</div><div class="balance ${b>=0?'good':'bad'}">${rub(b)}</div><div class="grid"><div class="mini"><span class="muted">Пополнено</span><b>${rub(d.wallet_total)}</b></div><div class="mini"><span class="muted">К оплате</span><b>${rub(d.total_due)}</b></div><div class="mini"><span class="muted">Аренда / сутки</span><b>${rub(d.car.daily_rent)}</b></div><div class="mini"><span class="muted">Отдельный долг</span><b>${rub(d.separate_debt)}</b></div></div></div><div class="card" style="display:none"><b>Тест задолженности</b><p class="muted">Не меняет реальные финансы и не отправляет команду Wialon.</p><div class="amounts"><button onclick="testDebt()">🧪 Создать долг</button><button onclick="clearTestDebt()">🧹 Очистить все тесты</button></div></div><div class="card"><b>🏦 Оплата через T-Банк</b><p class="muted">Введите сумму или выберите быстрый вариант. После создания платежа вы перейдёте на защищённую страницу T-Банка.</p><input id="bankAmount" type="number" min="1" max="200000" step="1" placeholder="Сумма оплаты, ₽" style="width:100%;box-sizing:border-box;padding:13px 14px;border:1px solid #d8dfdc;border-radius:12px;font-size:16px;margin:10px 0"><div class="amounts"><button onclick="setBankAmount(14000)">5 000 ₽</button><button onclick="setBankAmount(14000)">14 000 ₽</button><button onclick="setBankAmount(27000)">27 000 ₽</button></div><button style="width:100%;margin-top:12px" onclick="createBankPayment()">Перейти к оплате</button><div id="bankbox" class="muted" style="margin-top:10px">До 13 999 ₽: +1% · 14 000–26 000 ₽: без комиссии · свыше 26 000 ₽: скидка 2%.</div></div><div class="card"><b>История пополнений</b>${d.transactions.length?d.transactions.map(t=>`<div class="tx"><div><b>${t.amount>=0?'+':''}${rub(t.amount)}</b><div class="muted">${t.date}</div></div><div class="muted">${t.source}</div></div>`).join(''):'<p class="muted">Пока пусто</p>'}</div>`}async function testDebt(){if(!confirm('Создать тестовый долг? Реальные финансы и Wialon не изменятся.'))return;const r=await fetch('/api/driver-mvp/'+code+'/test-debt',{method:'POST'}),d=await r.json();if(!d.ok){alert(d.message);return}load()}async function clearTestDebt(){if(!confirm('Удалить ВСЕ тестовые долги, пополнения и списания 665? Реальные записи не будут удалены.'))return;const r=await fetch('/api/driver-mvp/'+code+'/clear-test-debt',{method:'POST'}),d=await r.json();if(!d.ok){alert(d.message);return}alert(d.message);load()}function setBankAmount(amount){document.getElementById('bankAmount').value=amount}async function createBankPayment(){const input=document.getElementById('bankAmount');const amount=parseInt(input.value||'0',10);if(!amount||amount<1||amount>200000){alert('Введите сумму от 1 до 200 000 ₽');return}const btn=event&&event.target?event.target:null;if(btn){btn.disabled=true;btn.textContent='Создаём платёж…'}try{const r=await fetch('/api/driver-mvp/'+code+'/bank-payment',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({amount})}),d=await r.json();if(!d.ok){alert(d.message||'Не удалось создать платёж');return}if(!d.payment_url){alert('T-Банк не вернул ссылку на оплату');return}bankbox.innerHTML='<b>Платёж создан:</b> '+Number(d.amount||amount).toLocaleString('ru-RU')+' ₽<br><small>'+d.payment_id+'</small><br><span>Переходим в T-Банк…</span>';window.location.href=d.payment_url}catch(e){alert('Ошибка создания платежа: '+e)}finally{if(btn){btn.disabled=false;btn.textContent='Перейти к оплате'}}}async function topup(amount){if(!confirm('Тестово пополнить баланс на '+rub(amount)+'?'))return;const r=await fetch('/api/driver-mvp/'+code+'/test-topup',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({amount})}),d=await r.json();if(!d.ok){alert(d.message);return}load()}load();</script></body></html>'''
     response = make_response(render_template_string(html.replace("__CODE__", code)))
     response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
     response.headers["Pragma"] = "no-cache"
@@ -7748,12 +7780,14 @@ def tbank_webhook():
                 return "OK", 200
 
             now = moscow_now().replace(tzinfo=None)
+            payment_row = session.query(DriverBankPayment).filter(DriverBankPayment.payment_id == payment_id).first()
+            wallet_amount = int(payment_row.amount or 0) if payment_row else amount
 
-            # 5. Реальное пополнение кошелька водителя
+            # 5. На баланс зачисляется выбранная сумма; amount ниже — реальные деньги банка
             wallet_tx = DriverWalletTransaction(
                 driver_name=car.driver or "",
                 car_code=car.code,
-                amount=amount,
+                amount=wallet_amount,
                 transaction_type="topup",
                 source="tbank",
                 comment=f"Оплата через T-Банк · {payment_id}",
@@ -7792,56 +7826,11 @@ def tbank_webhook():
                 )
             )
 
-            # 7. Проверяем текущую аренду
-            calculation = calculate_driver_payment(session, car)
-
-            due_before = max(
-                int(calculation.get("amount_due", 0) or 0),
-                0,
-            )
-
+            # V7: аренда списывается ежедневно отдельными операциями кошелька.
             payment_applied = 0
-
-            if due_before > 0 and amount >= due_before:
-                today = moscow_now().date()
-                new_period_start = today + timedelta(days=1)
-
-                car.last_payment_date = (
-                    new_period_start.isoformat()
-                )
-
-                weekday = int(
-                    getattr(car, "payment_weekday", 0) or 0
-                )
-
-                days_until_due = (
-                    weekday - new_period_start.weekday()
-                ) % 7
-
-                if days_until_due == 0:
-                    days_until_due = 7
-
-                car.next_payment_date = (
-                    new_period_start
-                    + timedelta(days=days_until_due)
-                ).isoformat()
-
-                payment_applied = due_before
-
-                session.add(
-                    DriverWalletTransaction(
-                        driver_name=car.driver or "",
-                        car_code=car.code,
-                        amount=-payment_applied,
-                        transaction_type="rent_payment",
-                        source="system",
-                        comment=(
-                            "Зачтено в оплату аренды "
-                            f"из платежа T-Банка {payment_id}"
-                        ),
-                        date=now,
-                    )
-                )
+            if payment_row:
+                payment_row.status = "paid"
+                payment_row.paid_at = now
 
             session.commit()
 
