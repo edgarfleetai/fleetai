@@ -128,7 +128,12 @@ def create_payment(amount_rubles, order_id, description="Оплата аренд
     "Amount": amount_kopecks,
     "OrderId": str(order_id),
     "Description": description,
-    "NotificationURL": "https://fleetai-1.onrender.com/api/tbank/webhook",
+
+    # После успешной оплаты вернуть водителя в его кабинет
+    "SuccessURL": "https://fleetai-1.onrender.com/driver?payment=success",
+
+    # После неуспешной оплаты тоже вернуть в кабинет
+    "FailURL": "https://fleetai-1.onrender.com/driver?payment=failed",
 }
     payload["Token"] = _acquiring_token(payload)
 
