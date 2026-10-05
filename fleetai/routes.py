@@ -7176,7 +7176,8 @@ const code='__CODE__',rub=n=>new Intl.NumberFormat('ru-RU').format(n||0)+' ₽';
     return render_template_string(html.replace("__CODE__", code))
 
 # --- Wialon diagnostic integration (V3) ---
-WIALON_API_URL = os.environ.get("WIALON_API_URL", "https://hst-api.wialon.com/wialon/ajax.html")
+WIALON_BASE_URL = os.environ.get("WIALON_BASE_URL", "https://wialonreg.ru").rstrip("/")
+WIALON_API_URL = os.environ.get("WIALON_API_URL", WIALON_BASE_URL + "/wialon/ajax.html")
 
 
 def _wialon_call(svc, params, sid=None):

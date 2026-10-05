@@ -1,9 +1,15 @@
-# Wialon V3 diagnostic
+# Wialon V3.1 diagnostic
 
-After deploying and setting `WIALON_TOKEN` in Render, open:
+This build defaults to the regional Wialon server used by this fleet:
 
-`/api/wialon/units`
+`https://wialonreg.ru/wialon/ajax.html`
 
-The endpoint logs in with the server-side token and returns visible Wialon units and highlights the first unit whose name contains `665`. The token is never returned to the browser.
+Required Render environment variable:
 
-Optional environment variable: `WIALON_API_URL` (defaults to `https://hst-api.wialon.com/wialon/ajax.html`).
+`WIALON_TOKEN`
+
+Optional override:
+
+`WIALON_BASE_URL=https://wialonreg.ru`
+
+After deploy open `/api/wialon/units`. The endpoint never returns the token.
