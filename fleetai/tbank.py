@@ -147,3 +147,39 @@ def create_payment(amount_rubles, order_id, description="Оплата аренд
     if not result.get("Success"):
         raise RuntimeError("T-Bank acquiring error: " + str(result))
     return result
+def verify_notification(data):
+    """
+    Проверяет Token входящего уведомления T-Банка.
+    """
+    if not TBANK_TERMINAL_PASSWORD:
+        raise RuntimeError(
+            "TBANK_EACQ_PASSWORD не задан в Render"
+        )
+
+    received_token = str(data.get("Token") or "")
+    if not received_token:
+        return False
+
+    token_data = {}
+
+    for key, value in data.items():
+        if key == "Token":
+            continue
+
+        if isinstance(value, (dict, list)):
+            continue
+
+        token_data[key] = value
+
+    token_data["Password"] = TBANK_TERMINAL_PASSWORD
+
+    token_string = "".join(
+        str(token_data[key])
+        for key in sorted(token_data.keys())
+    )
+
+    expected_token = hashlib.sha256(
+        token_string.encode("utf-8")
+    ).hexdigest()
+
+    return expected_token == received_token
