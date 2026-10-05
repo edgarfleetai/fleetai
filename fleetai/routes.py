@@ -7086,7 +7086,7 @@ def api_driver_mvp(code):
     try:
         car = find_car(session, code)
         if not car: return jsonify({"ok": False, "message": "Машина не найдена"}), 404
-        return jsonify({"ok": True, "car": {"code": car.code, "brand": car.brand or "", "model": car.model or "", "plate": car.plate or "", "driver": car.driver or "", "daily_rent": effective_daily_rent(car)}, **driver_wallet_snapshot(session, car)})
+        return jsonify({"ok": True, "car": {"code": car.code, "brand": car.brand or "", "model": car.model or "", "plate": car.plate or "", "driver": car.driver or "", "daily_rent": effective_daily_rent(car)}, **driver_wallet_snapshot(session, car), "blocking": driver_blocking_preview(session, car)})
     finally: session.close()
 
 @bp.route("/api/driver-mvp/<code>/test-topup", methods=["POST"])
@@ -7167,12 +7167,43 @@ def api_driver_mvp_test_topup(code):
         session.rollback(); return jsonify({"ok": False, "message": f"Ошибка пополнения: {error}"}), 500
     finally: session.close()
 
+def driver_blocking_preview(session, car):
+    """Read-only decision preview. V5 never sends a Wialon command automatically."""
+    snap = driver_wallet_snapshot(session, car)
+    unpaid = max(-int(snap.get("balance", 0) or 0), 0)
+    threshold = int(os.getenv("DRIVER_BLOCK_DEBT_THRESHOLD", "1") or 1)
+    would_block = unpaid >= threshold
+    return {
+        "automation_enabled": False,
+        "unpaid_debt": unpaid,
+        "threshold": threshold,
+        "would_block": would_block,
+        "status": "debt_waiting" if would_block else "active",
+        "status_text": "Есть долг — ожидание блокировки (автоматика выключена)" if would_block else "Автомобиль активен",
+    }
+
+
+@bp.route("/api/driver-mvp/<code>/blocking-preview")
+def api_driver_blocking_preview(code):
+    allowed = os.getenv("DRIVER_MVP_CAR", "665")
+    if normalize_code(code) != normalize_code(allowed):
+        return jsonify({"ok": False, "message": "MVP включён только для тестовой машины"}), 403
+    session = Session()
+    try:
+        car = find_car(session, code)
+        if not car:
+            return jsonify({"ok": False, "message": "Машина не найдена"}), 404
+        return jsonify({"ok": True, "car_code": car.code, **driver_blocking_preview(session, car)})
+    finally:
+        session.close()
+
+
 @bp.route("/driver")
 def driver_portal_mvp():
     code = os.getenv("DRIVER_MVP_CAR", "665")
     html = r'''<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Клевер Парк — водитель</title><style>
 *{box-sizing:border-box}body{margin:0;background:#f4f7f6;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#17211d}.wrap{max-width:520px;margin:auto;padding:20px}.brand{font-size:25px;font-weight:800;margin:8px 0 20px}.card{background:#fff;border-radius:18px;padding:20px;margin-bottom:14px;box-shadow:0 6px 24px rgba(0,0,0,.06)}.muted{color:#708078;font-size:14px}.car{font-size:20px;font-weight:750}.balance{font-size:36px;font-weight:850;margin:8px 0}.good{color:#14804a}.bad{color:#c23b32}.grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:14px}.mini{background:#f5f7f6;border-radius:12px;padding:12px}.mini b{display:block;font-size:18px;margin-top:5px}.amounts{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}.amounts button{border:1px solid #dce4e0;background:#fff;border-radius:11px;padding:12px;font-weight:700}.tx{display:flex;justify-content:space-between;border-top:1px solid #edf0ee;padding:12px 0}.notice{font-size:13px;background:#fff5d8;border-radius:12px;padding:12px;margin-bottom:14px}.spinner{text-align:center;padding:30px}</style></head><body><div class="wrap"><div class="brand">🍀 Клевер Парк</div><div class="notice">Тестовый кабинет машины __CODE__. Реальных банковских списаний пока нет.</div><div id="app" class="spinner">Загрузка…</div></div><script>
-const code='__CODE__',rub=n=>new Intl.NumberFormat('ru-RU').format(n||0)+' ₽';async function load(){const r=await fetch('/api/driver-mvp/'+code),d=await r.json();if(!d.ok){app.innerHTML=d.message;return}render(d)}function render(d){const b=d.balance||0;app.className='';app.innerHTML=`<div class="card"><div class="muted">${d.car.driver||'Водитель'}</div><div class="car">${d.car.brand} ${d.car.model} · ${d.car.code}</div><div class="muted">${d.car.plate||''}</div></div><div class="card"><div class="muted">Баланс после начислений</div><div class="balance ${b>=0?'good':'bad'}">${rub(b)}</div><div class="grid"><div class="mini"><span class="muted">Пополнено</span><b>${rub(d.wallet_total)}</b></div><div class="mini"><span class="muted">К оплате</span><b>${rub(d.total_due)}</b></div><div class="mini"><span class="muted">Аренда / сутки</span><b>${rub(d.car.daily_rent)}</b></div><div class="mini"><span class="muted">Отдельный долг</span><b>${rub(d.separate_debt)}</b></div></div></div><div class="card"><b>Тестовое пополнение</b><p class="muted">Имитирует будущий платёж банка.</p><div class="amounts"><button onclick="topup(1857)">1 857</button><button onclick="topup(5000)">5 000</button><button onclick="topup(13000)">13 000</button></div></div><div class="card"><b>История пополнений</b>${d.transactions.length?d.transactions.map(t=>`<div class="tx"><div><b>${t.amount>=0?'+':''}${rub(t.amount)}</b><div class="muted">${t.date}</div></div><div class="muted">${t.source}</div></div>`).join(''):'<p class="muted">Пока пусто</p>'}</div>`}async function topup(amount){if(!confirm('Тестово пополнить баланс на '+rub(amount)+'?'))return;const r=await fetch('/api/driver-mvp/'+code+'/test-topup',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({amount})}),d=await r.json();if(!d.ok){alert(d.message);return}load()}load();</script></body></html>'''
+const code='__CODE__',rub=n=>new Intl.NumberFormat('ru-RU').format(n||0)+' ₽';async function load(){const r=await fetch('/api/driver-mvp/'+code),d=await r.json();if(!d.ok){app.innerHTML=d.message;return}render(d)}function render(d){const b=d.balance||0;app.className='';app.innerHTML=`<div class="card"><div class="muted">${d.car.driver||'Водитель'}</div><div class="car">${d.car.brand} ${d.car.model} · ${d.car.code}</div><div class="muted">${d.car.plate||''}</div></div><div class="card"><b>${d.blocking.status==='active'?'🟢 Автомобиль активен':'🟡 Есть задолженность'}</b><div class="muted" style="margin-top:6px">${d.blocking.status_text}</div></div><div class="card"><div class="muted">Баланс после начислений</div><div class="balance ${b>=0?'good':'bad'}">${rub(b)}</div><div class="grid"><div class="mini"><span class="muted">Пополнено</span><b>${rub(d.wallet_total)}</b></div><div class="mini"><span class="muted">К оплате</span><b>${rub(d.total_due)}</b></div><div class="mini"><span class="muted">Аренда / сутки</span><b>${rub(d.car.daily_rent)}</b></div><div class="mini"><span class="muted">Отдельный долг</span><b>${rub(d.separate_debt)}</b></div></div></div><div class="card"><b>Тестовое пополнение</b><p class="muted">Имитирует будущий платёж банка.</p><div class="amounts"><button onclick="topup(1857)">1 857</button><button onclick="topup(5000)">5 000</button><button onclick="topup(13000)">13 000</button></div></div><div class="card"><b>История пополнений</b>${d.transactions.length?d.transactions.map(t=>`<div class="tx"><div><b>${t.amount>=0?'+':''}${rub(t.amount)}</b><div class="muted">${t.date}</div></div><div class="muted">${t.source}</div></div>`).join(''):'<p class="muted">Пока пусто</p>'}</div>`}async function topup(amount){if(!confirm('Тестово пополнить баланс на '+rub(amount)+'?'))return;const r=await fetch('/api/driver-mvp/'+code+'/test-topup',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({amount})}),d=await r.json();if(!d.ok){alert(d.message);return}load()}load();</script></body></html>'''
     return render_template_string(html.replace("__CODE__", code))
 
 # --- Wialon diagnostic integration (V3) ---
@@ -7309,7 +7340,9 @@ def api_wialon_665_command():
 def wialon_665_control_page():
     html = r'''<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>FleetAI — Wialon 665</title><style>
 body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#f4f7f6;color:#17211d;margin:0}.wrap{max-width:620px;margin:40px auto;padding:18px}.card{background:white;border-radius:18px;padding:22px;box-shadow:0 6px 24px rgba(0,0,0,.07)}h1{margin-top:0}.meta{color:#6d7b74}.warn{background:#fff3cd;border-radius:12px;padding:14px;margin:18px 0}.buttons{display:grid;grid-template-columns:1fr 1fr;gap:12px}.btn{border:0;border-radius:12px;padding:15px;font-size:16px;font-weight:750;cursor:pointer}.block{background:#b42318;color:#fff}.unblock{background:#157347;color:#fff}.result{margin-top:16px;padding:14px;border-radius:12px;background:#eef2f0;white-space:pre-wrap}.check{display:flex;gap:10px;align-items:flex-start;margin:14px 0} @media(max-width:520px){.buttons{grid-template-columns:1fr}}
-</style></head><body><div class="wrap"><div class="card"><h1>Управление 665</h1><div class="meta">Kia C665ХК 716 · Wialon Unit ID 49896</div><div class="warn"><b>Тестовый ручной режим.</b><br>Не отправляйте блокировку во время движения. Для первого теста автомобиль должен быть припаркован, двигатель выключен, ключ/зажигание выключены.</div><label class="check"><input id="safe" type="checkbox"> <span>Подтверждаю: машина 665 припаркована и двигатель выключен.</span></label><div class="buttons"><button class="btn block" onclick="send('block')">🔒 Заблокировать запуск</button><button class="btn unblock" onclick="send('unblock')">🔓 Разблокировать</button></div><div id="result" class="result">Команды ещё не отправлялись.</div></div></div><script>
+</style></head><body><div class="wrap"><div class="card"><h1>Управление 665</h1><div class="meta">Kia C665ХК 716 · Wialon Unit ID 49896</div><div id="debtStatus" class="result">Проверка задолженности…</div><div class="warn"><b>Тестовый ручной режим.</b><br>Не отправляйте блокировку во время движения. Для первого теста автомобиль должен быть припаркован, двигатель выключен, ключ/зажигание выключены.</div><label class="check"><input id="safe" type="checkbox"> <span>Подтверждаю: машина 665 припаркована и двигатель выключен.</span></label><div class="buttons"><button class="btn block" onclick="send('block')">🔒 Заблокировать запуск</button><button class="btn unblock" onclick="send('unblock')">🔓 Разблокировать</button></div><div id="result" class="result">Команды ещё не отправлялись.</div></div></div><script>
+async function loadDebtStatus(){try{const r=await fetch('/api/driver-mvp/665/blocking-preview');const d=await r.json();if(!d.ok){debtStatus.textContent=d.message;return}debtStatus.textContent=(d.would_block?'🟡 Есть долг: '+d.unpaid_debt.toLocaleString('ru-RU')+' ₽. По правилу машина ожидала бы блокировки.':'🟢 Долга для блокировки нет.')+'\nАвтоматическая блокировка: ВЫКЛЮЧЕНА';}catch(e){debtStatus.textContent='Не удалось получить статус долга: '+e}}
 async function send(action){if(action==='block'&&!safe.checked){alert('Сначала подтвердите, что 665 припаркована и двигатель выключен.');return}if(!confirm(action==='block'?'Отправить команду блокировки запуска 665?':'Отправить команду разблокировки 665?'))return;result.textContent='Отправка…';const body={action};if(action==='block')body.safety_confirmation='PARKED_ENGINE_OFF_665';try{const r=await fetch('/api/wialon/665/command',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});const d=await r.json();result.textContent=JSON.stringify(d,null,2)}catch(e){result.textContent='Ошибка: '+e}}
+loadDebtStatus();
 </script></body></html>'''
     return render_template_string(html)
