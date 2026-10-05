@@ -175,11 +175,12 @@ def create_payment(
 
     payload["Token"] = _acquiring_token(payload)
 
-    response = requests.post(
-        f"{TBANK_ACQUIRING_URL}/Init",
-        json=payload,
-        timeout=30,
-    )
+   response = requests.post(
+    f"{TBANK_ACQUIRING_URL}/Init",
+    json=payload,
+    timeout=30,
+    verify=CA_BUNDLE,
+)
 
     if not response.ok:
         raise RuntimeError(
