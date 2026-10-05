@@ -7669,15 +7669,204 @@ def api_tbank_payment_test():
             "ok": False,
             "message": str(error),
         }), 500
-@bp.route("/api/tbank/webhook", methods=["POST"])
+ @bp.route("/api/tbank/webhook", methods=["POST"])
 def tbank_webhook():
-    try:
-        data = request.get_json(silent=True) or {}
+    from .tbank import verify_notification
 
+    data = request.get_json(silent=True) or {}
+
+    try:
         print("T-BANK WEBHOOK:", data, flush=True)
 
-        return "OK", 200
+        # 1. Проверяем подпись T-Банка
+        if not verify_notification(data):
+            print("T-BANK WEBHOOK: invalid token", flush=True)
+            return "INVALID TOKEN", 403
+
+        # 2. Нас интересует только окончательно подтверждённая оплата
+        if data.get("Success") is not True:
+            return "OK", 200
+
+        if str(data.get("Status") or "").upper() != "CONFIRMED":
+            return "OK", 200
+
+        # 3. Получаем данные платежа
+        payment_id = str(data.get("PaymentId") or "")
+        order_id = str(data.get("OrderId") or "")
+
+        try:
+            amount_kopecks = int(data.get("Amount") or 0)
+        except (TypeError, ValueError):
+            amount_kopecks = 0
+
+        if not payment_id:
+            raise ValueError("T-Банк не передал PaymentId")
+
+        if amount_kopecks <= 0:
+            raise ValueError("Некорректная сумма платежа")
+
+        # T-Банк передаёт сумму в копейках
+        amount = amount_kopecks // 100
+
+        # OrderId имеет вид:
+        # fleetai-665-07875f4730824e37
+        parts = order_id.split("-")
+
+        if len(parts) < 3 or parts[0] != "fleetai":
+            raise ValueError(
+                f"Неизвестный формат OrderId: {order_id}"
+            )
+
+        code = normalize_code(parts[1])
+
+        session = Session()
+
+        try:
+            car = find_car(session, code)
+
+            if not car:
+                raise ValueError(
+                    f"Машина {code} не найдена"
+                )
+
+            # 4. Защита от повторного webhook.
+            # PaymentId сохраняем в raw_message.
+            payment_marker = f"[TBANK_PAYMENT:{payment_id}]"
+
+            existing = (
+                session.query(Operation)
+                .filter(Operation.raw_message.contains(payment_marker))
+                .first()
+            )
+
+            if existing:
+                print(
+                    f"T-BANK WEBHOOK: payment {payment_id} "
+                    f"already processed",
+                    flush=True,
+                )
+                return "OK", 200
+
+            now = moscow_now().replace(tzinfo=None)
+
+            # 5. Реальное пополнение кошелька водителя
+            wallet_tx = DriverWalletTransaction(
+                driver_name=car.driver or "",
+                car_code=car.code,
+                amount=amount,
+                transaction_type="topup",
+                source="tbank",
+                comment=f"Оплата через T-Банк · {payment_id}",
+                date=now,
+            )
+            session.add(wallet_tx)
+
+            # 6. Записываем доход в общий финансовый учёт
+            op = Operation(
+                date=now,
+                car_code=car.code,
+                type="income",
+                category="Аренда",
+                description=(
+                    f"Оплата аренды водителем "
+                    f"{car.driver or ''} через T-Банк"
+                ),
+                amount=amount,
+                raw_message=(
+                    f"{payment_marker} "
+                    f"{order_id} "
+                    f"{car.code} +{amount} ₽"
+                ),
+            )
+
+            session.add(op)
+            session.flush()
+
+            session.add(
+                Income(
+                    operation_id=op.id,
+                    car_code=car.code,
+                    date=now,
+                    amount=amount,
+                    income_type="Оплата аренды через T-Банк",
+                )
+            )
+
+            # 7. Проверяем текущую аренду
+            calculation = calculate_driver_payment(session, car)
+
+            due_before = max(
+                int(calculation.get("amount_due", 0) or 0),
+                0,
+            )
+
+            payment_applied = 0
+
+            if due_before > 0 and amount >= due_before:
+                today = moscow_now().date()
+                new_period_start = today + timedelta(days=1)
+
+                car.last_payment_date = (
+                    new_period_start.isoformat()
+                )
+
+                weekday = int(
+                    getattr(car, "payment_weekday", 0) or 0
+                )
+
+                days_until_due = (
+                    weekday - new_period_start.weekday()
+                ) % 7
+
+                if days_until_due == 0:
+                    days_until_due = 7
+
+                car.next_payment_date = (
+                    new_period_start
+                    + timedelta(days=days_until_due)
+                ).isoformat()
+
+                payment_applied = due_before
+
+                session.add(
+                    DriverWalletTransaction(
+                        driver_name=car.driver or "",
+                        car_code=car.code,
+                        amount=-payment_applied,
+                        transaction_type="rent_payment",
+                        source="system",
+                        comment=(
+                            "Зачтено в оплату аренды "
+                            f"из платежа T-Банка {payment_id}"
+                        ),
+                        date=now,
+                    )
+                )
+
+            session.commit()
+
+            print(
+                f"T-BANK PAYMENT ACCEPTED: "
+                f"car={car.code}, "
+                f"amount={amount}, "
+                f"payment_id={payment_id}, "
+                f"rent_applied={payment_applied}",
+                flush=True,
+            )
+
+            return "OK", 200
+
+        except Exception:
+            session.rollback()
+            raise
+
+        finally:
+            session.close()
 
     except Exception as error:
-        print("T-BANK WEBHOOK ERROR:", str(error), flush=True)
+        print(
+            "T-BANK WEBHOOK ERROR:",
+            str(error),
+            flush=True,
+        )
         return "ERROR", 500
