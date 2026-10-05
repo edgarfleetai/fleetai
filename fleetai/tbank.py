@@ -95,8 +95,8 @@ def get_statement(days=7):
 import hashlib
 
 
-TBANK_TERMINAL_KEY = os.getenv("TBANK_TERMINAL_KEY", "")
-TBANK_TERMINAL_PASSWORD = os.getenv("TBANK_TERMINAL_PASSWORD", "")
+TBANK_TERMINAL_KEY = os.getenv("TBANK_EACQ_TERMINAL_KEY", "")
+TBANK_TERMINAL_PASSWORD = os.getenv("TBANK_EACQ_PASSWORD", "")
 
 TBANK_ACQUIRING_URL = "https://securepay.tinkoff.ru/v2"
 
