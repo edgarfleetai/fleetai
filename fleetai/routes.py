@@ -7593,3 +7593,31 @@ def api_tbank_transactions_test():
             "ok": False,
             "message": str(error),
         }), 500
+@bp.route("/api/tbank-payment-test")
+def api_tbank_payment_test():
+    from .tbank import create_payment
+    import time
+
+    try:
+        order_id = f"fleetai-test-{int(time.time())}"
+
+        payment = create_payment(
+            amount_rubles=10,
+            order_id=order_id,
+            description="Тестовая оплата FleetAI",
+        )
+
+        return jsonify({
+            "ok": True,
+            "order_id": order_id,
+            "payment_id": payment.get("PaymentId"),
+            "status": payment.get("Status"),
+            "payment_url": payment.get("PaymentURL"),
+            "tbank": payment,
+        })
+
+    except Exception as error:
+        return jsonify({
+            "ok": False,
+            "message": str(error),
+        }), 500
