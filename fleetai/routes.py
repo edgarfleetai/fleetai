@@ -7482,7 +7482,9 @@ def _wialon_login_sid():
 def _send_665_engine_command(command_type):
     if command_type not in ("block_engine", "unblock_engine"):
         raise ValueError("Недопустимая команда")
+
     sid = _wialon_login_sid()
+
     return _wialon_call("unit/send_cmd", {
         "itemId": WIALON_665_UNIT_ID,
         "commandType": command_type,
@@ -7494,11 +7496,33 @@ def _send_665_engine_command(command_type):
     }, sid=sid)
 
 
+# Диагностика объекта 665. Никаких команд автомобилю не отправляет.
+@bp.route("/api/wialon/665/diagnostic", methods=["GET"])
+def api_wialon_665_diagnostic():
+    try:
+        sid = _wialon_login_sid()
+        result = _wialon_call("core/search_item", {
+            "id": WIALON_665_UNIT_ID,
+            "flags": 4294967295,
+        }, sid=sid)
+
+        return jsonify({
+            "ok": True,
+            "unit_id": WIALON_665_UNIT_ID,
+            "data": result,
+        })
+    except requests.RequestException as exc:
+        return jsonify({"ok": False, "stage": "http", "message": str(exc)}), 502
+    except Exception as exc:
+        return jsonify({"ok": False, "stage": "internal", "message": str(exc)}), 500
+
+
 @bp.route("/api/wialon/665/command", methods=["POST"])
 def api_wialon_665_command():
     """Manual pilot only. Blocking requires explicit confirmation that 665 is parked and engine is off."""
     data = request.get_json(silent=True) or {}
     action = (data.get("action") or "").strip().lower()
+
     if action not in ("block", "unblock"):
         return jsonify({"ok": False, "message": "action должен быть block или unblock"}), 400
 
@@ -7509,14 +7533,17 @@ def api_wialon_665_command():
         }), 409
 
     command_type = "block_engine" if action == "block" else "unblock_engine"
+
     try:
         result = _send_665_engine_command(command_type)
         if isinstance(result, dict) and result.get("error") is not None:
             return jsonify({"ok": False, "stage": "send_cmd", "wialon": result}), 502
+
         return jsonify({
             "ok": True,
             "unit_id": WIALON_665_UNIT_ID,
             "action": action,
+            "wialon_result": result,
             "message": "Команда передана Wialon. Проверьте фактическое состояние автомобиля 665."
         })
     except requests.RequestException as exc:
