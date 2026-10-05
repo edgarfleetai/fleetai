@@ -7575,3 +7575,21 @@ def api_tbank_test():
             "ok": False,
             "message": str(error),
         }), 500
+@bp.route("/api/tbank-transactions-test")
+def api_tbank_transactions_test():
+    from .tbank import get_statement
+
+    try:
+        statement = get_statement(days=30)
+
+        return jsonify({
+            "ok": True,
+            "message": "Выписка T-Банка получена",
+            "statement": statement,
+        })
+
+    except Exception as error:
+        return jsonify({
+            "ok": False,
+            "message": str(error),
+        }), 500
