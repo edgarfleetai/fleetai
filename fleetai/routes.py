@@ -7535,3 +7535,21 @@ async function send(action){if(action==='block'&&!safe.checked){alert('Снач�
 loadDebtStatus();
 </script></body></html>'''
     return render_template_string(html)
+@bp.route("/api/tbank-test")
+def api_tbank_test():
+    from .tbank import get_accounts
+
+    try:
+        accounts = get_accounts()
+
+        return jsonify({
+            "ok": True,
+            "message": "Связь с T-Банком работает",
+            "accounts": accounts,
+        })
+
+    except Exception as error:
+        return jsonify({
+            "ok": False,
+            "message": str(error),
+        }), 500
