@@ -1894,7 +1894,7 @@ body > *{
   <div>
     <div class="eyebrow">ПЛАТЕЖИ И ГРАФИК</div>
     <h1>Водители</h1>
-    <p>Еженедельные расчёты, даты оплат и уведомления.</p>
+    <p>Баланс, кабинет водителя, штрафы, расчёты и уведомления.</p>
   </div>
 </div>
 
@@ -2850,12 +2850,6 @@ async function loadInvestors(){
   }).join('')}</div>`;
 }
 
-const payment_car=document.getElementById('payment_car');
-const payment_driver=document.getElementById('payment_driver');
-const payment_daily_rent=document.getElementById('payment_daily_rent');
-const payment_date=document.getElementById('payment_date');
-const payment_weekday=document.getElementById('payment_weekday');
-const paymentRes=document.getElementById('paymentRes');
 let paymentCars=[];
 
 function paymentStatus(nextDate){
@@ -2870,17 +2864,13 @@ function paymentStatus(nextDate){
 }
 
 function fillPaymentCarSelect(carsList){
-  if(!payment_car)return;
-  const selected=String(payment_car.value||'');
-  paymentCars=Array.isArray(carsList)?carsList:[];
-  payment_car.innerHTML='<option value="">Выбери машину</option>'+paymentCars.map(car=>{
-    const code=String(car.code||'').trim();
-    return `<option value="${code}">${code} ${car.brand||''} ${car.model||''}</option>`;
-  }).join('');
-  if(paymentCars.some(car=>String(car.code||'').trim()===selected))payment_car.value=selected;
+  const selected=payment_car.value;
+  paymentCars=carsList;
+  payment_car.innerHTML='<option value="">Выбери машину</option>'+carsList.map(car=>`<option value="${car.code}">${car.code} ${car.brand||''} ${car.model||''}</option>`).join('');
+  if(carsList.some(car=>car.code===selected))payment_car.value=selected;
 }
 
-if(payment_car) payment_car.addEventListener('change',()=>{
+payment_car.addEventListener('change',()=>{
   const car=paymentCars.find(item=>item.code===payment_car.value);
   if(!car){
     payment_driver.value='';
@@ -3042,6 +3032,7 @@ function renderDriverPayments(carsList){
       <th>Начислено сейчас</th>
       <th>Дата расчёта</th>
       <th>Статус</th>
+      <th>Баланс</th>
       <th>Действие</th>
     </tr>
 
@@ -3111,15 +3102,41 @@ function renderDriverPayments(carsList){
           </td>
 
           <td>
-            ${
-              Number(calc.overdue_periods_count||0)>0
-                ? '<span class="raw">Закрой недели по очереди</span>'
-                : `
-                  <button onclick="markPaymentPaid('${car.code}')">
-                    Оплачено
-                  </button>
-                `
-            }
+            <b class="${Number(car.driver_wallet_balance||0)>=0?'ok':'bad'}">
+              ${rub(Number(car.driver_wallet_balance||0))}
+            </b>
+          </td>
+
+          <td>
+            <div style="display:flex;flex-wrap:wrap;gap:6px">
+              <button
+                class="secondary"
+                onclick="window.open('/driver?code=${encodeURIComponent(car.code)}','_blank')"
+              >
+                👤 Кабинет
+              </button>
+              <button
+                class="secondary"
+                onclick="window.open('/driver-topup?code=${encodeURIComponent(car.code)}','_blank')"
+              >
+                + Пополнить
+              </button>
+              <button
+                class="danger"
+                onclick="window.open('/driver-fines?code=${encodeURIComponent(car.code)}','_blank')"
+              >
+                ⚠️ Штраф
+              </button>
+              ${
+                Number(calc.overdue_periods_count||0)>0
+                  ? '<span class="raw">Закрой недели по очереди</span>'
+                  : `
+                    <button onclick="markPaymentPaid('${car.code}')">
+                      Оплачено
+                    </button>
+                  `
+              }
+            </div>
           </td>
         </tr>
       `;
@@ -3283,7 +3300,7 @@ async function loadCars(){
   }
 
   const carsTable=document.getElementById('cars');
-  const paymentSelect=payment_car;
+  const paymentSelect=document.getElementById('paymentCar');
   const paymentsTable=document.getElementById('driverPayments');
 
   try{
