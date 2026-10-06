@@ -9632,7 +9632,7 @@ def _evaluate_665_stationary_block_preview(session, allow_commands=False):
     })
     session.commit()
     return {
-        "ok": True, "version": "V15.16", "dry_run": not allow_commands, "commands_sent": command_sent_now,
+        "ok": True, "version": "V15.17", "dry_run": not allow_commands, "commands_sent": command_sent_now,
         "car_code": BLOCK_PREVIEW_CAR_CODE, "balance": balance,
         "threshold": threshold, "debt_triggered": debt_triggered,
         "speed_kmh": speed, "message_time": motion.get("message_time"),
@@ -9643,7 +9643,7 @@ def _evaluate_665_stationary_block_preview(session, allow_commands=False):
         "ready_to_block": ready, "status": status,
         "blocked": blocked, "command_sent_at": command_sent_at,
         "last_command_error": last_command_error,
-        "note": ("V15.16 ADD 373 + READ-ONLY TELEMETRY — команды разрешены только защищённому cron" if allow_commands else "V15.16 READ ONLY — публичный просмотр без команд Wialon"),
+        "note": ("V15.17 WIALON MILEAGE + TELEMETRY — команды разрешены только защищённому cron" if allow_commands else "V15.17 READ ONLY — публичный просмотр без команд Wialon"),
     }
 
 
@@ -9693,11 +9693,50 @@ def api_wialon_unit_search():
         return jsonify({
             "ok": True, "read_only": True, "query": query,
             "count": len(items), "items": items,
-            "version": "V15.16",
+            "version": "V15.17",
         })
     except Exception as exc:
         return jsonify({"ok": False, "read_only": True, "message": f"{type(exc).__name__}: {exc}"}), 500
 
+
+
+
+def _wialon_current_mileage_for_unit(unit_id):
+    """READ ONLY: current tracker mileage parameter, when exposed by Wialon."""
+    sid = _wialon_login_sid()
+    result = _wialon_call("core/search_item", {"id": int(unit_id), "flags": 1025}, sid=sid)
+    if not isinstance(result, dict) or result.get("error") is not None:
+        raise RuntimeError(f"Wialon mileage search_item: {result}")
+    item = result.get("item") or {}
+    msg = item.get("lmsg") or {}
+    params = msg.get("p") or {}
+    raw = params.get("mileage")
+    try:
+        mileage = float(raw)
+    except (TypeError, ValueError):
+        mileage = None
+    return {"mileage": mileage, "mileage_raw": raw, "message_time": msg.get("t")}
+
+
+@bp.route("/api/wialon/mileage/<car_code>", methods=["GET"])
+def api_wialon_vehicle_mileage(car_code):
+    """READ ONLY mileage diagnostic. No vehicle commands."""
+    session = Session()
+    try:
+        code = normalize_code(car_code)
+        cfg = _wialon_car_config(code, session=session)
+        if not cfg:
+            return jsonify({"ok": False, "read_only": True, "car_code": code,
+                            "message": "Машина не настроена в wialon_vehicle_settings",
+                            "version": "V15.17"}), 404
+        data = _wialon_current_mileage_for_unit(int(cfg["unit_id"]))
+        return jsonify({"ok": True, "read_only": True, "car_code": code,
+                        "unit_id": int(cfg["unit_id"]), **data, "version": "V15.17"})
+    except Exception as exc:
+        return jsonify({"ok": False, "read_only": True, "car_code": normalize_code(car_code),
+                        "message": f"{type(exc).__name__}: {exc}", "version": "V15.17"}), 500
+    finally:
+        session.close()
 
 
 @bp.route("/api/wialon/status/<car_code>", methods=["GET"])
@@ -9711,7 +9750,7 @@ def api_wialon_vehicle_status(car_code):
             return jsonify({
                 "ok": False, "read_only": True, "car_code": code,
                 "message": "Машина не настроена в wialon_vehicle_settings",
-                "version": "V15.16",
+                "version": "V15.17",
             }), 404
 
         motion = _wialon_latest_motion_for_unit(int(cfg["unit_id"]))
@@ -9728,14 +9767,14 @@ def api_wialon_vehicle_status(car_code):
             "telemetry_age_seconds": age,
             "telemetry_max_age_seconds": max_age,
             "telemetry_fresh": bool(age is not None and int(age) <= max_age),
-            "version": "V15.16",
+            "version": "V15.17",
         })
     except Exception as exc:
         return jsonify({
             "ok": False, "read_only": True,
             "car_code": normalize_code(car_code),
             "message": f"{type(exc).__name__}: {exc}",
-            "version": "V15.16",
+            "version": "V15.17",
         }), 500
     finally:
         session.close()
@@ -9769,11 +9808,17 @@ def wialon_trackers_dashboard():
         st = states.get(code, {})
         enabled = bool(int(row["auto_block"] or 0))
         blocked = bool(int(st.get("blocked") or 0))
+        try:
+            mileage_info = _wialon_current_mileage_for_unit(int(row["unit_id"]))
+            current_mileage = mileage_info.get("mileage")
+        except Exception:
+            current_mileage = None
         cards.append({
             "code": code, "unit_id": row["unit_id"], "enabled": enabled,
             "threshold": row["threshold"], "minutes": row["stationary_minutes"],
             "speed": st.get("last_speed"), "status": st.get("status") or "NO_STATE",
             "blocked": blocked, "error": st.get("last_command_error") or "",
+            "mileage": current_mileage,
         })
 
     import html as _html
@@ -9790,6 +9835,7 @@ def wialon_trackers_dashboard():
             <div><span>Стоянка</span><b>{int(c['minutes'])} мин</b></div>
             <div><span>Скорость</span><b>{'-' if c['speed'] is None else str(c['speed'])+' км/ч'}</b></div>
             <div><span>Состояние</span><b>{block}</b></div>
+            <div><span>Пробег Wialon</span><b>{'—' if c['mileage'] is None else f"{c['mileage']:,.0f}"}</b></div>
           </div>
           <div class="muted status">Watcher: {_html.escape(str(c['status']))}</div>
           {('<div class="err">'+_html.escape(c['error'])+'</div>') if c['error'] else ''}
