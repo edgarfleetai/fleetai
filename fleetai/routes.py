@@ -7391,6 +7391,7 @@ button,a.action{width:100%;display:block;text-align:center;margin-top:12px;borde
 <label>Машина / водитель</label>
 <select id="car"><option value="">Загрузка...</option></select>
 <button id="createBtn" onclick="createLink()">🔗 Создать ссылку Telegram</button>
+<button class="secondary" onclick="sendTest()">🧪 Отправить тестовое уведомление</button>
 <div id="result"></div>
 </div></div>
 <script>
@@ -7416,6 +7417,24 @@ async function loadCars(){
     carSelect.innerHTML='<option value="">Ошибка загрузки</option>';
   }
 }
+async function sendTest(){
+  const code=carSelect.value;
+  if(!code){resultBox.innerHTML='<div class="err">Выбери машину.</div>';return;}
+  resultBox.innerHTML='<div class="muted" style="margin-top:12px">Отправляю тест...</div>';
+  try{
+    const r=await fetch('/api/driver-telegram/test',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({car_code:code})
+    });
+    const d=await r.json();
+    if(!r.ok || !d.ok) throw new Error(d.message||'Ошибка');
+    resultBox.innerHTML='<div class="ok"><b>Тест отправлен.</b><br>Проверь Telegram привязанного водителя.</div>';
+  }catch(e){
+    resultBox.innerHTML='<div class="err">'+escapeHtml(e.message)+'</div>';
+  }
+}
+
 async function createLink(){
   const code=carSelect.value;
   if(!code){resultBox.innerHTML='<div class="err">Выбери машину.</div>';return;}
@@ -7517,6 +7536,83 @@ def api_driver_telegram_link():
         return jsonify({
             "ok": False,
             "message": f"Ошибка создания ссылки: {type(error).__name__}: {error}",
+        }), 500
+    finally:
+        session.close()
+
+
+
+@bp.route("/api/driver-telegram/test", methods=["POST"])
+def api_driver_telegram_test():
+    """Тест: отправляет сообщение только в персональный chat_id привязанного водителя."""
+    data = request.get_json(silent=True) or request.form
+    car_code = normalize_code(data.get("car_code") or data.get("code") or "")
+    if not car_code:
+        return jsonify({"ok": False, "message": "Не указана машина"}), 400
+
+    session = Session()
+    try:
+        car = find_car(session, car_code)
+        if not car:
+            return jsonify({"ok": False, "message": "Машина не найдена"}), 404
+
+        driver_name = (car.driver or "").strip()
+        binding = session.execute(
+            sql_text("""
+                SELECT telegram_chat_id, driver_name
+                FROM driver_telegram_bindings
+                WHERE TRIM(car_code) = :car_code
+                LIMIT 1
+            """),
+            {"car_code": car_code},
+        ).mappings().first()
+
+        if not binding:
+            return jsonify({
+                "ok": False,
+                "message": "Telegram этого водителя ещё не привязан",
+            }), 404
+
+        # Защита от ситуации, когда на машине уже другой водитель.
+        if (binding.get("driver_name") or "").strip() != driver_name:
+            return jsonify({
+                "ok": False,
+                "message": "На машине сменился водитель. Нужна новая Telegram-привязка.",
+            }), 409
+
+        snapshot = driver_wallet_snapshot(session, car)
+        balance = int(snapshot.get("balance", 0) or 0)
+        daily = int(snapshot.get("daily_rent", 0) or 0)
+        days_left = int(snapshot.get("days_left", 0) or 0)
+
+        message = (
+            "🧪 <b>Тестовое уведомление Клевер Парк</b>\n\n"
+            f"Водитель: <b>{driver_name}</b>\n"
+            f"Машина: <b>{car_code}</b>\n"
+            f"Баланс: <b>{balance:,} ₽</b>\n"
+            f"Аренда в сутки: <b>{daily:,} ₽</b>\n"
+            f"Хватит примерно на: <b>{days_left} дн.</b>\n\n"
+            "Это сообщение отправлено через персональную Telegram-привязку водителя."
+        ).replace(",", " ")
+
+        sent = send_telegram_to_chat(binding["telegram_chat_id"], message)
+        if not sent:
+            return jsonify({
+                "ok": False,
+                "message": "Telegram не принял тестовое сообщение",
+            }), 502
+
+        return jsonify({
+            "ok": True,
+            "message": "Тестовое сообщение отправлено персонально водителю",
+            "car_code": car_code,
+            "driver_name": driver_name,
+        })
+    except Exception as error:
+        session.rollback()
+        return jsonify({
+            "ok": False,
+            "message": f"{type(error).__name__}: {error}",
         }), 500
     finally:
         session.close()
