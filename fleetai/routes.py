@@ -7678,17 +7678,22 @@ def api_cron_daily_rent_and_alerts():
     details = []
 
     try:
+        # V15.5 TEST SCOPE: default automation is restricted to car 665.
+        allowed_raw = (os.getenv("AUTO_RENT_CARS") or "665").strip()
+        allowed_codes = {normalize_code(x) for x in allowed_raw.split(",") if normalize_code(x)}
         cars = session.query(Car).all()
 
         for car in cars:
             driver_name = (car.driver or "").strip()
             daily = int(effective_daily_rent(car) or 0)
+            code = normalize_code(car.code)
 
+            if code not in allowed_codes:
+                continue
             if not driver_name or daily <= 0:
                 continue
 
             processed += 1
-            code = normalize_code(car.code)
 
             # Списание аренды идемпотентно благодаря DAILY_RENT:YYYY-MM-DD.
             sync_result = _sync_daily_rent(session, car)
@@ -9287,6 +9292,190 @@ loadState();
 </script></body></html>"""
     return render_template_string(html)
 
+
+
+# --- V15.5 stationary blocking PREVIEW for car 665 ---
+# IMPORTANT: this state machine NEVER sends a Wialon block/unblock command.
+BLOCK_PREVIEW_CAR_CODE = "665"
+BLOCK_PREVIEW_THRESHOLD = int(os.environ.get("BLOCK_PREVIEW_THRESHOLD", "-2000"))
+BLOCK_PREVIEW_STATIONARY_MINUTES = int(os.environ.get("BLOCK_PREVIEW_STATIONARY_MINUTES", "20"))
+BLOCK_PREVIEW_TELEMETRY_MAX_AGE_SECONDS = int(os.environ.get("BLOCK_PREVIEW_TELEMETRY_MAX_AGE_SECONDS", "120"))
+BLOCK_PREVIEW_MAX_CHECK_GAP_SECONDS = int(os.environ.get("BLOCK_PREVIEW_MAX_CHECK_GAP_SECONDS", "360"))
+
+
+def _ensure_block_preview_table(session):
+    session.execute(sql_text("""
+        CREATE TABLE IF NOT EXISTS driver_blocking_preview_state (
+            car_code VARCHAR(32) PRIMARY KEY,
+            stationary_since VARCHAR(64),
+            last_checked_at VARCHAR(64),
+            last_speed INTEGER,
+            status VARCHAR(64),
+            updated_at VARCHAR(64)
+        )
+    """))
+    session.commit()
+
+
+def _parse_preview_dt(value):
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(str(value))
+    except Exception:
+        return None
+
+
+def _wialon_665_latest_motion():
+    """READ ONLY: latest Wialon speed and message age."""
+    sid = _wialon_login_sid()
+    result = _wialon_call("messages/load_last", {
+        "itemId": WIALON_665_UNIT_ID,
+        "lastTime": 0,
+        "lastCount": 1,
+        "flags": 0,
+        "flagsMask": 0,
+        "loadCount": 1,
+    }, sid=sid)
+    if isinstance(result, dict) and result.get("error") is not None:
+        raise RuntimeError(f"Wialon messages/load_last: {result}")
+    if isinstance(result, dict):
+        messages = result.get("messages") or result.get("msgs") or []
+    elif isinstance(result, list):
+        messages = result
+    else:
+        messages = []
+    if not messages:
+        raise RuntimeError("Wialon не вернул последнее сообщение 665")
+    msg = messages[-1] if isinstance(messages[-1], dict) else {}
+    pos = msg.get("pos") or {}
+    speed = int(pos.get("s") or 0)
+    message_time = int(msg.get("t") or msg.get("rt") or 0)
+    now_epoch = int(__import__("time").time())
+    age = max(now_epoch - message_time, 0) if message_time else None
+    return {"speed": speed, "message_time": message_time, "telemetry_age_seconds": age}
+
+
+def _evaluate_665_stationary_block_preview(session):
+    """Dry run only: debt + continuous stationary timer. No Wialon commands."""
+    _ensure_block_preview_table(session)
+    car = find_car(session, BLOCK_PREVIEW_CAR_CODE)
+    if not car:
+        raise RuntimeError("Машина 665 не найдена")
+
+    snapshot = driver_wallet_snapshot(session, car)
+    balance = int(snapshot.get("balance", 0) or 0)
+    now = moscow_now().replace(tzinfo=None)
+    now_iso = now.isoformat(timespec="seconds")
+    row = session.execute(sql_text("""
+        SELECT car_code, stationary_since, last_checked_at, last_speed, status, updated_at
+        FROM driver_blocking_preview_state WHERE car_code = :car_code LIMIT 1
+    """), {"car_code": BLOCK_PREVIEW_CAR_CODE}).mappings().first()
+    stationary_since = _parse_preview_dt(row.get("stationary_since")) if row else None
+    last_checked = _parse_preview_dt(row.get("last_checked_at")) if row else None
+
+    motion = _wialon_665_latest_motion()
+    speed = int(motion["speed"] or 0)
+    age = motion.get("telemetry_age_seconds")
+    telemetry_fresh = age is not None and age <= BLOCK_PREVIEW_TELEMETRY_MAX_AGE_SECONDS
+    debt_triggered = balance < BLOCK_PREVIEW_THRESHOLD
+
+    if not debt_triggered:
+        stationary_since = None
+        status = "BALANCE_OK"
+    elif not telemetry_fresh:
+        stationary_since = None
+        status = "WAITING_FRESH_TELEMETRY"
+    elif speed > 0:
+        stationary_since = None
+        status = "MOVING"
+    else:
+        if last_checked and (now - last_checked).total_seconds() > BLOCK_PREVIEW_MAX_CHECK_GAP_SECONDS:
+            stationary_since = now
+            status = "STATIONARY_TIMER_RESTARTED_AFTER_GAP"
+        elif stationary_since is None:
+            stationary_since = now
+            status = "STATIONARY_WAITING"
+        else:
+            elapsed = max(int((now - stationary_since).total_seconds()), 0)
+            status = "READY_TO_BLOCK_PREVIEW" if elapsed >= BLOCK_PREVIEW_STATIONARY_MINUTES * 60 else "STATIONARY_WAITING"
+
+    elapsed_seconds = max(int((now - stationary_since).total_seconds()), 0) if stationary_since else 0
+    required_seconds = BLOCK_PREVIEW_STATIONARY_MINUTES * 60
+    remaining_seconds = max(required_seconds - elapsed_seconds, 0) if stationary_since else required_seconds
+    ready = status == "READY_TO_BLOCK_PREVIEW"
+
+    session.execute(sql_text("""
+        INSERT INTO driver_blocking_preview_state
+            (car_code, stationary_since, last_checked_at, last_speed, status, updated_at)
+        VALUES (:car_code, :stationary_since, :last_checked_at, :last_speed, :status, :updated_at)
+        ON CONFLICT (car_code) DO UPDATE SET
+            stationary_since = EXCLUDED.stationary_since,
+            last_checked_at = EXCLUDED.last_checked_at,
+            last_speed = EXCLUDED.last_speed,
+            status = EXCLUDED.status,
+            updated_at = EXCLUDED.updated_at
+    """), {
+        "car_code": BLOCK_PREVIEW_CAR_CODE,
+        "stationary_since": stationary_since.isoformat(timespec="seconds") if stationary_since else None,
+        "last_checked_at": now_iso,
+        "last_speed": speed,
+        "status": status,
+        "updated_at": now_iso,
+    })
+    session.commit()
+    return {
+        "ok": True, "version": "V15.5", "dry_run": True, "commands_sent": False,
+        "car_code": BLOCK_PREVIEW_CAR_CODE, "balance": balance,
+        "threshold": BLOCK_PREVIEW_THRESHOLD, "debt_triggered": debt_triggered,
+        "speed_kmh": speed, "message_time": motion.get("message_time"),
+        "telemetry_age_seconds": age, "telemetry_fresh": telemetry_fresh,
+        "stationary_required_minutes": BLOCK_PREVIEW_STATIONARY_MINUTES,
+        "stationary_since": stationary_since.isoformat(timespec="seconds") if stationary_since else None,
+        "stationary_elapsed_seconds": elapsed_seconds, "remaining_seconds": remaining_seconds,
+        "ready_to_block": ready, "status": status,
+        "note": "PREVIEW ONLY — команда блокировки автомобилю не отправляется",
+    }
+
+
+@bp.route("/api/wialon/665/block-preview", methods=["GET"])
+def api_wialon_665_block_preview():
+    session = Session()
+    try:
+        return jsonify(_evaluate_665_stationary_block_preview(session))
+    except Exception as exc:
+        session.rollback()
+        return jsonify({"ok": False, "dry_run": True, "commands_sent": False, "message": f"{type(exc).__name__}: {exc}"}), 500
+    finally:
+        session.close()
+
+
+@bp.route("/api/cron/block-preview-665", methods=["GET", "POST"])
+def api_cron_block_preview_665():
+    """Protected dry-run watcher. Run every 5 minutes during the test."""
+    secret = (os.getenv("CRON_SECRET") or "").strip()
+    if not secret:
+        return jsonify({"ok": False, "message": "CRON_SECRET не настроен"}), 503
+    received = (request.headers.get("X-Admin-Secret") or request.args.get("secret") or "").strip()
+    if received != secret:
+        return jsonify({"ok": False, "message": "Нет доступа"}), 403
+    session = Session()
+    try:
+        return jsonify(_evaluate_665_stationary_block_preview(session))
+    except Exception as exc:
+        session.rollback()
+        return jsonify({"ok": False, "dry_run": True, "commands_sent": False, "message": f"{type(exc).__name__}: {exc}"}), 500
+    finally:
+        session.close()
+
+
+@bp.route("/wialon-665-block-preview")
+def wialon_665_block_preview_page():
+    html = r'''<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>FleetAI — тест блокировки 665</title><style>
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#f4f7f6;color:#17211d;margin:0}.wrap{max-width:720px;margin:30px auto;padding:18px}.card{background:#fff;border-radius:18px;padding:22px;box-shadow:0 6px 24px rgba(0,0,0,.07)}.safe{background:#e8f5ec;border-radius:12px;padding:13px;margin:16px 0}.status{font-size:22px;font-weight:800;margin:18px 0}.grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}.item{background:#eef2f0;padding:12px;border-radius:12px}button{border:0;border-radius:12px;padding:13px 18px;font-size:16px;font-weight:750;cursor:pointer;margin-top:16px}pre{white-space:pre-wrap;word-break:break-word;background:#eef2f0;padding:14px;border-radius:12px;max-height:420px;overflow:auto}@media(max-width:560px){.grid{grid-template-columns:1fr}}</style></head><body><div class="wrap"><div class="card"><h1>Тест автоблокировки 665</h1><div class="safe"><b>PREVIEW ONLY.</b> Баланс ниже −2 000 ₽ + скорость 0 непрерывно 20 минут. Реальная команда блокировки НЕ отправляется.</div><div id="status" class="status">Загрузка…</div><div class="grid"><div class="item">Баланс: <b id="balance">—</b></div><div class="item">Скорость: <b id="speed">—</b></div><div class="item">Стоит: <b id="elapsed">—</b></div><div class="item">Осталось: <b id="remaining">—</b></div></div><button onclick="loadState()">🔄 Обновить</button><pre id="raw"></pre></div></div><script>
+function fmt(sec){sec=Math.max(0,Number(sec||0));const m=Math.floor(sec/60),s=sec%60;return m+' мин '+s+' сек'}async function loadState(){try{const r=await fetch('/api/wialon/665/block-preview');const d=await r.json();raw.textContent=JSON.stringify(d,null,2);if(!d.ok){status.textContent='Ошибка';return}balance.textContent=Number(d.balance).toLocaleString('ru-RU')+' ₽';speed.textContent=d.speed_kmh+' км/ч';elapsed.textContent=fmt(d.stationary_elapsed_seconds);remaining.textContent=fmt(d.remaining_seconds);const names={BALANCE_OK:'🟢 Баланс выше порога',WAITING_FRESH_TELEMETRY:'🟡 Ждём свежую телеметрию',MOVING:'🚗 Машина движется — таймер сброшен',STATIONARY_WAITING:'⏳ Машина стоит — идёт отсчёт',STATIONARY_TIMER_RESTARTED_AFTER_GAP:'⏳ Был перерыв проверки — отсчёт начат заново',READY_TO_BLOCK_PREVIEW:'🔴 ГОТОВА К БЛОКИРОВКЕ (только тест)'};status.textContent=names[d.status]||d.status}catch(e){status.textContent='Ошибка: '+e}}loadState();setInterval(loadState,60000);
+</script></body></html>'''
+    return render_template_string(html)
 
 
 @bp.route("/api/wialon/665/history", methods=["GET"])
