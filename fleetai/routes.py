@@ -8405,16 +8405,19 @@ loadCars();
     return response
 
 # --- Driver portal V7: wallet + daily rent + T-Bank ------------------------
-def _driver_payment_quote(amount, payment_method="sbp"):
-    amount = int(amount or 0)
-    if amount <= 0:
-        raise ValueError("Сумма должна быть больше 0")
-    method = (payment_method or "sbp").strip().lower()
-    if method == "sbp":
-        return amount, int(round(amount * 1.02)), "СБП · комиссия 2%"
-    if method == "card":
-        return amount, int(round(amount * 1.04)), "Карта · комиссия 4%"
-    raise ValueError("Доступные способы онлайн-оплаты: СБП или карта")
+def _driver_wallet_credit_after_fee(paid_amount, payment_source):
+    """Calculate wallet credit after the disclosed top-up fee.
+
+    SBP / QR: 2% fee, everything else from the bank payment form: 4%.
+    The driver pays paid_amount; the fee is withheld from that amount.
+    """
+    paid_amount = int(paid_amount or 0)
+    source = str(payment_source or "").strip().lower()
+    is_sbp = ("sbp" in source) or ("сбп" in source) or ("qr" in source)
+    if is_sbp:
+        return int(round(paid_amount * 0.98)), 2, "СБП / QR"
+    return int(round(paid_amount * 0.96)), 4, "Банковская карта"
+
 
 def _sync_daily_rent(session, car):
     """
@@ -8767,7 +8770,7 @@ def _apply_driver_bank_payment(session, car, payment):
 
 @bp.route("/api/driver-mvp/<code>/bank-payment", methods=["POST"])
 def api_driver_create_bank_payment(code):
-    from .tbank import create_payment, create_sbp_link
+    from .tbank import create_payment
 
     data = request.get_json(silent=True) or {}
     try:
@@ -8784,16 +8787,9 @@ def api_driver_create_bank_payment(code):
         if not car:
             return jsonify({"ok": False, "message": "Машина не найдена"}), 404
 
-        payment_method = (data.get("payment_method") or "sbp").strip().lower()
-        if payment_method not in {"sbp", "card"}:
-            return jsonify({"ok": False, "message": "Выберите СБП или банковскую карту"}), 400
-        if payment_method == "sbp" and amount < 10:
-            return jsonify({"ok": False, "message": "Минимальная сумма оплаты через СБП — 10 ₽"}), 400
-
-        nominal, bank_amount, pricing_label = _driver_payment_quote(amount, payment_method)
-        order_id = f"fleetai-{normalize_code(car.code)}-{payment_method}-{uuid.uuid4().hex[:12]}"
+        order_id = f"fleetai-{normalize_code(car.code)}-{uuid.uuid4().hex[:16]}"
         payment = create_payment(
-            amount_rubles=bank_amount,
+            amount_rubles=amount,
             order_id=order_id,
             description=f"Пополнение баланса автомобиля {car.code}",
         )
@@ -8801,10 +8797,6 @@ def api_driver_create_bank_payment(code):
         payment_id = str(payment.get("PaymentId") or "").strip()
         payment_url = str(payment.get("PaymentURL") or "").strip()
         status = str(payment.get("Status") or "NEW").strip()
-
-        # For SBP we explicitly request a dynamic SBP link via GetQr.
-        if payment_id and payment_method == "sbp":
-            payment_url = create_sbp_link(payment_id)
 
         if not payment_id:
             return jsonify({
@@ -8830,9 +8822,7 @@ def api_driver_create_bank_payment(code):
             "payment_id": payment_id,
             "order_id": order_id,
             "amount": amount,
-            "bank_amount": bank_amount,
-            "pricing_label": pricing_label,
-            "payment_method": payment_method,
+            "bank_amount": amount,
             "status": status,
             "payment_url": payment_url,
             "message": "Платёж создан в T-Банке",
@@ -9084,13 +9074,13 @@ def driver_portal_mvp():
         or os.getenv("DRIVER_MVP_CAR", "665")
     )
     html = r"""<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Клевер Парк — водитель</title><style>
-*{box-sizing:border-box}body{margin:0;background:#f4f7f6;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#17211d}.wrap{max-width:520px;margin:auto;padding:20px}.brand{font-size:25px;font-weight:800;margin:8px 0 20px}.card{background:#fff;border-radius:18px;padding:20px;margin-bottom:14px;box-shadow:0 6px 24px rgba(0,0,0,.06)}.muted{color:#708078;font-size:14px}.car{font-size:20px;font-weight:750}.balance{font-size:36px;font-weight:850;margin:8px 0}.good{color:#14804a}.bad{color:#c23b32}.grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:14px}.mini{background:#f5f7f6;border-radius:12px;padding:12px}.mini b{display:block;font-size:18px;margin-top:5px}.amounts{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}.amounts button,.paybtn{border:1px solid #dce4e0;background:#fff;border-radius:11px;padding:12px;font-weight:700;cursor:pointer}.paygrid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px}.paybtn{font-size:15px}.cash{margin-top:12px;background:#f5f7f6;border-radius:12px;padding:13px}.tx{display:flex;justify-content:space-between;border-top:1px solid #edf0ee;padding:12px 0}.notice{font-size:13px;background:#fff5d8;border-radius:12px;padding:12px;margin-bottom:14px}.spinner{text-align:center;padding:30px}</style></head><body><div class="wrap"><div class="brand">🍀 Клевер Парк</div><div class="notice">Личный кабинет водителя</div><div id="app" class="spinner">Загрузка…</div></div><script>
+*{box-sizing:border-box}body{margin:0;background:#f4f7f6;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#17211d}.wrap{max-width:520px;margin:auto;padding:20px}.brand{font-size:25px;font-weight:800;margin:8px 0 20px}.card{background:#fff;border-radius:18px;padding:20px;margin-bottom:14px;box-shadow:0 6px 24px rgba(0,0,0,.06)}.muted{color:#708078;font-size:14px}.car{font-size:20px;font-weight:750}.balance{font-size:36px;font-weight:850;margin:8px 0}.good{color:#14804a}.bad{color:#c23b32}.grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:14px}.mini{background:#f5f7f6;border-radius:12px;padding:12px}.mini b{display:block;font-size:18px;margin-top:5px}.amounts{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}.amounts button,.paybtn{border:1px solid #dce4e0;background:#fff;border-radius:11px;padding:12px;font-weight:700;cursor:pointer}.paybtn{width:100%;margin-top:12px;font-size:16px;background:#17211d;color:#fff}.cash{margin-top:12px;background:#f5f7f6;border-radius:12px;padding:13px}.fees{margin-top:12px;background:#f5f7f6;border-radius:12px;padding:13px;line-height:1.55}.tx{display:flex;justify-content:space-between;border-top:1px solid #edf0ee;padding:12px 0}.notice{font-size:13px;background:#fff5d8;border-radius:12px;padding:12px;margin-bottom:14px}.spinner{text-align:center;padding:30px}</style></head><body><div class="wrap"><div class="brand">🍀 Клевер Парк</div><div class="notice">Личный кабинет водителя</div><div id="app" class="spinner">Загрузка…</div></div><script>
 const code='__CODE__',rub=n=>new Intl.NumberFormat('ru-RU').format(n||0)+' ₽';
 async function load(){const r=await fetch('/api/driver-mvp/'+code),d=await r.json();if(!d.ok){app.innerHTML=d.message;return}render(d)}
-function render(d){const b=d.balance||0;app.className='';app.innerHTML=`<div class="card"><div class="muted">${d.car.driver||'Водитель'}</div><div class="car">${d.car.brand} ${d.car.model} · ${d.car.code}</div><div class="muted">${d.car.plate||''}</div></div><div class="card"><b>${d.blocking.status==='active'?'🟢 Автомобиль активен':'🟡 Есть задолженность'}</b><div class="muted" style="margin-top:6px">${d.blocking.status_text}</div></div><div class="card"><div class="muted">Баланс</div><div class="balance ${b>=0?'good':'bad'}">${rub(b)}</div><div class="grid"><div class="mini"><span class="muted">Аренда / сутки</span><b>${rub(d.daily_rent)}</b></div><div class="mini"><span class="muted">Хватит примерно</span><b>${b>0?Math.floor(b/Math.max(Number(d.daily_rent||1),1))+' дн.':'0 дн.'}</b></div></div></div><div class="card"><b>💳 Пополнить баланс</b><p class="muted">Укажите сумму, которая должна поступить на ваш баланс. Комиссия добавится сверху.</p><input id="bankAmount" type="number" min="1" max="200000" step="1" placeholder="Сумма пополнения, ₽" oninput="updateQuote()" style="width:100%;box-sizing:border-box;padding:13px 14px;border:1px solid #d8dfdc;border-radius:12px;font-size:16px;margin:10px 0"><div class="amounts"><button onclick="setBankAmount(5000)">5 000 ₽</button><button onclick="setBankAmount(10000)">10 000 ₽</button><button onclick="setBankAmount(15000)">15 000 ₽</button></div><div id="quote" class="muted" style="margin-top:12px">Выберите способ оплаты: СБП +2% или карта +4%.</div><div class="paygrid"><button class="paybtn" onclick="createBankPayment('sbp',this)">🟢 СБП · +2%</button><button class="paybtn" onclick="createBankPayment('card',this)">💳 Карта · +4%</button></div><div class="cash"><b>💵 Наличными</b><div class="muted" style="margin-top:5px">Также можно пополнить баланс наличными. Передайте деньги диспетчеру — он зачислит сумму на баланс.</div></div><div id="bankbox" class="muted" style="margin-top:10px"></div></div><div class="card"><b>История операций</b>${d.transactions.filter(t=>!String(t.comment||'').startsWith('V7_START:')&&!String(t.comment||'').startsWith('DAILY_RENT_DOWNTIME:')).length?d.transactions.filter(t=>!String(t.comment||'').startsWith('V7_START:')&&!String(t.comment||'').startsWith('DAILY_RENT_DOWNTIME:')).map(t=>{let label=t.comment||t.type||t.source||'Операция';if(t.type==='daily_rent'||String(t.comment||'').startsWith('DAILY_RENT:')){const raw=String(t.comment||'').split(':')[1]||'';const p=raw.split('-');label=p.length===3?'Аренда за '+p[2]+'.'+p[1]+'.'+p[0]:'Списание аренды'}else if(t.type==='bank_payment'||String(t.comment||'').includes('Оплата через Т-Банк')){label='Пополнение через Т-Банк'}else if(t.type==='dispatcher_topup'){label=t.comment||'Пополнение через диспетчера'}return `<div class="tx"><div><b>${t.amount>=0?'+':''}${rub(t.amount)}</b><div class="muted">${t.date}</div></div><div class="muted" style="text-align:right;max-width:55%">${label}</div></div>`}).join(''):'<p class="muted">Пока пусто</p>'}</div>`}
+function render(d){const b=d.balance||0;app.className='';app.innerHTML=`<div class="card"><div class="muted">${d.car.driver||'Водитель'}</div><div class="car">${d.car.brand} ${d.car.model} · ${d.car.code}</div><div class="muted">${d.car.plate||''}</div></div><div class="card"><b>${d.blocking.status==='active'?'🟢 Автомобиль активен':'🟡 Есть задолженность'}</b><div class="muted" style="margin-top:6px">${d.blocking.status_text}</div></div><div class="card"><div class="muted">Баланс</div><div class="balance ${b>=0?'good':'bad'}">${rub(b)}</div><div class="grid"><div class="mini"><span class="muted">Аренда / сутки</span><b>${rub(d.daily_rent)}</b></div><div class="mini"><span class="muted">Хватит примерно</span><b>${b>0?Math.floor(b/Math.max(Number(d.daily_rent||1),1))+' дн.':'0 дн.'}</b></div></div></div><div class="card"><b>💳 Пополнить баланс</b><p class="muted">Введите сумму, которую хотите оплатить. Комиссия удерживается из суммы пополнения.</p><input id="bankAmount" type="number" min="1" max="200000" step="1" placeholder="Сумма оплаты, ₽" oninput="updateQuote()" style="width:100%;box-sizing:border-box;padding:13px 14px;border:1px solid #d8dfdc;border-radius:12px;font-size:16px;margin:10px 0"><div class="amounts"><button onclick="setBankAmount(5000)">5 000 ₽</button><button onclick="setBankAmount(10000)">10 000 ₽</button><button onclick="setBankAmount(15000)">15 000 ₽</button></div><div class="fees"><b>Комиссия за пополнение</b><br>🟢 СБП / QR — 2%<br>💳 Банковская карта — 4%<br>💵 Наличными — без комиссии<div id="quote" class="muted" style="margin-top:8px">Например, при оплате 100 ₽: СБП/QR — на баланс 98 ₽, картой — 96 ₽.</div></div><button id="payButton" class="paybtn" onclick="createBankPayment(this)">Перейти к оплате</button><div class="cash"><b>💵 Наличными</b><div class="muted" style="margin-top:5px">Также можно пополнить баланс наличными без комиссии. Передайте деньги диспетчеру — он зачислит сумму на баланс.</div></div><div id="bankbox" class="muted" style="margin-top:10px"></div></div><div class="card"><b>История операций</b>${d.transactions.filter(t=>!String(t.comment||'').startsWith('V7_START:')&&!String(t.comment||'').startsWith('DAILY_RENT_DOWNTIME:')).length?d.transactions.filter(t=>!String(t.comment||'').startsWith('V7_START:')&&!String(t.comment||'').startsWith('DAILY_RENT_DOWNTIME:')).map(t=>{let label=t.comment||t.type||t.source||'Операция';if(t.type==='daily_rent'||String(t.comment||'').startsWith('DAILY_RENT:')){const raw=String(t.comment||'').split(':')[1]||'';const p=raw.split('-');label=p.length===3?'Аренда за '+p[2]+'.'+p[1]+'.'+p[0]:'Списание аренды'}else if(t.type==='bank_payment'||String(t.comment||'').includes('Оплата через Т-Банк')){label=t.comment||'Пополнение через Т-Банк'}else if(t.type==='dispatcher_topup'){label=t.comment||'Пополнение через диспетчера'}return `<div class="tx"><div><b>${t.amount>=0?'+':''}${rub(t.amount)}</b><div class="muted">${t.date}</div></div><div class="muted" style="text-align:right;max-width:55%">${label}</div></div>`}).join(''):'<p class="muted">Пока пусто</p>'}</div>`}
 function setBankAmount(amount){document.getElementById('bankAmount').value=amount;updateQuote()}
-function updateQuote(){const a=parseInt((document.getElementById('bankAmount')||{}).value||'0',10);const q=document.getElementById('quote');if(!q)return;if(!a){q.textContent='Выберите способ оплаты: СБП +2% или карта +4%.';return}q.innerHTML=`На баланс: <b>${rub(a)}</b><br>СБП: к оплате ≈ <b>${rub(Math.round(a*1.02))}</b> · карта: ≈ <b>${rub(Math.round(a*1.04))}</b>`}
-async function createBankPayment(method,btn){const input=document.getElementById('bankAmount');const amount=parseInt(input.value||'0',10);if(!amount||amount<1||amount>200000){alert('Введите сумму от 1 до 200 000 ₽');return}if(method==='sbp'&&amount<10){alert('Минимальная сумма через СБП — 10 ₽');return}const old=btn.textContent;btn.disabled=true;btn.textContent='Создаём…';try{const r=await fetch('/api/driver-mvp/'+code+'/bank-payment',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({amount,payment_method:method})}),d=await r.json();if(!d.ok){alert(d.message||'Не удалось создать платёж');return}if(!d.payment_url){alert('T-Банк не вернул ссылку на оплату');return}bankbox.innerHTML=`На баланс: <b>${rub(d.amount)}</b><br>К оплате: <b>${rub(d.bank_amount)}</b><br>${d.pricing_label}<br><span>Переходим к оплате…</span>`;window.location.href=d.payment_url}catch(e){alert('Ошибка создания платежа: '+e)}finally{btn.disabled=false;btn.textContent=old}}
+function updateQuote(){const a=parseInt((document.getElementById('bankAmount')||{}).value||'0',10);const q=document.getElementById('quote');if(!q)return;if(!a){q.textContent='Например, при оплате 100 ₽: СБП/QR — на баланс 98 ₽, картой — 96 ₽.';return}q.innerHTML=`Вы оплачиваете: <b>${rub(a)}</b><br>СБП / QR → на баланс <b>${rub(Math.round(a*0.98))}</b><br>Карта → на баланс <b>${rub(Math.round(a*0.96))}</b>`}
+async function createBankPayment(btn){const input=document.getElementById('bankAmount');const amount=parseInt(input.value||'0',10);if(!amount||amount<1||amount>200000){alert('Введите сумму от 1 до 200 000 ₽');return}const old=btn.textContent;btn.disabled=true;btn.textContent='Создаём платёж…';try{const r=await fetch('/api/driver-mvp/'+code+'/bank-payment',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({amount})}),d=await r.json();if(!d.ok){alert(d.message||'Не удалось создать платёж');return}if(!d.payment_url){alert('T-Банк не вернул ссылку на оплату');return}bankbox.innerHTML=`К оплате в T-Банке: <b>${rub(d.amount)}</b><br><span>Переходим к выбору способа оплаты…</span>`;window.location.href=d.payment_url}catch(e){alert('Ошибка создания платежа: '+e)}finally{btn.disabled=false;btn.textContent=old}}
 load();</script></body></html>"""
     response = make_response(render_template_string(html.replace("__CODE__", code)))
     response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
@@ -10723,16 +10713,32 @@ def tbank_webhook():
 
             now = moscow_now().replace(tzinfo=None)
             payment_row = session.query(DriverBankPayment).filter(DriverBankPayment.payment_id == payment_id).first()
-            wallet_amount = int(payment_row.amount or 0) if payment_row else amount
 
-            # 5. На баланс зачисляется выбранная сумма; amount ниже — реальные деньги банка
+            # T-Bank payment form returns the actual payment method as source.
+            # Depending on notification configuration it may be top-level or inside Data.
+            notification_data = data.get("Data") if isinstance(data.get("Data"), dict) else {}
+            payment_source = (
+                data.get("source")
+                or data.get("Source")
+                or notification_data.get("source")
+                or notification_data.get("Source")
+                or ""
+            )
+            wallet_amount, fee_percent, payment_method_label = _driver_wallet_credit_after_fee(
+                amount, payment_source
+            )
+
+            # 5. The driver pays the full amount; disclosed fee is withheld from wallet credit.
             wallet_tx = DriverWalletTransaction(
                 driver_name=car.driver or "",
                 car_code=car.code,
                 amount=wallet_amount,
                 transaction_type="topup",
                 source="tbank",
-                comment=f"Оплата через T-Банк · {payment_id}",
+                comment=(
+                    f"Оплата через T-Банк · {payment_method_label} · "
+                    f"комиссия {fee_percent}% · оплачено {amount} ₽ · {payment_id}"
+                ),
                 date=now,
             )
             session.add(wallet_tx)
@@ -10744,8 +10750,9 @@ def tbank_webhook():
                 type="income",
                 category="Аренда",
                 description=(
-                    f"Оплата аренды водителем "
-                    f"{car.driver or ''} через T-Банк"
+                    f"Пополнение водителем {car.driver or ''} через T-Банк · "
+                    f"{payment_method_label} · комиссия {fee_percent}% · "
+                    f"на баланс {wallet_amount} ₽"
                 ),
                 amount=amount,
                 raw_message=(
@@ -10779,7 +10786,10 @@ def tbank_webhook():
             print(
                 f"T-BANK PAYMENT ACCEPTED: "
                 f"car={car.code}, "
-                f"amount={amount}, "
+                f"paid={amount}, "
+                f"wallet_credit={wallet_amount}, "
+                f"method={payment_method_label}, "
+                f"fee={fee_percent}%, "
                 f"payment_id={payment_id}, "
                 f"rent_applied={payment_applied}",
                 flush=True,
