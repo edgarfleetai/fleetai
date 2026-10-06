@@ -9127,6 +9127,31 @@ def _wialon_665_live_state():
         sensor_item = sensor_result.get("item") or {}
     sensors_raw = sensor_item.get("sens") or {}
 
+    # V15.3: расширенные свойства объекта: hardware type + unique ID.
+    hw_result = _wialon_call("core/search_item", {
+        "id": WIALON_665_UNIT_ID,
+        "flags": 257,  # 1 base + 256 advanced properties
+    }, sid=sid)
+    hw_item = {}
+    if isinstance(hw_result, dict) and hw_result.get("error") is None:
+        hw_item = hw_result.get("item") or {}
+
+    hardware_id = hw_item.get("hw")
+    hardware_name = ""
+    hardware_info = {}
+
+    if hardware_id is not None:
+        hw_types = _wialon_call("core/get_hw_types", {
+            "filterType": "id",
+            "filterValue": [hardware_id],
+            "includeType": True,
+            "ignoreRename": False,
+            "includeGuid": True,
+        }, sid=sid)
+        if isinstance(hw_types, list) and hw_types:
+            hardware_info = hw_types[0] or {}
+            hardware_name = hardware_info.get("name") or ""
+
     sensors = []
     ignition_sensors = []
     for sensor_id, sensor in sensors_raw.items():
@@ -9188,6 +9213,15 @@ def _wialon_665_live_state():
         "sensors_count": len(sensors),
         "ignition_sensors": ignition_sensors,
         "sensors": sensors,
+        "hardware": {
+            "id": hardware_id,
+            "name": hardware_name,
+            "unique_id": hw_item.get("uid"),
+            "second_unique_id": hw_item.get("uid2"),
+            "category": hardware_info.get("hw_category") if hardware_info else None,
+            "features": hardware_info.get("hw_features") if hardware_info else None,
+            "guid": hardware_info.get("guid") if hardware_info else None,
+        },
     }
 
 
