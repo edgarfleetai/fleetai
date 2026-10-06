@@ -7724,8 +7724,12 @@ def telegram_check_page():
         last_error = info.get("last_error_message") or ""
         last_error_date = info.get("last_error_date")
 
-        if webhook_url:
-            status = "Webhook уже установлен"
+        fleet_webhook = request.url_root.rstrip("/") + "/api/telegram/webhook"
+        if webhook_url == fleet_webhook:
+            status = "Webhook подключён к FleetAI"
+            status_class = "ok"
+        elif webhook_url:
+            status = "Webhook уже установлен в другом месте"
             status_class = "warn"
         else:
             status = "Webhook сейчас не установлен"
@@ -7752,6 +7756,28 @@ body{margin:0;background:#f4f7f6;font-family:-apple-system,BlinkMacSystemFont,"S
 <div class="row"><div class="label">Текущий webhook</div><div class="value">{{ webhook_url or "не установлен" }}</div></div>
 <div class="row"><div class="label">Ожидающих обновлений</div><div class="value">{{ pending }}</div></div>
 <div class="row"><div class="label">Последняя ошибка Telegram</div><div class="value">{{ last_error or "нет" }}</div></div>
+{% if not webhook_url %}
+<button id="setupBtn" onclick="setupWebhook()" style="width:100%;margin-top:18px;border:0;border-radius:12px;padding:14px;background:#17211d;color:#fff;font-size:16px;font-weight:750;cursor:pointer">🔌 Подключить webhook к FleetAI</button>
+<div id="setupResult"></div>
+<script>
+async function setupWebhook(){
+  const btn=document.getElementById('setupBtn');
+  const box=document.getElementById('setupResult');
+  btn.disabled=true;
+  box.innerHTML='<p>Подключаю...</p>';
+  try{
+    const r=await fetch('/api/telegram/setup-webhook-ui',{method:'POST'});
+    const d=await r.json();
+    if(!r.ok || !d.ok) throw new Error(d.message || 'Ошибка Telegram');
+    box.innerHTML='<div class="ok" style="margin-top:14px"><b>Webhook подключён.</b> Обновляю проверку...</div>';
+    setTimeout(()=>location.reload(),900);
+  }catch(e){
+    box.innerHTML='<div class="err" style="margin-top:14px">'+String(e.message)+'</div>';
+    btn.disabled=false;
+  }
+}
+</script>
+{% endif %}
 </div></div></body></html>
 """
         return render_template_string(
@@ -7774,6 +7800,67 @@ body{margin:0;background:#f4f7f6;font-family:-apple-system,BlinkMacSystemFont,"S
             """,
             error=f"{type(error).__name__}: {error}",
         ), 500
+
+
+
+@bp.route("/api/telegram/setup-webhook-ui", methods=["POST"])
+def api_telegram_setup_webhook_ui():
+    """
+    UI helper used from /telegram-check.
+    It only installs FleetAI when the bot currently has no webhook, so it
+    cannot overwrite another integration accidentally.
+    """
+    bot_token = (os.getenv("TELEGRAM_BOT_TOKEN") or "").strip()
+    webhook_secret = (os.getenv("TELEGRAM_WEBHOOK_SECRET") or "").strip()
+    if not bot_token:
+        return jsonify({"ok": False, "message": "TELEGRAM_BOT_TOKEN не настроен"}), 503
+    if not webhook_secret:
+        return jsonify({"ok": False, "message": "TELEGRAM_WEBHOOK_SECRET не настроен в Render"}), 503
+
+    try:
+        info_response = requests.get(
+            f"https://api.telegram.org/bot{bot_token}/getWebhookInfo",
+            timeout=15,
+        )
+        info_response.raise_for_status()
+        info_payload = info_response.json()
+        current_url = str((info_payload.get("result") or {}).get("url") or "").strip()
+
+        target_url = request.url_root.rstrip("/") + "/api/telegram/webhook"
+        if current_url and current_url != target_url:
+            return jsonify({
+                "ok": False,
+                "message": "У бота уже появился другой webhook. FleetAI его не перезаписал.",
+                "current_url": current_url,
+            }), 409
+
+        response = requests.post(
+            f"https://api.telegram.org/bot{bot_token}/setWebhook",
+            json={
+                "url": target_url,
+                "secret_token": webhook_secret,
+                "allowed_updates": ["message"],
+            },
+            timeout=20,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        if not payload.get("ok"):
+            return jsonify({
+                "ok": False,
+                "message": str(payload.get("description") or "Telegram отклонил webhook"),
+            }), 502
+
+        return jsonify({
+            "ok": True,
+            "message": "Webhook подключён к FleetAI",
+            "webhook_url": target_url,
+        })
+    except Exception as error:
+        return jsonify({
+            "ok": False,
+            "message": f"{type(error).__name__}: {error}",
+        }), 500
 
 
 @bp.route("/api/telegram/setup-webhook", methods=["POST"])
