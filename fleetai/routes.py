@@ -9398,6 +9398,80 @@ def _ensure_wialon_vehicle_settings_table(session):
         except Exception:
             session.rollback()
 
+    # V15.20: telemetry-only onboarding for additional fleet vehicles.
+    # Safety: autoblock OFF and command strings empty for every newly added vehicle.
+    session.execute(sql_text("""
+        INSERT INTO wialon_vehicle_settings (
+            car_code, unit_id, auto_block, threshold, stationary_minutes,
+            telemetry_max_age_seconds, block_command_name, block_command_param,
+            unblock_command_name, unblock_command_param, updated_at
+        ) VALUES (
+            '621', 49771, 0, -2000, 30, 120, '', '', '', '', :updated_at
+        )
+        ON CONFLICT (car_code) DO NOTHING
+    """), {"updated_at": moscow_now().replace(tzinfo=None).isoformat(timespec="seconds")})
+    session.execute(sql_text("""
+        INSERT INTO wialon_vehicle_settings (
+            car_code, unit_id, auto_block, threshold, stationary_minutes,
+            telemetry_max_age_seconds, block_command_name, block_command_param,
+            unblock_command_name, unblock_command_param, updated_at
+        ) VALUES (
+            '897', 50221, 0, -2000, 30, 120, '', '', '', '', :updated_at
+        )
+        ON CONFLICT (car_code) DO NOTHING
+    """), {"updated_at": moscow_now().replace(tzinfo=None).isoformat(timespec="seconds")})
+    session.execute(sql_text("""
+        INSERT INTO wialon_vehicle_settings (
+            car_code, unit_id, auto_block, threshold, stationary_minutes,
+            telemetry_max_age_seconds, block_command_name, block_command_param,
+            unblock_command_name, unblock_command_param, updated_at
+        ) VALUES (
+            '550', 50220, 0, -2000, 30, 120, '', '', '', '', :updated_at
+        )
+        ON CONFLICT (car_code) DO NOTHING
+    """), {"updated_at": moscow_now().replace(tzinfo=None).isoformat(timespec="seconds")})
+    session.execute(sql_text("""
+        INSERT INTO wialon_vehicle_settings (
+            car_code, unit_id, auto_block, threshold, stationary_minutes,
+            telemetry_max_age_seconds, block_command_name, block_command_param,
+            unblock_command_name, unblock_command_param, updated_at
+        ) VALUES (
+            '703', 50224, 0, -2000, 30, 120, '', '', '', '', :updated_at
+        )
+        ON CONFLICT (car_code) DO NOTHING
+    """), {"updated_at": moscow_now().replace(tzinfo=None).isoformat(timespec="seconds")})
+    session.execute(sql_text("""
+        INSERT INTO wialon_vehicle_settings (
+            car_code, unit_id, auto_block, threshold, stationary_minutes,
+            telemetry_max_age_seconds, block_command_name, block_command_param,
+            unblock_command_name, unblock_command_param, updated_at
+        ) VALUES (
+            '951', 50225, 0, -2000, 30, 120, '', '', '', '', :updated_at
+        )
+        ON CONFLICT (car_code) DO NOTHING
+    """), {"updated_at": moscow_now().replace(tzinfo=None).isoformat(timespec="seconds")})
+    session.execute(sql_text("""
+        INSERT INTO wialon_vehicle_settings (
+            car_code, unit_id, auto_block, threshold, stationary_minutes,
+            telemetry_max_age_seconds, block_command_name, block_command_param,
+            unblock_command_name, unblock_command_param, updated_at
+        ) VALUES (
+            '636', 50222, 0, -2000, 30, 120, '', '', '', '', :updated_at
+        )
+        ON CONFLICT (car_code) DO NOTHING
+    """), {"updated_at": moscow_now().replace(tzinfo=None).isoformat(timespec="seconds")})
+    session.execute(sql_text("""
+        INSERT INTO wialon_vehicle_settings (
+            car_code, unit_id, auto_block, threshold, stationary_minutes,
+            telemetry_max_age_seconds, block_command_name, block_command_param,
+            unblock_command_name, unblock_command_param, updated_at
+        ) VALUES (
+            '404', 50223, 0, -2000, 30, 120, '', '', '', '', :updated_at
+        )
+        ON CONFLICT (car_code) DO NOTHING
+    """), {"updated_at": moscow_now().replace(tzinfo=None).isoformat(timespec="seconds")})
+    session.commit()
+
     # V15.16: add 373 as telemetry-only. Autoblock stays OFF and commands stay empty.
     session.execute(sql_text("""
         INSERT INTO wialon_vehicle_settings
@@ -9667,7 +9741,7 @@ def _evaluate_665_stationary_block_preview(session, allow_commands=False):
     })
     session.commit()
     return {
-        "ok": True, "version": "V15.19", "dry_run": not allow_commands, "commands_sent": command_sent_now,
+        "ok": True, "version": "V15.20", "dry_run": not allow_commands, "commands_sent": command_sent_now,
         "car_code": BLOCK_PREVIEW_CAR_CODE, "balance": balance,
         "threshold": threshold, "debt_triggered": debt_triggered,
         "speed_kmh": speed, "message_time": motion.get("message_time"),
@@ -9678,7 +9752,7 @@ def _evaluate_665_stationary_block_preview(session, allow_commands=False):
         "ready_to_block": ready, "status": status,
         "blocked": blocked, "command_sent_at": command_sent_at,
         "last_command_error": last_command_error,
-        "note": ("V15.19 SEED 665 ODOMETER + CALIBRATION CHECK — команды разрешены только защищённому cron" if allow_commands else "V15.19 READ ONLY — публичный просмотр без команд Wialon"),
+        "note": ("V15.20 FLEET TELEMETRY ONBOARDING + ODOMETER — команды разрешены только защищённому cron" if allow_commands else "V15.20 READ ONLY — публичный просмотр без команд Wialon"),
     }
 
 
@@ -9728,7 +9802,7 @@ def api_wialon_unit_search():
         return jsonify({
             "ok": True, "read_only": True, "query": query,
             "count": len(items), "items": items,
-            "version": "V15.19",
+            "version": "V15.20",
         })
     except Exception as exc:
         return jsonify({"ok": False, "read_only": True, "message": f"{type(exc).__name__}: {exc}"}), 500
@@ -9781,11 +9855,11 @@ def api_wialon_odometer_check(car_code):
             ),
             "conversion_applied": False,
             "note": "raw_delta пока не переводится в км до калибровки",
-            "version": "V15.19",
+            "version": "V15.20",
         })
     except Exception as exc:
         return jsonify({"ok": False, "car_code": normalize_code(car_code),
-                        "message": f"{type(exc).__name__}: {exc}", "version": "V15.19"}), 500
+                        "message": f"{type(exc).__name__}: {exc}", "version": "V15.20"}), 500
     finally:
         session.close()
 
@@ -9807,7 +9881,7 @@ def api_wialon_odometer_baseline(car_code):
                 FROM wialon_odometer_baselines WHERE car_code=:code
             """), {"code": code}).mappings().first()
             return jsonify({"ok": True, "read_only": True, "baseline": dict(row) if row else None,
-                            "version": "V15.19"})
+                            "version": "V15.20"})
 
         expected = (os.environ.get("CRON_SECRET") or "").strip()
         supplied = (request.headers.get("X-Admin-Secret") or "").strip()
@@ -9836,11 +9910,11 @@ def api_wialon_odometer_baseline(car_code):
                "set_at": moscow_now().replace(tzinfo=None).isoformat(timespec="seconds")})
         session.commit()
         return jsonify({"ok": True, "car_code": code, "actual_odometer_km": actual,
-                        "wialon_mileage_raw_at_baseline": float(raw), "version": "V15.19"})
+                        "wialon_mileage_raw_at_baseline": float(raw), "version": "V15.20"})
     except Exception as exc:
         session.rollback()
         return jsonify({"ok": False, "car_code": normalize_code(car_code),
-                        "message": f"{type(exc).__name__}: {exc}", "version": "V15.19"}), 500
+                        "message": f"{type(exc).__name__}: {exc}", "version": "V15.20"}), 500
     finally:
         session.close()
 
@@ -9855,13 +9929,13 @@ def api_wialon_vehicle_mileage(car_code):
         if not cfg:
             return jsonify({"ok": False, "read_only": True, "car_code": code,
                             "message": "Машина не настроена в wialon_vehicle_settings",
-                            "version": "V15.19"}), 404
+                            "version": "V15.20"}), 404
         data = _wialon_current_mileage_for_unit(int(cfg["unit_id"]))
         return jsonify({"ok": True, "read_only": True, "car_code": code,
-                        "unit_id": int(cfg["unit_id"]), **data, "version": "V15.19"})
+                        "unit_id": int(cfg["unit_id"]), **data, "version": "V15.20"})
     except Exception as exc:
         return jsonify({"ok": False, "read_only": True, "car_code": normalize_code(car_code),
-                        "message": f"{type(exc).__name__}: {exc}", "version": "V15.19"}), 500
+                        "message": f"{type(exc).__name__}: {exc}", "version": "V15.20"}), 500
     finally:
         session.close()
 
@@ -9877,7 +9951,7 @@ def api_wialon_vehicle_status(car_code):
             return jsonify({
                 "ok": False, "read_only": True, "car_code": code,
                 "message": "Машина не настроена в wialon_vehicle_settings",
-                "version": "V15.19",
+                "version": "V15.20",
             }), 404
 
         motion = _wialon_latest_motion_for_unit(int(cfg["unit_id"]))
@@ -9894,14 +9968,14 @@ def api_wialon_vehicle_status(car_code):
             "telemetry_age_seconds": age,
             "telemetry_max_age_seconds": max_age,
             "telemetry_fresh": bool(age is not None and int(age) <= max_age),
-            "version": "V15.19",
+            "version": "V15.20",
         })
     except Exception as exc:
         return jsonify({
             "ok": False, "read_only": True,
             "car_code": normalize_code(car_code),
             "message": f"{type(exc).__name__}: {exc}",
-            "version": "V15.19",
+            "version": "V15.20",
         }), 500
     finally:
         session.close()
