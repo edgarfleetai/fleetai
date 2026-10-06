@@ -9618,7 +9618,7 @@ def _evaluate_665_stationary_block_preview(session, allow_commands=False):
     })
     session.commit()
     return {
-        "ok": True, "version": "V15.14", "dry_run": not allow_commands, "commands_sent": command_sent_now,
+        "ok": True, "version": "V15.15", "dry_run": not allow_commands, "commands_sent": command_sent_now,
         "car_code": BLOCK_PREVIEW_CAR_CODE, "balance": balance,
         "threshold": threshold, "debt_triggered": debt_triggered,
         "speed_kmh": speed, "message_time": motion.get("message_time"),
@@ -9629,11 +9629,60 @@ def _evaluate_665_stationary_block_preview(session, allow_commands=False):
         "ready_to_block": ready, "status": status,
         "blocked": blocked, "command_sent_at": command_sent_at,
         "last_command_error": last_command_error,
-        "note": ("V15.14 TRACKERS DASHBOARD + SECURE WATCHER — команды разрешены только защищённому cron" if allow_commands else "V15.14 READ ONLY — публичный просмотр без команд Wialon"),
+        "note": ("V15.15 UNIT SEARCH + TRACKERS DASHBOARD — команды разрешены только защищённому cron" if allow_commands else "V15.15 READ ONLY — публичный просмотр без команд Wialon"),
     }
 
 
 
+
+
+
+def _wialon_search_units_by_name(name_mask):
+    """READ ONLY: search visible Wialon units by sys_name."""
+    sid = _wialon_login_sid()
+    mask = (name_mask or "*").strip() or "*"
+    if "*" not in mask:
+        mask = f"*{mask}*"
+    result = _wialon_call("core/search_items", {
+        "spec": {
+            "itemsType": "avl_unit",
+            "propName": "sys_name",
+            "propValueMask": mask,
+            "sortType": "sys_name",
+            "propType": "property",
+            "or_logic": 0,
+        },
+        "force": 1,
+        "flags": 1,
+        "from": 0,
+        "to": 0,
+    }, sid=sid)
+    if not isinstance(result, dict) or result.get("error") is not None:
+        raise RuntimeError(f"Wialon search_items: {result}")
+    items = []
+    for item in result.get("items") or []:
+        items.append({
+            "unit_id": item.get("id"),
+            "name": item.get("nm") or item.get("name") or "",
+        })
+    return items
+
+
+@bp.route("/api/wialon/unit-search", methods=["GET"])
+def api_wialon_unit_search():
+    """READ ONLY diagnostic. No vehicle commands."""
+    query = (request.args.get("q") or "").strip()
+    if not query:
+        return jsonify({"ok": False, "message": "Укажите q, например ?q=373"}), 400
+    try:
+        items = _wialon_search_units_by_name(query)
+        return jsonify({
+            "ok": True, "read_only": True, "query": query,
+            "count": len(items), "items": items,
+            "version": "V15.15",
+        })
+    except Exception as exc:
+        return jsonify({"ok": False, "read_only": True, "message": f"{type(exc).__name__}: {exc}"}), 500
 
 
 @bp.route("/wialon-trackers")
