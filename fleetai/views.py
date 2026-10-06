@@ -1737,6 +1737,31 @@ body > *{
   }
 }
 
+
+/* ===== DRIVER TELEGRAM STATUS ===== */
+.telegram-status{
+  display:inline-flex;
+  align-items:center;
+  gap:6px;
+  padding:5px 8px;
+  border-radius:8px;
+  font-size:11px;
+  font-weight:700;
+  white-space:nowrap;
+}
+.telegram-status.connected{
+  color:#3f674d;
+  background:#eaf4ed;
+}
+.telegram-status.disconnected{
+  color:#a33e3e;
+  background:#fbeaea;
+}
+.telegram-status.loading{
+  color:#69645e;
+  background:#efedea;
+}
+
 </style>
 </head>
 
@@ -3033,6 +3058,7 @@ function renderDriverPayments(carsList){
       <th>Дата расчёта</th>
       <th>Статус</th>
       <th>Баланс</th>
+      <th>Telegram</th>
       <th>Действие</th>
     </tr>
 
@@ -3108,6 +3134,15 @@ function renderDriverPayments(carsList){
           </td>
 
           <td>
+            <span
+              class="telegram-status loading"
+              data-telegram-code="${String(car.code)}"
+            >
+              Проверяем…
+            </span>
+          </td>
+
+          <td>
             <div style="display:flex;flex-wrap:wrap;gap:6px">
               <button
                 class="secondary"
@@ -3142,6 +3177,63 @@ function renderDriverPayments(carsList){
       `;
     }).join('')}
   `;
+}
+
+async function loadDriverTelegramStatuses(carsList){
+  const configured=(carsList||[]).filter(
+    car=>
+      Number(car.daily_rent)>0 ||
+      Number(car.weekly_payment)>0
+  );
+
+  await Promise.all(
+    configured.map(async car=>{
+      const code=String(car.code||'');
+      const badge=document.querySelector(
+        `[data-telegram-code="${CSS.escape(code)}"]`
+      );
+
+      if(!badge)return;
+
+      try{
+        const data=await api(
+          '/api/driver-telegram/status?code='+
+          encodeURIComponent(code)
+        );
+
+        const connected=Boolean(
+          data &&
+          data.ok &&
+          (
+            data.connected === true ||
+            data.linked === true ||
+            data.bound === true ||
+            data.is_connected === true ||
+            data.telegram_connected === true ||
+            data.chat_id
+          )
+        );
+
+        badge.className=
+          'telegram-status '+
+          (connected?'connected':'disconnected');
+
+        badge.textContent=
+          connected
+            ? '🟢 Подключён'
+            : '🔴 Не подключён';
+
+      }catch(error){
+        console.error(
+          `Не удалось проверить Telegram машины ${code}:`,
+          error
+        );
+        badge.className='telegram-status disconnected';
+        badge.textContent='🔴 Не подключён';
+        badge.title='Не удалось проверить статус Telegram';
+      }
+    })
+  );
 }
 
 
@@ -3320,6 +3412,9 @@ async function loadCars(){
 
     if(paymentsTable){
       renderDriverPayments(response);
+      loadDriverTelegramStatuses(response).catch(error=>{
+        console.error('Ошибка загрузки Telegram-статусов:',error);
+      });
     }
 
     if(!carsTable){
