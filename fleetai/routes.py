@@ -9363,6 +9363,20 @@ def _ensure_wialon_vehicle_settings_table(session):
     })
     session.commit()
 
+    # V15.16: add 373 as telemetry-only. Autoblock stays OFF and commands stay empty.
+    session.execute(sql_text("""
+        INSERT INTO wialon_vehicle_settings
+            (car_code, unit_id, auto_block, threshold, stationary_minutes,
+             telemetry_max_age_seconds, block_command_name, block_command_param,
+             unblock_command_name, unblock_command_param, updated_at)
+        VALUES
+            ('373', 49770, 0, -2000, 30, 120, '', '', '', '', :updated_at)
+        ON CONFLICT (car_code) DO NOTHING
+    """), {
+        "updated_at": moscow_now().replace(tzinfo=None).isoformat(timespec="seconds"),
+    })
+    session.commit()
+
 
 def _wialon_car_config(car_code, session=None):
     code = normalize_code(car_code)
@@ -9618,7 +9632,7 @@ def _evaluate_665_stationary_block_preview(session, allow_commands=False):
     })
     session.commit()
     return {
-        "ok": True, "version": "V15.15", "dry_run": not allow_commands, "commands_sent": command_sent_now,
+        "ok": True, "version": "V15.16", "dry_run": not allow_commands, "commands_sent": command_sent_now,
         "car_code": BLOCK_PREVIEW_CAR_CODE, "balance": balance,
         "threshold": threshold, "debt_triggered": debt_triggered,
         "speed_kmh": speed, "message_time": motion.get("message_time"),
@@ -9629,7 +9643,7 @@ def _evaluate_665_stationary_block_preview(session, allow_commands=False):
         "ready_to_block": ready, "status": status,
         "blocked": blocked, "command_sent_at": command_sent_at,
         "last_command_error": last_command_error,
-        "note": ("V15.15 UNIT SEARCH + TRACKERS DASHBOARD — команды разрешены только защищённому cron" if allow_commands else "V15.15 READ ONLY — публичный просмотр без команд Wialon"),
+        "note": ("V15.16 ADD 373 + READ-ONLY TELEMETRY — команды разрешены только защищённому cron" if allow_commands else "V15.16 READ ONLY — публичный просмотр без команд Wialon"),
     }
 
 
@@ -9679,10 +9693,52 @@ def api_wialon_unit_search():
         return jsonify({
             "ok": True, "read_only": True, "query": query,
             "count": len(items), "items": items,
-            "version": "V15.15",
+            "version": "V15.16",
         })
     except Exception as exc:
         return jsonify({"ok": False, "read_only": True, "message": f"{type(exc).__name__}: {exc}"}), 500
+
+
+
+@bp.route("/api/wialon/status/<car_code>", methods=["GET"])
+def api_wialon_vehicle_status(car_code):
+    """READ ONLY telemetry for a configured vehicle. This route never sends commands."""
+    session = Session()
+    try:
+        code = normalize_code(car_code)
+        cfg = _wialon_car_config(code, session=session)
+        if not cfg:
+            return jsonify({
+                "ok": False, "read_only": True, "car_code": code,
+                "message": "Машина не настроена в wialon_vehicle_settings",
+                "version": "V15.16",
+            }), 404
+
+        motion = _wialon_latest_motion_for_unit(int(cfg["unit_id"]))
+        age = motion.get("telemetry_age_seconds")
+        max_age = int(cfg.get("telemetry_max_age_seconds") or 120)
+        return jsonify({
+            "ok": True,
+            "read_only": True,
+            "car_code": code,
+            "unit_id": int(cfg["unit_id"]),
+            "auto_block": bool(cfg.get("auto_block")),
+            "speed": motion.get("speed"),
+            "message_time": motion.get("message_time"),
+            "telemetry_age_seconds": age,
+            "telemetry_max_age_seconds": max_age,
+            "telemetry_fresh": bool(age is not None and int(age) <= max_age),
+            "version": "V15.16",
+        })
+    except Exception as exc:
+        return jsonify({
+            "ok": False, "read_only": True,
+            "car_code": normalize_code(car_code),
+            "message": f"{type(exc).__name__}: {exc}",
+            "version": "V15.16",
+        }), 500
+    finally:
+        session.close()
 
 
 @bp.route("/wialon-trackers")
