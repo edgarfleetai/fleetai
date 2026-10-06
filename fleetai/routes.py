@@ -9096,26 +9096,58 @@ def _wialon_665_live_state():
 
     item = result.get("item") or result
     pos = item.get("pos") or {}
-    params = pos.get("p") or {}
 
-    # Частые названия параметров зажигания у GPS-трекеров.
+    # В search_item поле pos часто не содержит p (параметры датчиков).
+    # Поэтому отдельно читаем последнее AVL-сообщение объекта.
+    msg_result = _wialon_call("messages/load_last", {
+        "itemId": WIALON_665_UNIT_ID,
+        "lastTime": 0,
+        "lastCount": 1,
+        "flags": 0,
+        "flagsMask": 0,
+        "loadCount": 1,
+    }, sid=sid)
+
+    messages = []
+    if isinstance(msg_result, dict):
+        messages = msg_result.get("messages") or msg_result.get("msgs") or []
+    elif isinstance(msg_result, list):
+        messages = msg_result
+
+    last_message = messages[-1] if messages else {}
+    msg_pos = last_message.get("pos") or {}
+    params = (
+        last_message.get("p")
+        or last_message.get("params")
+        or msg_pos.get("p")
+        or {}
+    )
+
+    # Если конкретная конфигурация Wialon всё же вернула p в pos — используем её.
+    if not params:
+        params = pos.get("p") or {}
+
     candidates = {}
     for key, value in params.items():
         key_l = str(key).lower()
         if any(word in key_l for word in (
-            "ign", "ignition", "engine", "acc", "din", "input", "in1", "in_1"
+            "ign", "ignition", "engine", "acc",
+            "din", "input", "in1", "in_1",
+            "io", "power", "voltage"
         )):
             candidates[str(key)] = value
 
     return {
         "unit_id": WIALON_665_UNIT_ID,
         "name": item.get("nm") or "",
-        "message_time": pos.get("t"),
-        "speed": pos.get("s"),
-        "course": pos.get("c"),
-        "satellites": pos.get("sc"),
+        "message_time": last_message.get("t") or pos.get("t"),
+        "speed": msg_pos.get("s") if msg_pos else pos.get("s"),
+        "course": msg_pos.get("c") if msg_pos else pos.get("c"),
+        "satellites": msg_pos.get("sc") if msg_pos else pos.get("sc"),
         "ignition_candidates": candidates,
         "raw_params": params,
+        "last_message": last_message,
+        "message_source": "messages/load_last" if last_message else "search_item",
     }
 
 
