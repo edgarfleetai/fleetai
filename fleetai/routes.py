@@ -7249,46 +7249,52 @@ button{width:100%;margin-top:20px;padding:15px;border:0;border-radius:13px;backg
   </div>
 </div>
 <script>
+const carSelect=document.getElementById('car');
+const amountInput=document.getElementById('amount');
+const paymentMethodSelect=document.getElementById('payment_method');
+const commentInput=document.getElementById('comment');
+const resultBox=document.getElementById('result');
+
 async function loadCars(){
   const r=await fetch('/api/driver-wallet/cars');
   const d=await r.json();
   if(!d.ok){
-    result.className='err';
-    result.textContent=d.message||'Не удалось загрузить машины';
+    resultBox.className='err';
+    resultBox.textContent=d.message||'Не удалось загрузить машины';
     return;
   }
-  car.innerHTML='<option value="">Выберите машину</option>'+
-    d.items.map(x=>`<option value="${x.code}">${x.code} · ${x.driver}${x.plate?' · '+x.plate:''}</option>`).join('');
+  carSelect.innerHTML='<option value="">Выберите машину</option>'+
+    d.items.map(x=>`<option value="${x.code}">${x.code} · ${x.driver||'Водитель не назначен'}${x.plate?' · '+x.plate:''}</option>`).join('');
   const selected=new URLSearchParams(window.location.search).get('code');
-  if(selected) car.value=selected;
+  if(selected) carSelect.value=selected;
 }
 async function submitTopup(){
-  const value=Number(amount.value||0);
-  if(!car.value){alert('Выберите машину');return}
+  const value=Number(amountInput.value||0);
+  if(!carSelect.value){alert('Выберите машину');return}
   if(value<=0){alert('Укажите сумму');return}
-  if(!confirm(`Пополнить баланс машины ${car.value} на ${value.toLocaleString('ru-RU')} ₽?`))return;
+  if(!confirm(`Пополнить баланс машины ${carSelect.value} на ${value.toLocaleString('ru-RU')} ₽?`))return;
 
-  result.className='';
-  result.textContent='Сохраняем...';
+  resultBox.className='';
+  resultBox.textContent='Сохраняем...';
 
   const r=await fetch('/api/driver-wallet/topup',{
     method:'POST',
     headers:{'Content-Type':'application/json'},
     body:JSON.stringify({
-      car_code:car.value,
+      car_code:carSelect.value,
       amount:value,
-      payment_method:payment_method.value,
-      comment:comment.value
+      payment_method:paymentMethodSelect.value,
+      comment:commentInput.value
     })
   });
   const d=await r.json();
-  result.className=d.ok?'ok':'err';
-  result.textContent=d.ok
+  resultBox.className=d.ok?'ok':'err';
+  resultBox.textContent=d.ok
     ? `${d.message}. Новый баланс: ${Number(d.balance).toLocaleString('ru-RU')} ₽`
     : (d.message||'Ошибка');
   if(d.ok){
-    amount.value='';
-    comment.value='';
+    amountInput.value='';
+    commentInput.value='';
   }
 }
 loadCars();
@@ -7381,14 +7387,13 @@ def api_driver_wallet_cars():
         rows = []
         for car in session.query(Car).order_by(Car.code).all():
             driver_name = (getattr(car, "driver", "") or "").strip()
-            if not driver_name:
-                continue
             rows.append({
-                "code": car.code,
+                "code": normalize_code(car.code),
                 "driver": driver_name,
-                "brand": getattr(car, "brand", "") or "",
-                "model": getattr(car, "model", "") or "",
-                "plate": getattr(car, "plate", "") or "",
+                "has_driver": bool(driver_name),
+                "brand": (getattr(car, "brand", "") or "").strip(),
+                "model": (getattr(car, "model", "") or "").strip(),
+                "plate": (getattr(car, "plate", "") or "").strip(),
             })
         return jsonify({"ok": True, "items": rows})
     finally:
@@ -7435,7 +7440,7 @@ button:disabled{opacity:.55}.muted{color:#708078;font-size:14px}.ok{background:#
 async function loadCars(){
   const r=await fetch('/api/driver-wallet/cars'),d=await r.json();
   if(!d.ok){result.className='err';result.textContent=d.message;return}
-  car.innerHTML='<option value="">Выберите машину</option>'+d.items.map(x=>`<option value="${x.code}">${x.code} · ${x.driver}${x.plate?' · '+x.plate:''}</option>`).join('');
+  car.innerHTML='<option value="">Выберите машину</option>'+d.items.map(x=>`<option value="${x.code}">${x.code} · ${x.driver||'Водитель не назначен'}${x.plate?' · '+x.plate:''}</option>`).join('');
   const selected=new URLSearchParams(window.location.search).get('code');
   if(selected) car.value=selected;
 }
