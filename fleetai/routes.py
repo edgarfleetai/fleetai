@@ -7483,14 +7483,19 @@ def api_driver_telegram_link():
         now = moscow_now().replace(tzinfo=None)
         expires = now + timedelta(days=7)
 
+        next_id = session.execute(
+            sql_text("SELECT COALESCE(MAX(id), 0) + 1 FROM driver_telegram_links")
+        ).scalar()
+
         session.execute(
             sql_text("""
                 INSERT INTO driver_telegram_links
-                    (car_code, driver_name, link_token, created_at, expires_at)
+                    (id, car_code, driver_name, link_token, created_at, expires_at)
                 VALUES
-                    (:car_code, :driver_name, :link_token, :created_at, :expires_at)
+                    (:id, :car_code, :driver_name, :link_token, :created_at, :expires_at)
             """),
             {
+                "id": int(next_id or 1),
                 "car_code": normalize_code(car.code),
                 "driver_name": (car.driver or "").strip(),
                 "link_token": token,
@@ -7630,17 +7635,22 @@ def api_telegram_webhook():
             {"chat_id": chat_id},
         )
 
+        next_binding_id = session.execute(
+            sql_text("SELECT COALESCE(MAX(id), 0) + 1 FROM driver_telegram_bindings")
+        ).scalar()
+
         session.execute(
             sql_text("""
                 INSERT INTO driver_telegram_bindings
-                    (car_code, driver_name, telegram_chat_id,
+                    (id, car_code, driver_name, telegram_chat_id,
                      telegram_username, telegram_first_name, linked_at,
                      last_alert_level)
                 VALUES
-                    (:car_code, :driver_name, :chat_id,
+                    (:id, :car_code, :driver_name, :chat_id,
                      :username, :first_name, :linked_at, '')
             """),
             {
+                "id": int(next_binding_id or 1),
                 "car_code": normalize_code(car.code),
                 "driver_name": (car.driver or "").strip(),
                 "chat_id": chat_id,
