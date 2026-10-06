@@ -9618,7 +9618,7 @@ def _evaluate_665_stationary_block_preview(session, allow_commands=False):
     })
     session.commit()
     return {
-        "ok": True, "version": "V15.13", "dry_run": not allow_commands, "commands_sent": command_sent_now,
+        "ok": True, "version": "V15.14", "dry_run": not allow_commands, "commands_sent": command_sent_now,
         "car_code": BLOCK_PREVIEW_CAR_CODE, "balance": balance,
         "threshold": threshold, "debt_triggered": debt_triggered,
         "speed_kmh": speed, "message_time": motion.get("message_time"),
@@ -9629,10 +9629,85 @@ def _evaluate_665_stationary_block_preview(session, allow_commands=False):
         "ready_to_block": ready, "status": status,
         "blocked": blocked, "command_sent_at": command_sent_at,
         "last_command_error": last_command_error,
-        "note": ("V15.13 SETTINGS UI + SECURE WATCHER — команды разрешены только защищённому cron" if allow_commands else "V15.13 READ ONLY — публичный просмотр без команд Wialon"),
+        "note": ("V15.14 TRACKERS DASHBOARD + SECURE WATCHER — команды разрешены только защищённому cron" if allow_commands else "V15.14 READ ONLY — публичный просмотр без команд Wialon"),
     }
 
 
+
+
+
+@bp.route("/wialon-trackers")
+def wialon_trackers_dashboard():
+    session = Session()
+    try:
+        _ensure_wialon_vehicle_settings_table(session)
+        rows = session.execute(sql_text("""
+            SELECT car_code, unit_id, auto_block, threshold, stationary_minutes,
+                   telemetry_max_age_seconds, updated_at
+            FROM wialon_vehicle_settings
+            ORDER BY car_code
+        """)).mappings().all()
+
+        states = {}
+        state_rows = session.execute(sql_text("""
+            SELECT car_code, last_speed, status, blocked, last_checked_at, last_command_error
+            FROM driver_blocking_preview_state
+        """)).mappings().all()
+        for row in state_rows:
+            states[normalize_code(row["car_code"])] = dict(row)
+    finally:
+        session.close()
+
+    cards = []
+    for row in rows:
+        code = normalize_code(row["car_code"])
+        st = states.get(code, {})
+        enabled = bool(int(row["auto_block"] or 0))
+        blocked = bool(int(st.get("blocked") or 0))
+        cards.append({
+            "code": code, "unit_id": row["unit_id"], "enabled": enabled,
+            "threshold": row["threshold"], "minutes": row["stationary_minutes"],
+            "speed": st.get("last_speed"), "status": st.get("status") or "NO_STATE",
+            "blocked": blocked, "error": st.get("last_command_error") or "",
+        })
+
+    import html as _html
+    body = ""
+    for c in cards:
+        badge = "ВКЛ" if c["enabled"] else "ВЫКЛ"
+        block = "BLOCKED" if c["blocked"] else "ACTIVE"
+        body += f"""
+        <div class="card">
+          <div class="top"><div><b class="code">{_html.escape(c['code'])}</b><div class="muted">Unit ID: {_html.escape(str(c['unit_id']))}</div></div>
+          <div><span class="badge">{badge}</span></div></div>
+          <div class="grid">
+            <div><span>Баланс-порог</span><b>{int(c['threshold']):,} ₽</b></div>
+            <div><span>Стоянка</span><b>{int(c['minutes'])} мин</b></div>
+            <div><span>Скорость</span><b>{'-' if c['speed'] is None else str(c['speed'])+' км/ч'}</b></div>
+            <div><span>Состояние</span><b>{block}</b></div>
+          </div>
+          <div class="muted status">Watcher: {_html.escape(str(c['status']))}</div>
+          {('<div class="err">'+_html.escape(c['error'])+'</div>') if c['error'] else ''}
+          <a class="btn" href="/wialon-settings?code={_html.escape(c['code'])}">Настройки</a>
+        </div>"""
+
+    if not body:
+        body = '<div class="card">Пока нет настроенных Wialon-трекеров.</div>'
+
+    return f"""<!doctype html><html lang="ru"><head><meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1"><title>FleetAI — Wialon / Трекеры</title>
+    <style>
+    body{{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#f4f7f6;color:#17211d;margin:0}}
+    .wrap{{max-width:900px;margin:28px auto;padding:16px}}h1{{margin-bottom:6px}}.lead{{color:#68736e;margin-bottom:20px}}
+    .card{{background:#fff;border-radius:18px;padding:20px;margin:14px 0;box-shadow:0 6px 24px rgba(0,0,0,.06)}}
+    .top{{display:flex;justify-content:space-between;align-items:center}}.code{{font-size:26px}}.muted{{color:#68736e}}
+    .badge{{background:#e8f5ec;padding:7px 11px;border-radius:999px;font-weight:800}}.grid{{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:16px}}
+    .grid div{{background:#eef2f0;border-radius:12px;padding:11px}}.grid span{{display:block;color:#68736e;font-size:13px}}.grid b{{display:block;margin-top:4px}}
+    .status{{margin-top:12px}}.err{{background:#fff0f0;color:#9a2525;padding:10px;border-radius:10px;margin-top:10px}}
+    .btn{{display:inline-block;margin-top:14px;padding:10px 14px;background:#17211d;color:#fff;text-decoration:none;border-radius:10px;font-weight:700}}
+    @media(max-width:650px){{.grid{{grid-template-columns:1fr 1fr}}}}
+    </style></head><body><div class="wrap"><h1>Wialon / Трекеры</h1>
+    <div class="lead">Подключённые машины и состояние автоблокировки.</div>{body}</div></body></html>"""
 
 
 @bp.route("/wialon-settings")
@@ -9674,7 +9749,9 @@ button{margin-top:18px;border:0;border-radius:12px;padding:13px 18px;font-size:1
 <div><label>Порог баланса, ₽</label><input id="threshold" type="number" value="__THRESHOLD__"></div>
 <div><label>Стоянка до блокировки, мин</label><input id="stationary" type="number" min="1" value="__MINUTES__"></div>
 <div><label>Макс. возраст телеметрии, сек</label><input id="telemetry" type="number" min="30" value="__AGE__"></div>
-<div><label>CRON_SECRET для сохранения</label><input id="secret" type="password" autocomplete="off" placeholder="не сохраняется на странице"></div>
+<div class="full note"><b>Админ-доступ к изменению</b><br>
+<span style="font-weight:400">Для сохранения настроек введите административный ключ. Он не относится к машине и не сохраняется в браузере.</span>
+<input id="secret" type="password" autocomplete="off" placeholder="Административный ключ" style="margin-top:10px"></div>
 <div class="full"><label>BLOCK — название</label><input id="block_name" value="__BNAME__"></div>
 <div class="full"><label>BLOCK — команда</label><input id="block_param" value="__BPARAM__"></div>
 <div class="full"><label>UNBLOCK — название</label><input id="unblock_name" value="__UNAME__"></div>
