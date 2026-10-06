@@ -9319,9 +9319,87 @@ WIALON_FLEET_CONFIG = {
 }
 
 
-def _wialon_car_config(car_code):
-    return WIALON_FLEET_CONFIG.get(normalize_code(car_code))
+def _ensure_wialon_vehicle_settings_table(session):
+    session.execute(sql_text("""
+        CREATE TABLE IF NOT EXISTS wialon_vehicle_settings (
+            car_code VARCHAR(32) PRIMARY KEY,
+            unit_id BIGINT NOT NULL,
+            auto_block INTEGER NOT NULL DEFAULT 0,
+            threshold INTEGER NOT NULL DEFAULT -2000,
+            stationary_minutes INTEGER NOT NULL DEFAULT 30,
+            telemetry_max_age_seconds INTEGER NOT NULL DEFAULT 120,
+            block_command_name TEXT,
+            block_command_param TEXT,
+            unblock_command_name TEXT,
+            unblock_command_param TEXT,
+            updated_at TEXT
+        )
+    """))
+    session.commit()
 
+    # Seed only the already-tested 665. Never enable any other car automatically.
+    cfg = WIALON_FLEET_CONFIG["665"]
+    session.execute(sql_text("""
+        INSERT INTO wialon_vehicle_settings
+            (car_code, unit_id, auto_block, threshold, stationary_minutes,
+             telemetry_max_age_seconds, block_command_name, block_command_param,
+             unblock_command_name, unblock_command_param, updated_at)
+        VALUES
+            (:car_code, :unit_id, 1, :threshold, :stationary_minutes,
+             :telemetry_max_age_seconds, :block_command_name, :block_command_param,
+             :unblock_command_name, :unblock_command_param, :updated_at)
+        ON CONFLICT (car_code) DO NOTHING
+    """), {
+        "car_code": "665",
+        "unit_id": int(cfg["unit_id"]),
+        "threshold": int(cfg["threshold"]),
+        "stationary_minutes": int(cfg["stationary_minutes"]),
+        "telemetry_max_age_seconds": int(cfg["telemetry_max_age_seconds"]),
+        "block_command_name": cfg["block_command"]["name"],
+        "block_command_param": cfg["block_command"]["param"],
+        "unblock_command_name": cfg["unblock_command"]["name"],
+        "unblock_command_param": cfg["unblock_command"]["param"],
+        "updated_at": moscow_now().replace(tzinfo=None).isoformat(timespec="seconds"),
+    })
+    session.commit()
+
+
+def _wialon_car_config(car_code, session=None):
+    code = normalize_code(car_code)
+    own_session = session is None
+    if own_session:
+        session = Session()
+    try:
+        _ensure_wialon_vehicle_settings_table(session)
+        row = session.execute(sql_text("""
+            SELECT car_code, unit_id, auto_block, threshold, stationary_minutes,
+                   telemetry_max_age_seconds, block_command_name, block_command_param,
+                   unblock_command_name, unblock_command_param
+            FROM wialon_vehicle_settings
+            WHERE car_code = :car_code
+            LIMIT 1
+        """), {"car_code": code}).mappings().first()
+        if not row:
+            return None
+        return {
+            "car_code": code,
+            "unit_id": int(row["unit_id"]),
+            "auto_block": bool(int(row["auto_block"] or 0)),
+            "threshold": int(row["threshold"]),
+            "stationary_minutes": int(row["stationary_minutes"]),
+            "telemetry_max_age_seconds": int(row["telemetry_max_age_seconds"]),
+            "block_command": {
+                "name": row["block_command_name"] or "Блокировка",
+                "param": row["block_command_param"] or "",
+            },
+            "unblock_command": {
+                "name": row["unblock_command_name"] or "Снять блокировку",
+                "param": row["unblock_command_param"] or "",
+            },
+        }
+    finally:
+        if own_session:
+            session.close()
 
 def _wialon_latest_motion_for_unit(unit_id):
     """READ ONLY: latest speed/message age for any configured Wialon unit."""
@@ -9444,7 +9522,7 @@ def _evaluate_665_stationary_block_preview(session, allow_commands=False):
     last_command_error = (row.get("last_command_error") or "") if row else ""
     command_sent_now = False
 
-    cfg = _wialon_car_config(BLOCK_PREVIEW_CAR_CODE)
+    cfg = _wialon_car_config(BLOCK_PREVIEW_CAR_CODE, session=session)
     if not cfg or not cfg.get("auto_block"):
         raise RuntimeError("Автоблокировка 665 выключена в Wialon config")
     threshold = int(cfg["threshold"])
@@ -9540,7 +9618,7 @@ def _evaluate_665_stationary_block_preview(session, allow_commands=False):
     })
     session.commit()
     return {
-        "ok": True, "version": "V15.11", "dry_run": not allow_commands, "commands_sent": command_sent_now,
+        "ok": True, "version": "V15.12", "dry_run": not allow_commands, "commands_sent": command_sent_now,
         "car_code": BLOCK_PREVIEW_CAR_CODE, "balance": balance,
         "threshold": threshold, "debt_triggered": debt_triggered,
         "speed_kmh": speed, "message_time": motion.get("message_time"),
@@ -9551,8 +9629,79 @@ def _evaluate_665_stationary_block_preview(session, allow_commands=False):
         "ready_to_block": ready, "status": status,
         "blocked": blocked, "command_sent_at": command_sent_at,
         "last_command_error": last_command_error,
-        "note": ("V15.11 FLEET CONFIG + SECURE WATCHER — команды разрешены только защищённому cron" if allow_commands else "V15.11 READ ONLY — публичный просмотр без команд Wialon"),
+        "note": ("V15.12 DB SETTINGS + SECURE WATCHER — команды разрешены только защищённому cron" if allow_commands else "V15.12 READ ONLY — публичный просмотр без команд Wialon"),
     }
+
+
+
+@bp.route("/api/wialon/settings/<car_code>", methods=["GET", "POST"])
+def api_wialon_vehicle_settings(car_code):
+    """Protected Wialon settings API. New cars default to auto_block OFF."""
+    secret = (os.getenv("CRON_SECRET") or "").strip()
+    received = (request.headers.get("X-Admin-Secret") or "").strip()
+    if not secret or received != secret:
+        return jsonify({"ok": False, "message": "Нет доступа"}), 403
+
+    code = normalize_code(car_code)
+    session = Session()
+    try:
+        _ensure_wialon_vehicle_settings_table(session)
+        if request.method == "GET":
+            cfg = _wialon_car_config(code, session=session)
+            return jsonify({"ok": True, "car_code": code, "settings": cfg})
+
+        data = request.get_json(silent=True) or {}
+        unit_id = int(data.get("unit_id") or 0)
+        if unit_id <= 0:
+            return jsonify({"ok": False, "message": "Нужен корректный unit_id"}), 400
+
+        existing = _wialon_car_config(code, session=session)
+        auto_block = bool(data.get("auto_block", False))
+        threshold = int(data.get("threshold", -2000))
+        stationary_minutes = int(data.get("stationary_minutes", 30))
+        telemetry_age = int(data.get("telemetry_max_age_seconds", 120))
+
+        # Commands must be explicitly supplied for a new car; do not copy 665 commands silently.
+        block_name = data.get("block_command_name") or (existing["block_command"]["name"] if existing else "")
+        block_param = data.get("block_command_param") or (existing["block_command"]["param"] if existing else "")
+        unblock_name = data.get("unblock_command_name") or (existing["unblock_command"]["name"] if existing else "")
+        unblock_param = data.get("unblock_command_param") or (existing["unblock_command"]["param"] if existing else "")
+        if auto_block and (not block_param or not unblock_param):
+            return jsonify({"ok": False, "message": "Нельзя включить автоблокировку без проверенных BLOCK/UNBLOCK команд"}), 400
+
+        session.execute(sql_text("""
+            INSERT INTO wialon_vehicle_settings
+                (car_code, unit_id, auto_block, threshold, stationary_minutes,
+                 telemetry_max_age_seconds, block_command_name, block_command_param,
+                 unblock_command_name, unblock_command_param, updated_at)
+            VALUES
+                (:car_code, :unit_id, :auto_block, :threshold, :stationary_minutes,
+                 :telemetry_max_age_seconds, :block_command_name, :block_command_param,
+                 :unblock_command_name, :unblock_command_param, :updated_at)
+            ON CONFLICT (car_code) DO UPDATE SET
+                unit_id=EXCLUDED.unit_id, auto_block=EXCLUDED.auto_block,
+                threshold=EXCLUDED.threshold, stationary_minutes=EXCLUDED.stationary_minutes,
+                telemetry_max_age_seconds=EXCLUDED.telemetry_max_age_seconds,
+                block_command_name=EXCLUDED.block_command_name,
+                block_command_param=EXCLUDED.block_command_param,
+                unblock_command_name=EXCLUDED.unblock_command_name,
+                unblock_command_param=EXCLUDED.unblock_command_param,
+                updated_at=EXCLUDED.updated_at
+        """), {
+            "car_code": code, "unit_id": unit_id, "auto_block": 1 if auto_block else 0,
+            "threshold": threshold, "stationary_minutes": stationary_minutes,
+            "telemetry_max_age_seconds": telemetry_age,
+            "block_command_name": block_name, "block_command_param": block_param,
+            "unblock_command_name": unblock_name, "unblock_command_param": unblock_param,
+            "updated_at": moscow_now().replace(tzinfo=None).isoformat(timespec="seconds"),
+        })
+        session.commit()
+        return jsonify({"ok": True, "car_code": code, "settings": _wialon_car_config(code, session=session)})
+    except Exception as exc:
+        session.rollback()
+        return jsonify({"ok": False, "message": f"{type(exc).__name__}: {exc}"}), 500
+    finally:
+        session.close()
 
 
 @bp.route("/api/wialon/665/block-preview", methods=["GET"])
