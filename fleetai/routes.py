@@ -9116,6 +9116,43 @@ def _wialon_665_live_state():
 
     last_message = messages[-1] if messages else {}
     msg_pos = last_message.get("pos") or {}
+
+    # Wialon: flag 4096 returns configured unit sensors ("sens").
+    sensor_result = _wialon_call("core/search_item", {
+        "id": WIALON_665_UNIT_ID,
+        "flags": 4097,  # 1 general properties + 4096 sensors
+    }, sid=sid)
+    sensor_item = {}
+    if isinstance(sensor_result, dict) and sensor_result.get("error") is None:
+        sensor_item = sensor_result.get("item") or {}
+    sensors_raw = sensor_item.get("sens") or {}
+
+    sensors = []
+    ignition_sensors = []
+    for sensor_id, sensor in sensors_raw.items():
+        if not isinstance(sensor, dict):
+            continue
+        row = {
+            "id": sensor.get("id", sensor_id),
+            "name": sensor.get("n") or "",
+            "type": sensor.get("t") or "",
+            "description": sensor.get("d") or "",
+            "units": sensor.get("m") or "",
+            "parameter": sensor.get("p") or "",
+            "flags": sensor.get("f"),
+            "configuration": sensor.get("c") or "",
+        }
+        sensors.append(row)
+
+        probe = " ".join([
+            str(row["name"]), str(row["type"]),
+            str(row["description"]), str(row["parameter"])
+        ]).lower()
+        if any(word in probe for word in (
+            "ignition", "зажиган", "engine", "двигател",
+            "acc", "ign", "запуск"
+        )):
+            ignition_sensors.append(row)
     params = (
         last_message.get("p")
         or last_message.get("params")
@@ -9148,6 +9185,9 @@ def _wialon_665_live_state():
         "raw_params": params,
         "last_message": last_message,
         "message_source": "messages/load_last" if last_message else "search_item",
+        "sensors_count": len(sensors),
+        "ignition_sensors": ignition_sensors,
+        "sensors": sensors,
     }
 
 
