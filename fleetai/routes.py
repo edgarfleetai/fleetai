@@ -9315,6 +9315,12 @@ def _ensure_block_preview_table(session):
         )
     """))
     session.commit()
+    # V15.7: persistent one-shot command state; safe on an existing PostgreSQL table.
+    session.execute(sql_text("ALTER TABLE driver_blocking_preview_state ADD COLUMN IF NOT EXISTS blocked INTEGER NOT NULL DEFAULT 0"))
+    session.execute(sql_text("ALTER TABLE driver_blocking_preview_state ADD COLUMN IF NOT EXISTS command_sent_at TEXT"))
+    session.execute(sql_text("ALTER TABLE driver_blocking_preview_state ADD COLUMN IF NOT EXISTS last_command_error TEXT"))
+    session.commit()
+
 
 
 def _parse_preview_dt(value):
@@ -9368,11 +9374,16 @@ def _evaluate_665_stationary_block_preview(session):
     now = moscow_now().replace(tzinfo=None)
     now_iso = now.isoformat(timespec="seconds")
     row = session.execute(sql_text("""
-        SELECT car_code, stationary_since, last_checked_at, last_speed, status, updated_at
+        SELECT car_code, stationary_since, last_checked_at, last_speed, status, updated_at,
+               blocked, command_sent_at, last_command_error
         FROM driver_blocking_preview_state WHERE car_code = :car_code LIMIT 1
     """), {"car_code": BLOCK_PREVIEW_CAR_CODE}).mappings().first()
     stationary_since = _parse_preview_dt(row.get("stationary_since")) if row else None
     last_checked = _parse_preview_dt(row.get("last_checked_at")) if row else None
+    blocked = bool(int(row.get("blocked") or 0)) if row else False
+    command_sent_at = (row.get("command_sent_at") or "") if row else ""
+    last_command_error = (row.get("last_command_error") or "") if row else ""
+    command_sent_now = False
 
     motion = _wialon_665_latest_motion()
     speed = int(motion["speed"] or 0)
@@ -9405,16 +9416,37 @@ def _evaluate_665_stationary_block_preview(session):
     remaining_seconds = max(required_seconds - elapsed_seconds, 0) if stationary_since else required_seconds
     ready = status == "READY_TO_BLOCK_PREVIEW"
 
+    # V15.7 real pilot for 665 only:
+    # send the already-tested Wialon block command exactly once after all gates pass.
+    if ready and not blocked:
+        try:
+            command_result = _send_665_engine_command("block_engine")
+            if isinstance(command_result, dict) and command_result.get("error") is not None:
+                raise RuntimeError(f"Wialon error: {command_result}")
+            blocked = True
+            command_sent_now = True
+            command_sent_at = now_iso
+            last_command_error = ""
+            status = "BLOCK_COMMAND_SENT"
+        except Exception as error:
+            last_command_error = f"{type(error).__name__}: {error}"
+            status = "BLOCK_COMMAND_ERROR"
+
     session.execute(sql_text("""
         INSERT INTO driver_blocking_preview_state
-            (car_code, stationary_since, last_checked_at, last_speed, status, updated_at)
-        VALUES (:car_code, :stationary_since, :last_checked_at, :last_speed, :status, :updated_at)
+            (car_code, stationary_since, last_checked_at, last_speed, status, updated_at,
+             blocked, command_sent_at, last_command_error)
+        VALUES (:car_code, :stationary_since, :last_checked_at, :last_speed, :status, :updated_at,
+                :blocked, :command_sent_at, :last_command_error)
         ON CONFLICT (car_code) DO UPDATE SET
             stationary_since = EXCLUDED.stationary_since,
             last_checked_at = EXCLUDED.last_checked_at,
             last_speed = EXCLUDED.last_speed,
             status = EXCLUDED.status,
-            updated_at = EXCLUDED.updated_at
+            updated_at = EXCLUDED.updated_at,
+            blocked = EXCLUDED.blocked,
+            command_sent_at = EXCLUDED.command_sent_at,
+            last_command_error = EXCLUDED.last_command_error
     """), {
         "car_code": BLOCK_PREVIEW_CAR_CODE,
         "stationary_since": stationary_since.isoformat(timespec="seconds") if stationary_since else None,
@@ -9422,10 +9454,13 @@ def _evaluate_665_stationary_block_preview(session):
         "last_speed": speed,
         "status": status,
         "updated_at": now_iso,
+        "blocked": 1 if blocked else 0,
+        "command_sent_at": command_sent_at or None,
+        "last_command_error": last_command_error or None,
     })
     session.commit()
     return {
-        "ok": True, "version": "V15.5", "dry_run": True, "commands_sent": False,
+        "ok": True, "version": "V15.7", "dry_run": False, "commands_sent": command_sent_now,
         "car_code": BLOCK_PREVIEW_CAR_CODE, "balance": balance,
         "threshold": BLOCK_PREVIEW_THRESHOLD, "debt_triggered": debt_triggered,
         "speed_kmh": speed, "message_time": motion.get("message_time"),
@@ -9434,7 +9469,9 @@ def _evaluate_665_stationary_block_preview(session):
         "stationary_since": stationary_since.isoformat(timespec="seconds") if stationary_since else None,
         "stationary_elapsed_seconds": elapsed_seconds, "remaining_seconds": remaining_seconds,
         "ready_to_block": ready, "status": status,
-        "note": "PREVIEW ONLY — команда блокировки автомобилю не отправляется",
+        "blocked": blocked, "command_sent_at": command_sent_at,
+        "last_command_error": last_command_error,
+        "note": "V15.7 AUTO BLOCK — только машина 665; команда отправляется один раз после выполнения условий",
     }
 
 
@@ -9472,7 +9509,7 @@ def api_cron_block_preview_665():
 @bp.route("/wialon-665-block-preview")
 def wialon_665_block_preview_page():
     html = r'''<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>FleetAI — тест блокировки 665</title><style>
-body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#f4f7f6;color:#17211d;margin:0}.wrap{max-width:720px;margin:30px auto;padding:18px}.card{background:#fff;border-radius:18px;padding:22px;box-shadow:0 6px 24px rgba(0,0,0,.07)}.safe{background:#e8f5ec;border-radius:12px;padding:13px;margin:16px 0}.status{font-size:22px;font-weight:800;margin:18px 0}.grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}.item{background:#eef2f0;padding:12px;border-radius:12px}button{border:0;border-radius:12px;padding:13px 18px;font-size:16px;font-weight:750;cursor:pointer;margin-top:16px}pre{white-space:pre-wrap;word-break:break-word;background:#eef2f0;padding:14px;border-radius:12px;max-height:420px;overflow:auto}@media(max-width:560px){.grid{grid-template-columns:1fr}}</style></head><body><div class="wrap"><div class="card"><h1>Тест автоблокировки 665</h1><div class="safe"><b>PREVIEW ONLY.</b> Баланс ниже −2 000 ₽ + скорость 0 непрерывно 3 минуты. Реальная команда блокировки НЕ отправляется.</div><div id="status" class="status">Загрузка…</div><div class="grid"><div class="item">Баланс: <b id="balance">—</b></div><div class="item">Скорость: <b id="speed">—</b></div><div class="item">Стоит: <b id="elapsed">—</b></div><div class="item">Осталось: <b id="remaining">—</b></div></div><button onclick="loadState()">🔄 Обновить</button><pre id="raw"></pre></div></div><script>
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#f4f7f6;color:#17211d;margin:0}.wrap{max-width:720px;margin:30px auto;padding:18px}.card{background:#fff;border-radius:18px;padding:22px;box-shadow:0 6px 24px rgba(0,0,0,.07)}.safe{background:#e8f5ec;border-radius:12px;padding:13px;margin:16px 0}.status{font-size:22px;font-weight:800;margin:18px 0}.grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}.item{background:#eef2f0;padding:12px;border-radius:12px}button{border:0;border-radius:12px;padding:13px 18px;font-size:16px;font-weight:750;cursor:pointer;margin-top:16px}pre{white-space:pre-wrap;word-break:break-word;background:#eef2f0;padding:14px;border-radius:12px;max-height:420px;overflow:auto}@media(max-width:560px){.grid{grid-template-columns:1fr}}</style></head><body><div class="wrap"><div class="card"><h1>Автоблокировка 665 — реальный тест</h1><div class="safe"><b>PREVIEW ONLY.</b> Баланс ниже −2 000 ₽ + скорость 0 непрерывно 3 минуты. Реальная команда блокировки НЕ отправляется.</div><div id="status" class="status">Загрузка…</div><div class="grid"><div class="item">Баланс: <b id="balance">—</b></div><div class="item">Скорость: <b id="speed">—</b></div><div class="item">Стоит: <b id="elapsed">—</b></div><div class="item">Осталось: <b id="remaining">—</b></div></div><button onclick="loadState()">🔄 Обновить</button><pre id="raw"></pre></div></div><script>
 function fmt(sec){sec=Math.max(0,Number(sec||0));const m=Math.floor(sec/60),s=sec%60;return m+' мин '+s+' сек'}async function loadState(){try{const r=await fetch('/api/wialon/665/block-preview');const d=await r.json();raw.textContent=JSON.stringify(d,null,2);if(!d.ok){status.textContent='Ошибка';return}balance.textContent=Number(d.balance).toLocaleString('ru-RU')+' ₽';speed.textContent=d.speed_kmh+' км/ч';elapsed.textContent=fmt(d.stationary_elapsed_seconds);remaining.textContent=fmt(d.remaining_seconds);const names={BALANCE_OK:'🟢 Баланс выше порога',WAITING_FRESH_TELEMETRY:'🟡 Ждём свежую телеметрию',MOVING:'🚗 Машина движется — таймер сброшен',STATIONARY_WAITING:'⏳ Машина стоит — идёт отсчёт',STATIONARY_TIMER_RESTARTED_AFTER_GAP:'⏳ Был перерыв проверки — отсчёт начат заново',READY_TO_BLOCK_PREVIEW:'🔴 ГОТОВА К БЛОКИРОВКЕ (только тест)'};status.textContent=names[d.status]||d.status}catch(e){status.textContent='Ошибка: '+e}}loadState();setInterval(loadState,60000);
 </script></body></html>'''
     return render_template_string(html)
