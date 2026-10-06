@@ -2850,6 +2850,12 @@ async function loadInvestors(){
   }).join('')}</div>`;
 }
 
+const payment_car=document.getElementById('payment_car');
+const payment_driver=document.getElementById('payment_driver');
+const payment_daily_rent=document.getElementById('payment_daily_rent');
+const payment_date=document.getElementById('payment_date');
+const payment_weekday=document.getElementById('payment_weekday');
+const paymentRes=document.getElementById('paymentRes');
 let paymentCars=[];
 
 function paymentStatus(nextDate){
@@ -2864,13 +2870,17 @@ function paymentStatus(nextDate){
 }
 
 function fillPaymentCarSelect(carsList){
-  const selected=payment_car.value;
-  paymentCars=carsList;
-  payment_car.innerHTML='<option value="">Выбери машину</option>'+carsList.map(car=>`<option value="${car.code}">${car.code} ${car.brand||''} ${car.model||''}</option>`).join('');
-  if(carsList.some(car=>car.code===selected))payment_car.value=selected;
+  if(!payment_car)return;
+  const selected=String(payment_car.value||'');
+  paymentCars=Array.isArray(carsList)?carsList:[];
+  payment_car.innerHTML='<option value="">Выбери машину</option>'+paymentCars.map(car=>{
+    const code=String(car.code||'').trim();
+    return `<option value="${code}">${code} ${car.brand||''} ${car.model||''}</option>`;
+  }).join('');
+  if(paymentCars.some(car=>String(car.code||'').trim()===selected))payment_car.value=selected;
 }
 
-payment_car.addEventListener('change',()=>{
+if(payment_car) payment_car.addEventListener('change',()=>{
   const car=paymentCars.find(item=>item.code===payment_car.value);
   if(!car){
     payment_driver.value='';
@@ -3273,7 +3283,7 @@ async function loadCars(){
   }
 
   const carsTable=document.getElementById('cars');
-  const paymentSelect=document.getElementById('payment_car');
+  const paymentSelect=payment_car;
   const paymentsTable=document.getElementById('driverPayments');
 
   try{
