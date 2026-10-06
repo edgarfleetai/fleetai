@@ -7689,6 +7689,93 @@ def api_telegram_webhook():
         session.close()
 
 
+
+@bp.route("/telegram-check")
+def telegram_check_page():
+    """Безопасная диагностическая страница: токен бота наружу не выводится."""
+    token = (os.getenv("TELEGRAM_BOT_TOKEN") or "").strip()
+    if not token:
+        return render_template_string("""
+        <meta charset="utf-8">
+        <body style="font-family:-apple-system;padding:30px">
+        <h2>Telegram</h2><p>TELEGRAM_BOT_TOKEN не настроен.</p></body>
+        """), 503
+
+    try:
+        me_response = requests.get(
+            f"https://api.telegram.org/bot{token}/getMe",
+            timeout=15,
+        )
+        webhook_response = requests.get(
+            f"https://api.telegram.org/bot{token}/getWebhookInfo",
+            timeout=15,
+        )
+        me_response.raise_for_status()
+        webhook_response.raise_for_status()
+
+        me = me_response.json()
+        wh = webhook_response.json()
+        bot = me.get("result") or {}
+        info = wh.get("result") or {}
+
+        username = bot.get("username") or "—"
+        webhook_url = info.get("url") or ""
+        pending = int(info.get("pending_update_count") or 0)
+        last_error = info.get("last_error_message") or ""
+        last_error_date = info.get("last_error_date")
+
+        if webhook_url:
+            status = "Webhook уже установлен"
+            status_class = "warn"
+        else:
+            status = "Webhook сейчас не установлен"
+            status_class = "ok"
+
+        html = """
+<!doctype html><html lang="ru"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Клевер Парк — проверка Telegram</title>
+<style>
+body{margin:0;background:#f4f7f6;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#17211d}
+.wrap{max-width:700px;margin:auto;padding:24px}.brand{font-size:25px;font-weight:800;margin:8px 0 20px}
+.card{background:white;border-radius:18px;padding:20px;box-shadow:0 6px 24px rgba(0,0,0,.06)}
+.row{padding:12px 0;border-bottom:1px solid #edf0ef}.row:last-child{border:0}
+.label{font-size:13px;color:#708078}.value{font-size:16px;font-weight:650;margin-top:4px;word-break:break-all}
+.ok{background:#e8f6ed;padding:14px;border-radius:12px;margin-bottom:15px}
+.warn{background:#fff3d6;padding:14px;border-radius:12px;margin-bottom:15px}
+.err{background:#fdeceb;padding:14px;border-radius:12px;margin-bottom:15px}
+</style></head><body><div class="wrap">
+<div class="brand">🍀 Клевер Парк</div><div class="card">
+<h2 style="margin-top:0">Проверка Telegram-бота</h2>
+<div class="{{ status_class }}"><b>{{ status }}</b></div>
+<div class="row"><div class="label">Бот</div><div class="value">@{{ username }}</div></div>
+<div class="row"><div class="label">Текущий webhook</div><div class="value">{{ webhook_url or "не установлен" }}</div></div>
+<div class="row"><div class="label">Ожидающих обновлений</div><div class="value">{{ pending }}</div></div>
+<div class="row"><div class="label">Последняя ошибка Telegram</div><div class="value">{{ last_error or "нет" }}</div></div>
+</div></div></body></html>
+"""
+        return render_template_string(
+            html,
+            status=status,
+            status_class=status_class,
+            username=username,
+            webhook_url=webhook_url,
+            pending=pending,
+            last_error=last_error,
+        )
+    except Exception as error:
+        return render_template_string(
+            """
+            <meta charset="utf-8">
+            <body style="font-family:-apple-system;padding:30px">
+            <h2>Ошибка проверки Telegram</h2>
+            <pre style="white-space:pre-wrap">{{ error }}</pre>
+            </body>
+            """,
+            error=f"{type(error).__name__}: {error}",
+        ), 500
+
+
 @bp.route("/api/telegram/setup-webhook", methods=["POST"])
 def api_telegram_setup_webhook():
     """Одноразовая настройка webhook. Защищена CRON_SECRET."""
