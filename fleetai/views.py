@@ -1894,7 +1894,7 @@ body > *{
   <div>
     <div class="eyebrow">ПЛАТЕЖИ И ГРАФИК</div>
     <h1>Водители</h1>
-    <p>Баланс, кабинет водителя, штрафы, расчёты и уведомления.</p>
+    <p>Еженедельные расчёты, даты оплат и уведомления.</p>
   </div>
 </div>
 
@@ -3032,7 +3032,6 @@ function renderDriverPayments(carsList){
       <th>Начислено сейчас</th>
       <th>Дата расчёта</th>
       <th>Статус</th>
-      <th>Баланс</th>
       <th>Действие</th>
     </tr>
 
@@ -3102,41 +3101,15 @@ function renderDriverPayments(carsList){
           </td>
 
           <td>
-            <b class="${Number(car.driver_wallet_balance||0)>=0?'ok':'bad'}">
-              ${rub(Number(car.driver_wallet_balance||0))}
-            </b>
-          </td>
-
-          <td>
-            <div style="display:flex;flex-wrap:wrap;gap:6px">
-              <button
-                class="secondary"
-                onclick="window.open('/driver?code=${encodeURIComponent(car.code)}','_blank')"
-              >
-                👤 Кабинет
-              </button>
-              <button
-                class="secondary"
-                onclick="window.open('/driver-topup?code=${encodeURIComponent(car.code)}','_blank')"
-              >
-                + Пополнить
-              </button>
-              <button
-                class="danger"
-                onclick="window.open('/driver-fines?code=${encodeURIComponent(car.code)}','_blank')"
-              >
-                ⚠️ Штраф
-              </button>
-              ${
-                Number(calc.overdue_periods_count||0)>0
-                  ? '<span class="raw">Закрой недели по очереди</span>'
-                  : `
-                    <button onclick="markPaymentPaid('${car.code}')">
-                      Оплачено
-                    </button>
-                  `
-              }
-            </div>
+            ${
+              Number(calc.overdue_periods_count||0)>0
+                ? '<span class="raw">Закрой недели по очереди</span>'
+                : `
+                  <button onclick="markPaymentPaid('${car.code}')">
+                    Оплачено
+                  </button>
+                `
+            }
           </td>
         </tr>
       `;
@@ -3300,7 +3273,7 @@ async function loadCars(){
   }
 
   const carsTable=document.getElementById('cars');
-  const paymentSelect=document.getElementById('paymentCar');
+  const paymentSelect=document.getElementById('payment_car');
   const paymentsTable=document.getElementById('driverPayments');
 
   try{
