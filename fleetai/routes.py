@@ -9075,6 +9075,113 @@ def _send_665_engine_command(command_type):
     }, sid=sid)
 
 
+
+def _wialon_665_live_state():
+    """
+    READ ONLY. Получает последнее сообщение/позицию объекта 665.
+    Никаких команд автомобилю не отправляет.
+    Возвращает сырые параметры, чтобы один раз точно определить,
+    какой датчик на установленном трекере соответствует зажиганию.
+    """
+    sid = _wialon_login_sid()
+
+    # flags 1025: базовые свойства + последнее сообщение/позиция.
+    result = _wialon_call("core/search_item", {
+        "id": WIALON_665_UNIT_ID,
+        "flags": 1025,
+    }, sid=sid)
+
+    if not isinstance(result, dict) or result.get("error") is not None:
+        raise RuntimeError(f"Wialon не вернул состояние 665: {result}")
+
+    item = result.get("item") or result
+    pos = item.get("pos") or {}
+    params = pos.get("p") or {}
+
+    # Частые названия параметров зажигания у GPS-трекеров.
+    candidates = {}
+    for key, value in params.items():
+        key_l = str(key).lower()
+        if any(word in key_l for word in (
+            "ign", "ignition", "engine", "acc", "din", "input", "in1", "in_1"
+        )):
+            candidates[str(key)] = value
+
+    return {
+        "unit_id": WIALON_665_UNIT_ID,
+        "name": item.get("nm") or "",
+        "message_time": pos.get("t"),
+        "speed": pos.get("s"),
+        "course": pos.get("c"),
+        "satellites": pos.get("sc"),
+        "ignition_candidates": candidates,
+        "raw_params": params,
+    }
+
+
+@bp.route("/api/wialon/665/state", methods=["GET"])
+def api_wialon_665_state():
+    """
+    Диагностика V15 — только чтение.
+    Используется перед включением автоматической блокировки.
+    """
+    try:
+        state = _wialon_665_live_state()
+        return jsonify({
+            "ok": True,
+            "read_only": True,
+            "commands_sent": False,
+            **state,
+        })
+    except requests.RequestException as exc:
+        return jsonify({
+            "ok": False,
+            "read_only": True,
+            "stage": "http",
+            "message": str(exc),
+        }), 502
+    except Exception as exc:
+        return jsonify({
+            "ok": False,
+            "read_only": True,
+            "stage": "internal",
+            "message": str(exc),
+        }), 500
+
+
+@bp.route("/wialon-665-state")
+def wialon_665_state_page():
+    html = r"""<!doctype html>
+<html lang="ru"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>FleetAI — диагностика 665</title>
+<style>
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#f4f7f6;color:#17211d;margin:0}
+.wrap{max-width:760px;margin:35px auto;padding:18px}.card{background:#fff;border-radius:18px;padding:22px;box-shadow:0 6px 24px rgba(0,0,0,.07)}
+h1{margin:0 0 8px}.safe{background:#e8f5ec;border-radius:12px;padding:13px;margin:16px 0}
+button{border:0;border-radius:12px;padding:13px 18px;font-size:16px;font-weight:750;cursor:pointer}
+pre{white-space:pre-wrap;word-break:break-word;background:#eef2f0;padding:14px;border-radius:12px;max-height:520px;overflow:auto}
+</style></head><body><div class="wrap"><div class="card">
+<h1>Диагностика зажигания 665</h1>
+<div>Kia C665ХК 716 · Wialon Unit ID 49896</div>
+<div class="safe"><b>Безопасный режим:</b> эта страница только читает телеметрию Wialon. Команды блокировки автомобилю не отправляются.</div>
+<button onclick="loadState()">🔄 Обновить состояние</button>
+<pre id="result">Нажми «Обновить состояние».</pre>
+</div></div>
+<script>
+async function loadState(){
+ result.textContent='Читаю Wialon…';
+ try{
+   const r=await fetch('/api/wialon/665/state');
+   const d=await r.json();
+   result.textContent=JSON.stringify(d,null,2);
+ }catch(e){result.textContent='Ошибка: '+e}
+}
+loadState();
+</script></body></html>"""
+    return render_template_string(html)
+
+
 @bp.route("/api/wialon/665/command", methods=["POST"])
 def api_wialon_665_command():
     """Manual pilot only. Blocking requires explicit confirmation that 665 is parked and engine is off."""
