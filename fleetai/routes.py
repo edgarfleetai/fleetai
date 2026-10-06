@@ -7362,6 +7362,96 @@ loadCars();
 
 
 
+
+@bp.route("/driver-telegram")
+def driver_telegram_page():
+    html = r"""<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Клевер Парк — Telegram</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#f4f7f6;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#17211d}
+.wrap{max-width:620px;margin:auto;padding:20px}.brand{font-size:25px;font-weight:800;margin:8px 0 20px}
+.card{background:#fff;border-radius:18px;padding:20px;margin-bottom:14px;box-shadow:0 6px 24px rgba(0,0,0,.06)}
+label{display:block;font-size:13px;color:#708078;margin:14px 0 6px}
+select,input{width:100%;padding:13px 14px;border:1px solid #d8dfdc;border-radius:12px;font-size:16px;background:#fff}
+button,a.action{width:100%;display:block;text-align:center;margin-top:12px;border:0;border-radius:12px;padding:14px;background:#17211d;color:#fff;font-size:16px;font-weight:750;cursor:pointer;text-decoration:none}
+.secondary{background:#e5e7eb!important;color:#17211d!important}
+.muted{color:#708078;font-size:14px}.ok{background:#e8f6ed;padding:12px;border-radius:12px;margin-top:14px}.err{background:#fdeceb;padding:12px;border-radius:12px;margin-top:14px}
+.linkbox{word-break:break-all;margin-top:10px;padding:12px;background:#f4f7f6;border-radius:10px;font-size:14px}
+</style>
+</head>
+<body><div class="wrap">
+<div class="brand">🍀 Клевер Парк</div>
+<div class="card">
+<h2 style="margin-top:0">Привязка Telegram водителя</h2>
+<p class="muted">Выбери машину и создай персональную ссылку. Отправь её водителю — он нажмёт Start в вашем боте.</p>
+<label>Машина / водитель</label>
+<select id="car"><option value="">Загрузка...</option></select>
+<button id="createBtn" onclick="createLink()">🔗 Создать ссылку Telegram</button>
+<div id="result"></div>
+</div></div>
+<script>
+const carSelect=document.getElementById('car');
+const resultBox=document.getElementById('result');
+const createBtn=document.getElementById('createBtn');
+
+async function loadCars(){
+  try{
+    const r=await fetch('/api/driver-wallet/cars');
+    const d=await r.json();
+    carSelect.innerHTML='<option value="">Выбери машину</option>';
+    (d.items||[]).forEach(c=>{
+      const o=document.createElement('option');
+      o.value=c.code;
+      o.textContent=`${c.code} · ${c.driver || 'Водитель не назначен'}${c.plate ? ' · '+c.plate : ''}`;
+      o.disabled=!c.has_driver && !c.driver;
+      carSelect.appendChild(o);
+    });
+    const q=new URLSearchParams(location.search).get('code');
+    if(q) carSelect.value=q.trim();
+  }catch(e){
+    carSelect.innerHTML='<option value="">Ошибка загрузки</option>';
+  }
+}
+async function createLink(){
+  const code=carSelect.value;
+  if(!code){resultBox.innerHTML='<div class="err">Выбери машину.</div>';return;}
+  createBtn.disabled=true;
+  resultBox.innerHTML='<div class="muted" style="margin-top:12px">Создаю ссылку...</div>';
+  try{
+    const r=await fetch('/api/driver-telegram/link',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({car_code:code})
+    });
+    const d=await r.json();
+    if(!r.ok || !d.ok) throw new Error(d.message||'Ошибка');
+    const link=d.link;
+    resultBox.innerHTML=`
+      <div class="ok"><b>Ссылка готова</b><br>Водитель: ${escapeHtml(d.driver_name)} · машина ${escapeHtml(d.car_code)}
+      <div class="linkbox" id="tgLink">${escapeHtml(link)}</div>
+      <button class="secondary" onclick="copyLink()">📋 Скопировать ссылку</button>
+      <a class="action" href="${escapeAttr(link)}" target="_blank" rel="noopener">✈️ Открыть в Telegram</a>
+      <div class="muted" style="margin-top:10px">Действует до ${escapeHtml(d.expires_at)}.</div></div>`;
+  }catch(e){
+    resultBox.innerHTML='<div class="err">'+escapeHtml(e.message)+'</div>';
+  }finally{createBtn.disabled=false;}
+}
+async function copyLink(){
+  const value=document.getElementById('tgLink').textContent;
+  try{await navigator.clipboard.writeText(value); alert('Ссылка скопирована');}
+  catch(e){prompt('Скопируй ссылку:',value);}
+}
+function escapeHtml(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));}
+function escapeAttr(v){return escapeHtml(v);}
+loadCars();
+</script></body></html>"""
+    return render_template_string(html)
+
+
 @bp.route("/api/driver-telegram/link", methods=["POST"])
 def api_driver_telegram_link():
     """Создаёт одноразовую ссылку привязки Telegram для конкретной машины."""
