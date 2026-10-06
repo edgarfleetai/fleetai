@@ -10,7 +10,7 @@ from urllib.parse import unquote
 from datetime import datetime, date, timedelta
 
 from flask import make_response, Blueprint, request, jsonify, render_template_string, send_file
-from sqlalchemy import func
+from sqlalchemy import func, text as sql_text
 
 from reportlab.lib import colors
 from reportlab.lib.enums import TA_CENTER
@@ -95,6 +95,48 @@ def send_telegram_message(text):
     except requests.RequestException as error:
         print(f"Ошибка Telegram: {error}")
         return False
+
+
+def send_telegram_to_chat(chat_id, text):
+    """Отправка сообщения конкретному водителю."""
+    token = (os.getenv("TELEGRAM_BOT_TOKEN") or "").strip()
+    if not token or not str(chat_id or "").strip():
+        return False
+
+    try:
+        response = requests.post(
+            f"https://api.telegram.org/bot{token}/sendMessage",
+            json={
+                "chat_id": str(chat_id),
+                "text": text,
+                "parse_mode": "HTML",
+            },
+            timeout=15,
+        )
+        response.raise_for_status()
+        return True
+    except requests.RequestException as error:
+        print(f"Ошибка Telegram водителю: {error}")
+        return False
+
+
+def _telegram_bot_username():
+    token = (os.getenv("TELEGRAM_BOT_TOKEN") or "").strip()
+    if not token:
+        return ""
+    try:
+        response = requests.get(
+            f"https://api.telegram.org/bot{token}/getMe",
+            timeout=15,
+        )
+        response.raise_for_status()
+        data = response.json()
+        if data.get("ok"):
+            return str((data.get("result") or {}).get("username") or "").strip()
+    except Exception as error:
+        print(f"Не удалось получить username Telegram-бота: {error}")
+    return ""
+
 
 
 def send_telegram_document(file_bytes, filename, caption=""):
@@ -7317,6 +7359,278 @@ loadCars();
 </body>
 </html>
 """)
+
+
+
+@bp.route("/api/driver-telegram/link", methods=["POST"])
+def api_driver_telegram_link():
+    """Создаёт одноразовую ссылку привязки Telegram для конкретной машины."""
+    data = request.get_json(silent=True) or request.form
+    car_code = normalize_code(data.get("car_code") or data.get("code") or "")
+
+    if not car_code:
+        return jsonify({"ok": False, "message": "Не указана машина"}), 400
+
+    session = Session()
+    try:
+        car = find_car(session, car_code)
+        if not car:
+            return jsonify({"ok": False, "message": "Машина не найдена"}), 404
+        if not (car.driver or "").strip():
+            return jsonify({
+                "ok": False,
+                "message": "Сначала назначь водителя на машину",
+            }), 400
+
+        username = _telegram_bot_username()
+        if not username:
+            return jsonify({
+                "ok": False,
+                "message": "Не удалось определить username Telegram-бота",
+            }), 503
+
+        token = uuid.uuid4().hex
+        now = moscow_now().replace(tzinfo=None)
+        expires = now + timedelta(days=7)
+
+        session.execute(
+            sql_text("""
+                INSERT INTO driver_telegram_links
+                    (car_code, driver_name, link_token, created_at, expires_at)
+                VALUES
+                    (:car_code, :driver_name, :link_token, :created_at, :expires_at)
+            """),
+            {
+                "car_code": normalize_code(car.code),
+                "driver_name": (car.driver or "").strip(),
+                "link_token": token,
+                "created_at": now,
+                "expires_at": expires,
+            },
+        )
+        session.commit()
+
+        return jsonify({
+            "ok": True,
+            "car_code": normalize_code(car.code),
+            "driver_name": (car.driver or "").strip(),
+            "link": f"https://t.me/{username}?start=driver_{token}",
+            "expires_at": expires.strftime("%d.%m.%Y %H:%M"),
+        })
+    except Exception as error:
+        session.rollback()
+        return jsonify({
+            "ok": False,
+            "message": f"Ошибка создания ссылки: {type(error).__name__}: {error}",
+        }), 500
+    finally:
+        session.close()
+
+
+@bp.route("/api/driver-telegram/status", methods=["GET"])
+def api_driver_telegram_status():
+    car_code = normalize_code(request.args.get("code") or "")
+    session = Session()
+    try:
+        row = session.execute(
+            sql_text("""
+                SELECT car_code, driver_name, telegram_username, linked_at
+                FROM driver_telegram_bindings
+                WHERE TRIM(car_code) = :car_code
+                LIMIT 1
+            """),
+            {"car_code": car_code},
+        ).mappings().first()
+
+        return jsonify({
+            "ok": True,
+            "linked": bool(row),
+            "binding": dict(row) if row else None,
+        })
+    finally:
+        session.close()
+
+
+@bp.route("/api/telegram/webhook", methods=["POST"])
+def api_telegram_webhook():
+    """Webhook существующего бота: обрабатывает только driver_<token>."""
+    secret = (os.getenv("TELEGRAM_WEBHOOK_SECRET") or "").strip()
+    if secret:
+        received = (
+            request.headers.get("X-Telegram-Bot-Api-Secret-Token") or ""
+        ).strip()
+        if received != secret:
+            return jsonify({"ok": False}), 403
+
+    update = request.get_json(silent=True) or {}
+    message = update.get("message") or {}
+    text_value = str(message.get("text") or "").strip()
+    chat = message.get("chat") or {}
+    sender = message.get("from") or {}
+
+    if not text_value.startswith("/start driver_"):
+        return jsonify({"ok": True})
+
+    link_token = text_value.split("driver_", 1)[1].split()[0].strip()
+    chat_id = str(chat.get("id") or "").strip()
+    if not link_token or not chat_id:
+        return jsonify({"ok": True})
+
+    session = Session()
+    try:
+        now = moscow_now().replace(tzinfo=None)
+        link = session.execute(
+            sql_text("""
+                SELECT id, car_code, driver_name, expires_at, used_at
+                FROM driver_telegram_links
+                WHERE link_token = :link_token
+                LIMIT 1
+            """),
+            {"link_token": link_token},
+        ).mappings().first()
+
+        if not link:
+            send_telegram_to_chat(
+                chat_id,
+                "Ссылка привязки недействительна. Попросите диспетчера создать новую.",
+            )
+            return jsonify({"ok": True})
+
+        if link.get("used_at"):
+            send_telegram_to_chat(
+                chat_id,
+                "Эта ссылка уже использована. Попросите диспетчера создать новую.",
+            )
+            return jsonify({"ok": True})
+
+        expires_at = link.get("expires_at")
+        if expires_at and expires_at < now:
+            send_telegram_to_chat(
+                chat_id,
+                "Срок действия ссылки истёк. Попросите диспетчера создать новую.",
+            )
+            return jsonify({"ok": True})
+
+        car = find_car(session, link["car_code"])
+        if not car or (car.driver or "").strip() != (link["driver_name"] or "").strip():
+            send_telegram_to_chat(
+                chat_id,
+                "Водитель на этой машине изменился. Попросите новую ссылку.",
+            )
+            return jsonify({"ok": True})
+
+        username = str(sender.get("username") or "").strip()
+        first_name = str(sender.get("first_name") or "").strip()
+
+        # Одна машина = одна актуальная Telegram-привязка.
+        session.execute(
+            sql_text("""
+                DELETE FROM driver_telegram_bindings
+                WHERE TRIM(car_code) = :car_code
+            """),
+            {"car_code": normalize_code(car.code)},
+        )
+
+        # Один Telegram-аккаунт не должен случайно остаться на двух машинах.
+        session.execute(
+            sql_text("""
+                DELETE FROM driver_telegram_bindings
+                WHERE telegram_chat_id = :chat_id
+            """),
+            {"chat_id": chat_id},
+        )
+
+        session.execute(
+            sql_text("""
+                INSERT INTO driver_telegram_bindings
+                    (car_code, driver_name, telegram_chat_id,
+                     telegram_username, telegram_first_name, linked_at,
+                     last_alert_level)
+                VALUES
+                    (:car_code, :driver_name, :chat_id,
+                     :username, :first_name, :linked_at, '')
+            """),
+            {
+                "car_code": normalize_code(car.code),
+                "driver_name": (car.driver or "").strip(),
+                "chat_id": chat_id,
+                "username": username,
+                "first_name": first_name,
+                "linked_at": now,
+            },
+        )
+
+        session.execute(
+            sql_text("""
+                UPDATE driver_telegram_links
+                SET used_at = :used_at
+                WHERE id = :id
+            """),
+            {"used_at": now, "id": link["id"]},
+        )
+        session.commit()
+
+        send_telegram_to_chat(
+            chat_id,
+            (
+                "🍀 <b>Клевер Парк</b>\n\n"
+                f"Telegram успешно привязан к машине <b>{normalize_code(car.code)}</b>.\n"
+                f"Водитель: <b>{(car.driver or '').strip()}</b>.\n\n"
+                "Сюда будут приходить уведомления по балансу."
+            ),
+        )
+        return jsonify({"ok": True})
+
+    except Exception as error:
+        session.rollback()
+        print(f"Ошибка Telegram webhook: {error}")
+        return jsonify({"ok": False}), 500
+    finally:
+        session.close()
+
+
+@bp.route("/api/telegram/setup-webhook", methods=["POST"])
+def api_telegram_setup_webhook():
+    """Одноразовая настройка webhook. Защищена CRON_SECRET."""
+    admin_secret = (os.getenv("CRON_SECRET") or "").strip()
+    if not admin_secret:
+        return jsonify({
+            "ok": False,
+            "message": "CRON_SECRET не настроен",
+        }), 503
+
+    received = (
+        request.headers.get("X-Admin-Secret")
+        or request.args.get("secret")
+        or ""
+    ).strip()
+    if received != admin_secret:
+        return jsonify({"ok": False, "message": "Нет доступа"}), 403
+
+    bot_token = (os.getenv("TELEGRAM_BOT_TOKEN") or "").strip()
+    webhook_secret = (os.getenv("TELEGRAM_WEBHOOK_SECRET") or "").strip()
+    if not bot_token or not webhook_secret:
+        return jsonify({
+            "ok": False,
+            "message": "Нужны TELEGRAM_BOT_TOKEN и TELEGRAM_WEBHOOK_SECRET",
+        }), 503
+
+    base_url = request.url_root.rstrip("/")
+    response = requests.post(
+        f"https://api.telegram.org/bot{bot_token}/setWebhook",
+        json={
+            "url": f"{base_url}/api/telegram/webhook",
+            "secret_token": webhook_secret,
+            "allowed_updates": ["message"],
+        },
+        timeout=20,
+    )
+    payload = response.json()
+    return jsonify({
+        "ok": bool(payload.get("ok")),
+        "telegram": payload,
+        "webhook_url": f"{base_url}/api/telegram/webhook",
+    }), (200 if payload.get("ok") else 502)
 
 
 @bp.route("/api/driver-wallet/fine", methods=["POST"])
