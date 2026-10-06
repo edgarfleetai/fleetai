@@ -7542,6 +7542,165 @@ def api_driver_telegram_link():
 
 
 
+
+def _driver_balance_alert_level(balance, daily_rent):
+    daily_rent = int(daily_rent or 0)
+    balance = int(balance or 0)
+    if daily_rent <= 0:
+        return ""
+    if balance <= 0:
+        return "zero"
+    if balance <= daily_rent:
+        return "one_day"
+    if balance <= daily_rent * 2:
+        return "two_days"
+    return ""
+
+
+def _send_driver_balance_alert(session, car, force=False):
+    """
+    Отправляет предупреждение только при переходе на новый уровень.
+    После пополнения выше двух суток состояние сбрасывается.
+    """
+    code = normalize_code(car.code)
+    driver_name = (car.driver or "").strip()
+    if not driver_name:
+        return {"sent": False, "reason": "no_driver"}
+
+    binding = session.execute(
+        sql_text("""
+            SELECT id, telegram_chat_id, driver_name, last_alert_level, last_alert_at
+            FROM driver_telegram_bindings
+            WHERE TRIM(car_code) = :car_code
+            LIMIT 1
+        """),
+        {"car_code": code},
+    ).mappings().first()
+
+    if not binding:
+        return {"sent": False, "reason": "not_linked"}
+
+    # Не отправляем старому водителю, если водитель на машине поменялся.
+    if (binding.get("driver_name") or "").strip() != driver_name:
+        return {"sent": False, "reason": "driver_changed"}
+
+    snapshot = driver_wallet_snapshot(session, car)
+    balance = int(snapshot.get("balance", 0) or 0)
+    daily = int(snapshot.get("daily_rent", 0) or 0)
+    level = _driver_balance_alert_level(balance, daily)
+    previous = (binding.get("last_alert_level") or "").strip()
+
+    if not level:
+        if previous:
+            session.execute(
+                sql_text("""
+                    UPDATE driver_telegram_bindings
+                    SET last_alert_level = '', last_alert_at = NULL
+                    WHERE id = :id
+                """),
+                {"id": binding["id"]},
+            )
+            session.commit()
+        return {"sent": False, "reason": "balance_ok"}
+
+    if not force and level == previous:
+        return {"sent": False, "reason": "already_notified", "level": level}
+
+    if level == "zero":
+        title = "🔴 Баланс закончился"
+        detail = "Пополните баланс, чтобы покрыть аренду."
+    elif level == "one_day":
+        title = "🟠 Баланса осталось примерно на 1 день"
+        detail = "Рекомендуем пополнить баланс заранее."
+    else:
+        title = "🟡 Баланса осталось примерно на 2 дня"
+        detail = "Пожалуйста, обратите внимание на баланс."
+
+    days_left = max(balance // max(daily, 1), 0)
+    portal_url = request.url_root.rstrip("/") + f"/driver?code={code}"
+
+    message = (
+        f"{title}\n\n"
+        f"Водитель: <b>{driver_name}</b>\n"
+        f"Машина: <b>{code}</b>\n"
+        f"Баланс: <b>{balance:,} ₽</b>\n"
+        f"Аренда в сутки: <b>{daily:,} ₽</b>\n"
+        f"Хватит примерно на: <b>{days_left} дн.</b>\n\n"
+        f"{detail}\n"
+        f"Кабинет: {portal_url}"
+    ).replace(",", " ")
+
+    if not send_telegram_to_chat(binding["telegram_chat_id"], message):
+        return {"sent": False, "reason": "telegram_error", "level": level}
+
+    now = moscow_now().replace(tzinfo=None)
+    session.execute(
+        sql_text("""
+            UPDATE driver_telegram_bindings
+            SET last_alert_level = :level, last_alert_at = :last_alert_at
+            WHERE id = :id
+        """),
+        {
+            "level": level,
+            "last_alert_at": now,
+            "id": binding["id"],
+        },
+    )
+    session.commit()
+    return {"sent": True, "level": level, "balance": balance, "daily_rent": daily}
+
+
+@bp.route("/api/cron/driver-balance-alerts", methods=["GET", "POST"])
+def api_cron_driver_balance_alerts():
+    """Проверяет всех привязанных водителей. Защищено CRON_SECRET."""
+    secret = (os.getenv("CRON_SECRET") or "").strip()
+    if not secret:
+        return jsonify({"ok": False, "message": "CRON_SECRET не настроен"}), 503
+
+    received = (
+        request.headers.get("X-Admin-Secret")
+        or request.args.get("secret")
+        or ""
+    ).strip()
+    if received != secret:
+        return jsonify({"ok": False, "message": "Нет доступа"}), 403
+
+    session = Session()
+    checked = 0
+    sent = 0
+    details = []
+    try:
+        codes = session.execute(
+            sql_text("SELECT car_code FROM driver_telegram_bindings")
+        ).scalars().all()
+
+        for raw_code in codes:
+            code = normalize_code(raw_code)
+            car = find_car(session, code)
+            if not car:
+                continue
+            checked += 1
+            result = _send_driver_balance_alert(session, car)
+            if result.get("sent"):
+                sent += 1
+            details.append({"car_code": code, **result})
+
+        return jsonify({
+            "ok": True,
+            "checked": checked,
+            "sent": sent,
+            "details": details,
+        })
+    except Exception as error:
+        session.rollback()
+        return jsonify({
+            "ok": False,
+            "message": f"{type(error).__name__}: {error}",
+        }), 500
+    finally:
+        session.close()
+
+
 @bp.route("/api/driver-telegram/test", methods=["POST"])
 def api_driver_telegram_test():
     """Тест: отправляет сообщение только в персональный chat_id привязанного водителя."""
