@@ -9288,6 +9288,139 @@ loadState();
     return render_template_string(html)
 
 
+
+@bp.route("/api/wialon/665/history", methods=["GET"])
+def api_wialon_665_history():
+    """
+    V15.4 READ ONLY:
+    читает последние сообщения 665 и показывает все параметры,
+    чтобы найти ACC/IGN или другой признак запуска/глушения.
+    Команды автомобилю не отправляет.
+    """
+    try:
+        sid = _wialon_login_sid()
+        try:
+            count = int(request.args.get("count", "50"))
+        except Exception:
+            count = 50
+        count = max(1, min(count, 100))
+
+        result = _wialon_call("messages/load_last", {
+            "itemId": WIALON_665_UNIT_ID,
+            "lastTime": 0,
+            "lastCount": count,
+            "flags": 0,
+            "flagsMask": 0,
+            "loadCount": count,
+        }, sid=sid)
+
+        if isinstance(result, dict) and result.get("error") is not None:
+            return jsonify({
+                "ok": False, "read_only": True,
+                "stage": "messages/load_last", "wialon": result
+            }), 502
+
+        if isinstance(result, dict):
+            messages = result.get("messages") or result.get("msgs") or []
+        elif isinstance(result, list):
+            messages = result
+        else:
+            messages = []
+
+        parameter_values = {}
+        rows = []
+
+        for msg in messages:
+            if not isinstance(msg, dict):
+                continue
+            pos = msg.get("pos") or {}
+            params = msg.get("p") or msg.get("params") or pos.get("p") or {}
+
+            for key, value in params.items():
+                k = str(key)
+                vals = parameter_values.setdefault(k, [])
+                if value not in vals and len(vals) < 25:
+                    vals.append(value)
+
+            rows.append({
+                "time": msg.get("t"),
+                "receive_time": msg.get("rt"),
+                "type": msg.get("tp"),
+                "speed": pos.get("s"),
+                "course": pos.get("c"),
+                "params": params,
+            })
+
+        interesting = {}
+        for key, values in parameter_values.items():
+            kl = key.lower()
+            if (
+                len(values) > 1
+                or any(word in kl for word in (
+                    "acc", "ign", "engine", "din", "input",
+                    "status", "alarm", "power", "voltage",
+                    "battery", "backup"
+                ))
+            ):
+                interesting[key] = values
+
+        return jsonify({
+            "ok": True,
+            "read_only": True,
+            "commands_sent": False,
+            "unit_id": WIALON_665_UNIT_ID,
+            "requested_count": count,
+            "messages_found": len(rows),
+            "all_parameter_values": parameter_values,
+            "interesting_parameter_values": interesting,
+            "messages": rows,
+        })
+
+    except requests.RequestException as exc:
+        return jsonify({
+            "ok": False, "read_only": True,
+            "stage": "http", "message": str(exc)
+        }), 502
+    except Exception as exc:
+        return jsonify({
+            "ok": False, "read_only": True,
+            "stage": "internal", "message": str(exc)
+        }), 500
+
+
+@bp.route("/wialon-665-history")
+def wialon_665_history_page():
+    html = r"""<!doctype html>
+<html lang="ru"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>FleetAI — история Wialon 665</title>
+<style>
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#f4f7f6;color:#17211d;margin:0}
+.wrap{max-width:900px;margin:30px auto;padding:18px}.card{background:#fff;border-radius:18px;padding:22px;box-shadow:0 6px 24px rgba(0,0,0,.07)}
+.safe{background:#e8f5ec;border-radius:12px;padding:13px;margin:16px 0}
+button{border:0;border-radius:12px;padding:13px 18px;font-size:16px;font-weight:750;cursor:pointer}
+pre{white-space:pre-wrap;word-break:break-word;background:#eef2f0;padding:14px;border-radius:12px;max-height:650px;overflow:auto}
+</style></head><body><div class="wrap"><div class="card">
+<h1>История сообщений 665</h1>
+<div class="safe"><b>READ ONLY:</b> читаем последние 50 сообщений. Команды автомобилю не отправляются.</div>
+<button onclick="loadHistory()">🔄 Обновить историю</button>
+<pre id="result">Загрузка…</pre>
+</div></div>
+<script>
+async function loadHistory(){
+ const el=document.getElementById('result');
+ el.textContent='Читаю последние сообщения Wialon…';
+ try{
+   const r=await fetch('/api/wialon/665/history?count=50');
+   const d=await r.json();
+   el.textContent=JSON.stringify(d,null,2);
+ }catch(e){el.textContent='Ошибка: '+e}
+}
+loadHistory();
+</script></body></html>"""
+    return render_template_string(html)
+
+
 @bp.route("/api/wialon/665/command", methods=["POST"])
 def api_wialon_665_command():
     """Manual pilot only. Blocking requires explicit confirmation that 665 is parked and engine is off."""
