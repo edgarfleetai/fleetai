@@ -7650,6 +7650,79 @@ def _send_driver_balance_alert(session, car, force=False):
     return {"sent": True, "level": level, "balance": balance, "daily_rent": daily}
 
 
+
+@bp.route("/api/cron/daily-rent-and-alerts", methods=["GET", "POST"])
+def api_cron_daily_rent_and_alerts():
+    """
+    Ежедневный цикл:
+    1) синхронизирует аренду по активным машинам;
+    2) затем проверяет персональные Telegram-предупреждения.
+    Повторный запуск в тот же день безопасен: DAILY_RENT не дублируется,
+    а одинаковый alert повторно не отправляется.
+    """
+    secret = (os.getenv("CRON_SECRET") or "").strip()
+    if not secret:
+        return jsonify({"ok": False, "message": "CRON_SECRET не настроен"}), 503
+
+    received = (
+        request.headers.get("X-Admin-Secret")
+        or request.args.get("secret")
+        or ""
+    ).strip()
+    if received != secret:
+        return jsonify({"ok": False, "message": "Нет доступа"}), 403
+
+    session = Session()
+    processed = 0
+    alert_sent = 0
+    details = []
+
+    try:
+        cars = session.query(Car).all()
+
+        for car in cars:
+            driver_name = (car.driver or "").strip()
+            daily = int(effective_daily_rent(car) or 0)
+
+            if not driver_name or daily <= 0:
+                continue
+
+            processed += 1
+            code = normalize_code(car.code)
+
+            # Списание аренды идемпотентно благодаря DAILY_RENT:YYYY-MM-DD.
+            sync_result = _sync_daily_rent(session, car)
+
+            # После списания сразу проверяем уровень баланса.
+            alert_result = _send_driver_balance_alert(session, car)
+            if alert_result.get("sent"):
+                alert_sent += 1
+
+            details.append({
+                "car_code": code,
+                "driver_name": driver_name,
+                "daily_rent": daily,
+                "rent_sync": sync_result,
+                "alert": alert_result,
+            })
+
+        return jsonify({
+            "ok": True,
+            "processed": processed,
+            "alerts_sent": alert_sent,
+            "details": details,
+        })
+
+    except Exception as error:
+        session.rollback()
+        return jsonify({
+            "ok": False,
+            "message": f"{type(error).__name__}: {error}",
+        }), 500
+    finally:
+        session.close()
+
+
 @bp.route("/api/cron/driver-balance-alerts", methods=["GET", "POST"])
 def api_cron_driver_balance_alerts():
     """Проверяет всех привязанных водителей. Защищено CRON_SECRET."""
