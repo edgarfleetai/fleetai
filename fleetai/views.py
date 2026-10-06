@@ -3116,6 +3116,12 @@ function renderDriverPayments(carsList){
                 👤 Кабинет
               </button>
               <button
+                class="secondary"
+                onclick="window.open('/driver-topup?code=${encodeURIComponent(car.code)}','_blank')"
+              >
+                + Пополнить
+              </button>
+              <button
                 class="danger"
                 onclick="window.open('/driver-fines?code=${encodeURIComponent(car.code)}','_blank')"
               >
