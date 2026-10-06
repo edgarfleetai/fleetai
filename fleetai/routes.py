@@ -9618,7 +9618,7 @@ def _evaluate_665_stationary_block_preview(session, allow_commands=False):
     })
     session.commit()
     return {
-        "ok": True, "version": "V15.12", "dry_run": not allow_commands, "commands_sent": command_sent_now,
+        "ok": True, "version": "V15.13", "dry_run": not allow_commands, "commands_sent": command_sent_now,
         "car_code": BLOCK_PREVIEW_CAR_CODE, "balance": balance,
         "threshold": threshold, "debt_triggered": debt_triggered,
         "speed_kmh": speed, "message_time": motion.get("message_time"),
@@ -9629,9 +9629,102 @@ def _evaluate_665_stationary_block_preview(session, allow_commands=False):
         "ready_to_block": ready, "status": status,
         "blocked": blocked, "command_sent_at": command_sent_at,
         "last_command_error": last_command_error,
-        "note": ("V15.12 DB SETTINGS + SECURE WATCHER — команды разрешены только защищённому cron" if allow_commands else "V15.12 READ ONLY — публичный просмотр без команд Wialon"),
+        "note": ("V15.13 SETTINGS UI + SECURE WATCHER — команды разрешены только защищённому cron" if allow_commands else "V15.13 READ ONLY — публичный просмотр без команд Wialon"),
     }
 
+
+
+
+@bp.route("/wialon-settings")
+def wialon_settings_page():
+    code = normalize_code(request.args.get("code") or "665")
+    session = Session()
+    try:
+        cfg = _wialon_car_config(code, session=session)
+    finally:
+        session.close()
+
+    cfg = cfg or {
+        "car_code": code, "unit_id": "", "auto_block": False,
+        "threshold": -2000, "stationary_minutes": 30,
+        "telemetry_max_age_seconds": 120,
+        "block_command": {"name": "", "param": ""},
+        "unblock_command": {"name": "", "param": ""},
+    }
+
+    html = r"""<!doctype html>
+<html lang="ru"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>FleetAI — Wialon настройки</title>
+<style>
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#f4f7f6;color:#17211d;margin:0}
+.wrap{max-width:760px;margin:28px auto;padding:16px}.card{background:white;padding:22px;border-radius:18px;box-shadow:0 6px 24px rgba(0,0,0,.07)}
+h1{margin-top:0}.grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+label{font-weight:700;display:block;margin:8px 0 5px}input{width:100%;box-sizing:border-box;padding:11px;border:1px solid #cbd5d1;border-radius:10px;font-size:16px}
+.full{grid-column:1/-1}.check{display:flex;gap:10px;align-items:center;margin-top:18px}.check input{width:auto}
+button{margin-top:18px;border:0;border-radius:12px;padding:13px 18px;font-size:16px;font-weight:800;cursor:pointer}
+.note{background:#eef5f1;padding:12px;border-radius:12px;margin:14px 0}.result{white-space:pre-wrap;margin-top:14px}
+@media(max-width:620px){.grid{grid-template-columns:1fr}}
+</style></head><body><div class="wrap"><div class="card">
+<h1>Wialon / Автоблокировка</h1>
+<div class="note">Новые машины создаются с автоблокировкой выключенной. Включайте её только после проверки Unit ID и команд блокировки.</div>
+<div class="grid">
+<div><label>Код машины</label><input id="car_code" value="__CAR__"></div>
+<div><label>Wialon Unit ID</label><input id="unit_id" type="number" value="__UNIT__"></div>
+<div><label>Порог баланса, ₽</label><input id="threshold" type="number" value="__THRESHOLD__"></div>
+<div><label>Стоянка до блокировки, мин</label><input id="stationary" type="number" min="1" value="__MINUTES__"></div>
+<div><label>Макс. возраст телеметрии, сек</label><input id="telemetry" type="number" min="30" value="__AGE__"></div>
+<div><label>CRON_SECRET для сохранения</label><input id="secret" type="password" autocomplete="off" placeholder="не сохраняется на странице"></div>
+<div class="full"><label>BLOCK — название</label><input id="block_name" value="__BNAME__"></div>
+<div class="full"><label>BLOCK — команда</label><input id="block_param" value="__BPARAM__"></div>
+<div class="full"><label>UNBLOCK — название</label><input id="unblock_name" value="__UNAME__"></div>
+<div class="full"><label>UNBLOCK — команда</label><input id="unblock_param" value="__UPARAM__"></div>
+</div>
+<label class="check"><input id="auto_block" type="checkbox" __CHECKED__> Автоблокировка включена</label>
+<button onclick="save()">Сохранить настройки</button>
+<div id="result" class="result"></div>
+</div></div>
+<script>
+async function save(){
+ const code=document.getElementById('car_code').value.trim();
+ const secret=document.getElementById('secret').value;
+ const body={
+  unit_id:Number(document.getElementById('unit_id').value),
+  auto_block:document.getElementById('auto_block').checked,
+  threshold:Number(document.getElementById('threshold').value),
+  stationary_minutes:Number(document.getElementById('stationary').value),
+  telemetry_max_age_seconds:Number(document.getElementById('telemetry').value),
+  block_command_name:document.getElementById('block_name').value,
+  block_command_param:document.getElementById('block_param').value,
+  unblock_command_name:document.getElementById('unblock_name').value,
+  unblock_command_param:document.getElementById('unblock_param').value
+ };
+ const r=await fetch('/api/wialon/settings/'+encodeURIComponent(code),{
+  method:'POST',headers:{'Content-Type':'application/json','X-Admin-Secret':secret},
+  body:JSON.stringify(body)
+ });
+ const data=await r.json();
+ document.getElementById('result').textContent=JSON.stringify(data,null,2);
+ if(r.ok) document.getElementById('secret').value='';
+}
+</script></body></html>"""
+
+    import html as _html
+    repl = {
+        "__CAR__": _html.escape(str(cfg.get("car_code") or code), quote=True),
+        "__UNIT__": _html.escape(str(cfg.get("unit_id") or ""), quote=True),
+        "__THRESHOLD__": _html.escape(str(cfg.get("threshold", -2000)), quote=True),
+        "__MINUTES__": _html.escape(str(cfg.get("stationary_minutes", 30)), quote=True),
+        "__AGE__": _html.escape(str(cfg.get("telemetry_max_age_seconds", 120)), quote=True),
+        "__BNAME__": _html.escape(str((cfg.get("block_command") or {}).get("name") or ""), quote=True),
+        "__BPARAM__": _html.escape(str((cfg.get("block_command") or {}).get("param") or ""), quote=True),
+        "__UNAME__": _html.escape(str((cfg.get("unblock_command") or {}).get("name") or ""), quote=True),
+        "__UPARAM__": _html.escape(str((cfg.get("unblock_command") or {}).get("param") or ""), quote=True),
+        "__CHECKED__": "checked" if cfg.get("auto_block") else "",
+    }
+    for key, value in repl.items():
+        html = html.replace(key, value)
+    return html
 
 
 @bp.route("/api/wialon/settings/<car_code>", methods=["GET", "POST"])
