@@ -18,7 +18,6 @@ input.msg{width:78%;font-size:18px}
 button{padding:10px 14px;font-size:15px;border:0;border-radius:10px;background:#2563eb;color:white;cursor:pointer}
 .danger{background:#dc2626}
 .small{padding:6px 9px;font-size:12px}
-.driver-period-actions{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}
 table{width:100%;border-collapse:collapse}
 td,th{padding:9px;border-bottom:1px solid #eee;text-align:left}
 .badge{padding:4px 8px;border-radius:999px;background:#e0f2fe;color:#0369a1;font-size:12px}
@@ -32,7 +31,7 @@ td,th{padding:9px;border-bottom:1px solid #eee;text-align:left}
 .event.repair,.event.service,.event.expense{border-left-color:#dc2626}
 .event.downtime{border-left-color:#f97316}
 .raw{font-size:13px;color:#6b7280}
-.payment-form{display:grid;grid-template-columns:repeat(6,minmax(150px,1fr));gap:8px;align-items:end}
+.payment-form{display:grid;grid-template-columns:repeat(5,minmax(160px,1fr));gap:8px;align-items:end}
 
 .investor-summary-grid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:12px;margin:14px 0}
 .investor-kpi{background:#111827;color:white;border-radius:16px;padding:16px}
@@ -1895,7 +1894,7 @@ body > *{
   <div>
     <div class="eyebrow">ПЛАТЕЖИ И ГРАФИК</div>
     <h1>Водители</h1>
-    <p>Еженедельные расчёты, даты оплат и уведомления.</p>
+    <p>Баланс, кабинет водителя, штрафы, расчёты и уведомления.</p>
   </div>
 </div>
 
@@ -1931,15 +1930,6 @@ body > *{
         <input id="payment_daily_rent" type="number" min="0" placeholder="2000">
       </label>
 
-      <label>Залог
-        <input
-          id="payment_driver_deposit"
-          type="number"
-          min="0"
-          placeholder="Например 30 000"
-        >
-      </label>
-
       <label>День расчёта
         <select id="payment_weekday">
           <option value="0">Понедельник</option>
@@ -1967,20 +1957,6 @@ body > *{
     <h3>График платежей</h3>
     <table id="driverPayments"></table>
   </div>
-</div>
-
-<div class="card">
-  <div class="section-head">
-    <div>
-      <h2>Должники</h2>
-      <p class="raw">Долг сохраняется за человеком, даже если машина уже забрана.</p>
-    </div>
-    <div>
-      <b id="driverDebtTotal">0 ₽</b>
-      <div class="raw">общий остаток</div>
-    </div>
-  </div>
-  <table id="driverDebts"></table>
 </div>
 
 </section>
@@ -2888,26 +2864,10 @@ function paymentStatus(nextDate){
 }
 
 function fillPaymentCarSelect(carsList){
-  const select=document.getElementById('payment_car');
-  if(!select)return;
-
-  const selected=String(select.value||'');
-  paymentCars=Array.isArray(carsList)?carsList:[];
-
-  select.innerHTML='<option value="">Выбери машину</option>'+paymentCars.map(car=>{
-    const driver=(car.driver||'').trim();
-    const label=[
-      car.code,
-      car.brand||'',
-      car.model||'',
-      driver?`— водитель: ${driver}`:'— свободна'
-    ].filter(Boolean).join(' ');
-    return `<option value="${car.code}">${label}</option>`;
-  }).join('');
-
-  if(paymentCars.some(car=>String(car.code)===selected)){
-    select.value=selected;
-  }
+  const selected=payment_car.value;
+  paymentCars=carsList;
+  payment_car.innerHTML='<option value="">Выбери машину</option>'+carsList.map(car=>`<option value="${car.code}">${car.code} ${car.brand||''} ${car.model||''}</option>`).join('');
+  if(carsList.some(car=>car.code===selected))payment_car.value=selected;
 }
 
 payment_car.addEventListener('change',()=>{
@@ -2925,55 +2885,6 @@ payment_car.addEventListener('change',()=>{
   payment_weekday.value=String(car.payment_weekday||0);
 });
 
-function fillDriverPaymentFormFromCar(){
-  const code=payment_car.value;
-  const car=(window.cachedCars||[]).find(
-    item=>String(item.code)===String(code)
-  );
-
-  if(!car){
-    return;
-  }
-
-  payment_driver.value=car.driver||'';
-  payment_daily_rent.value=Number(car.daily_rent||0);
-  payment_driver_deposit.value=Number(car.driver_deposit||0);
-  payment_weekday.value=Number(car.payment_weekday||0);
-  payment_date.value=car.next_payment_date||'';
-}
-
-document.addEventListener('change',event=>{
-  if(event.target && event.target.id==='payment_car'){
-    fillDriverPaymentFormFromCar();
-  }
-});
-
-
-function editDriverPayment(carCode){
-  const select=document.getElementById('payment_car');
-  const panel=document.getElementById('paymentsPanel');
-
-  if(panel && !panel.classList.contains('open')){
-    togglePaymentsPanel();
-  }
-
-  if(select){
-    select.value=String(carCode);
-    fillDriverPaymentFormFromCar();
-  }
-
-  const form=document.querySelector('#paymentsPanel .payment-form');
-  if(form){
-    form.scrollIntoView({behavior:'smooth',block:'start'});
-  }
-
-  const result=document.getElementById('paymentRes');
-  if(result){
-    result.innerText='Можно изменить водителя, ставку или ближайшую дату расчёта и нажать «Сохранить расчёт».';
-  }
-}
-
-
 async function saveDriverPayment(){
   if(!payment_car.value){paymentRes.innerText='Сначала выбери машину';return}
   if(!payment_daily_rent.value){paymentRes.innerText='Укажи стоимость аренды в сутки';return}
@@ -2983,7 +2894,6 @@ async function saveDriverPayment(){
     car_code:payment_car.value,
     driver:payment_driver.value,
     daily_rent:Number(payment_daily_rent.value),
-    driver_deposit:Number(payment_driver_deposit.value||0),
     payment_weekday:Number(payment_weekday.value),
     next_payment_date:payment_date.value
   };
@@ -3032,50 +2942,6 @@ async function markDriverPeriodPaid(
   }
 }
 
-async function markDriverPeriodPartial(
-  carCode,
-  periodStart,
-  periodEnd,
-  periodAmount
-){
-  const entered=prompt(
-    `Сумма недели: ${rub(periodAmount)}.\nСколько водитель оплатил сейчас?`,
-    ''
-  );
-  if(entered===null)return;
-
-  const amount=Number(String(entered).replace(/\s/g,''));
-  if(!Number.isFinite(amount) || amount<=0){
-    alert('Укажи сумму частичной оплаты');
-    return;
-  }
-  if(amount>=Number(periodAmount||0)){
-    alert('Для полной оплаты используй кнопку «Оплачено»');
-    return;
-  }
-
-  if(!confirm(
-    `Записать частичную оплату ${rub(amount)}? Остаток перейдёт в базу должников.`
-  ))return;
-
-  const result=await api('/api/mark-driver-period-partial',{
-    method:'POST',
-    headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({
-      car_code:carCode,
-      period_start:periodStart,
-      period_end:periodEnd,
-      amount:Math.round(amount)
-    })
-  });
-
-  alert(result.message||'');
-  if(result.ok){
-    await loadCars();
-    await loadDriverDebts();
-  }
-}
-
 async function markPaymentPaid(code){
   if(!confirm(`Подтвердить получение оплаты от машины ${code}?`))return;
   const result=await api('/api/mark-driver-payment-paid',{
@@ -3119,29 +2985,16 @@ function overduePeriodsHtml(carCode,calc){
             ${
               index===0
                 ? `
-                  <div class="driver-period-actions">
-                    <button
-                      class="small"
-                      onclick="markDriverPeriodPaid(
-                        '${carCode}',
-                        '${period.period_start}',
-                        '${period.period_end}'
-                      )"
-                    >
-                      Оплачено
-                    </button>
-                    <button
-                      class="secondary small"
-                      onclick="markDriverPeriodPartial(
-                        '${carCode}',
-                        '${period.period_start}',
-                        '${period.period_end}',
-                        ${Number(period.amount||0)}
-                      )"
-                    >
-                      Оплачено частично
-                    </button>
-                  </div>
+                  <button
+                    class="small"
+                    onclick="markDriverPeriodPaid(
+                      '${carCode}',
+                      '${period.period_start}',
+                      '${period.period_end}'
+                    )"
+                  >
+                    Оплачено
+                  </button>
                 `
                 : `
                   <span class="raw">
@@ -3174,12 +3027,12 @@ function renderDriverPayments(carsList){
       <th>Машина</th>
       <th>Водитель</th>
       <th>Ставка</th>
-      <th>Залог</th>
       <th>Просроченные недели</th>
       <th>Текущий период</th>
       <th>Начислено сейчас</th>
       <th>Дата расчёта</th>
       <th>Статус</th>
+      <th>Баланс</th>
       <th>Действие</th>
     </tr>
 
@@ -3210,13 +3063,6 @@ function renderDriverPayments(carsList){
           </td>
 
           <td>
-            <b>${rub(car.driver_deposit||0)}</b>
-            <div class="raw">
-              не входит в доход
-            </div>
-          </td>
-
-          <td>
             ${overduePeriodsHtml(car.code,calc)}
           </td>
 
@@ -3235,11 +3081,6 @@ function renderDriverPayments(carsList){
             <div class="raw">
               начисляется по дням
             </div>
-            ${
-              Number(calc.overdue_periods_count||0)===0 && Number(calc.current_amount||0)>0
-                ? `<button class="small" onclick="markPaymentPaid('${car.code}')">Оплачено</button>`
-                : ''
-            }
           </td>
 
           <td>
@@ -3261,19 +3102,35 @@ function renderDriverPayments(carsList){
           </td>
 
           <td>
-            <button class="secondary" onclick="editDriverPayment('${car.code}')">
-              Изменить
-            </button>
-            ${car.driver ? `
-              <button class="danger" onclick="saveDriverDebt('${car.code}',true)">
-                Зафиксировать долг
+            <b class="${Number(car.driver_wallet_balance||0)>=0?'ok':'bad'}">
+              ${rub(Number(car.driver_wallet_balance||0))}
+            </b>
+          </td>
+
+          <td>
+            <div style="display:flex;flex-wrap:wrap;gap:6px">
+              <button
+                class="secondary"
+                onclick="window.open('/driver?code=${encodeURIComponent(car.code)}','_blank')"
+              >
+                👤 Кабинет
               </button>
-            ` : ''}
-            ${
-              Number(calc.overdue_periods_count||0)>0
-                ? '<span class="raw">Оплату отмечай рядом с долгом</span>'
-                : ''
-            }
+              <button
+                class="danger"
+                onclick="window.open('/driver-fines?code=${encodeURIComponent(car.code)}','_blank')"
+              >
+                ⚠️ Штраф
+              </button>
+              ${
+                Number(calc.overdue_periods_count||0)>0
+                  ? '<span class="raw">Закрой недели по очереди</span>'
+                  : `
+                    <button onclick="markPaymentPaid('${car.code}')">
+                      Оплачено
+                    </button>
+                  `
+              }
+            </div>
           </td>
         </tr>
       `;
@@ -3281,153 +3138,6 @@ function renderDriverPayments(carsList){
   `;
 }
 
-
-
-function driverDebtDate(value){
-  if(!value)return '—';
-  const d=new Date(value);
-  if(Number.isNaN(d.getTime()))return value;
-  return d.toLocaleDateString('ru-RU');
-}
-
-async function loadDriverDebts(){
-  const table=document.getElementById('driverDebts');
-  if(!table)return;
-
-  try{
-    const data=await api('/api/driver-debts');
-    const rows=Array.isArray(data.items)?data.items:[];
-    const total=document.getElementById('driverDebtTotal');
-    if(total)total.innerText=rub(data.total_debt||0);
-
-    if(!rows.length){
-      table.innerHTML='<tr><td>Активных должников нет</td></tr>';
-      return;
-    }
-
-    table.innerHTML=`
-      <tr>
-        <th>Водитель</th>
-        <th>Бывшая машина</th>
-        <th>Первоначальный долг</th>
-        <th>Оплачено</th>
-        <th>Остаток</th>
-        <th>Дата</th>
-        <th>Причина</th>
-        <th>Действие</th>
-      </tr>
-      ${rows.map(item=>`
-        <tr>
-          <td><b>${item.driver_name||'—'}</b></td>
-          <td>${item.car_code||'—'}</td>
-          <td>${rub(item.original_amount||0)}</td>
-          <td>${rub(item.paid_amount||0)}</td>
-          <td><b class="bad">${rub(item.balance||0)}</b></td>
-          <td>${driverDebtDate(item.created_at)}</td>
-          <td>${item.reason||'—'}</td>
-          <td>
-            <button onclick="payDriverDebt(${item.id},${Number(item.balance||0)})">
-              Частичная оплата
-            </button>
-            <button class="secondary" onclick="showDriverDebtHistory(${item.id},'${String(item.driver_name||'').replace(/'/g,"\\'")}')">
-              История
-            </button>
-          </td>
-        </tr>
-      `).join('')}
-    `;
-  }catch(error){
-    table.innerHTML=`<tr><td>Не удалось загрузить должников: ${error}</td></tr>`;
-  }
-}
-
-async function saveDriverDebt(carCode,detach){
-  const car=(window.cachedCars||[]).find(
-    item=>String(item.code)===String(carCode)
-  );
-  if(!car || !car.driver){
-    alert('У машины не указан водитель');
-    return;
-  }
-
-  const calc=car.driver_payment||{};
-  const suggested=Number(calc.amount_due||0);
-  const entered=prompt(
-    `Долг водителя ${car.driver} по машине ${carCode}.\\n`+
-    `Расчёт системы: ${rub(suggested)}.\\n`+
-    `Укажи сумму долга:`,
-    String(suggested||'')
-  );
-  if(entered===null)return;
-
-  const amount=Number(String(entered).replace(/\\s/g,''));
-  if(!Number.isFinite(amount) || amount<=0){
-    alert('Укажи правильную сумму долга');
-    return;
-  }
-
-  const reason=prompt('Причина долга:','Долг по аренде')||'Долг по аренде';
-
-  if(detach && !confirm(
-    `Машина ${carCode} забрана у ${car.driver}. Зафиксировать долг ${rub(amount)} и освободить машину?`
-  ))return;
-
-  const result=await api('/api/driver-debt-from-car',{
-    method:'POST',
-    headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({
-      car_code:carCode,
-      amount:Math.round(amount),
-      reason,
-      detach_driver:detach
-    })
-  });
-
-  alert(result.message||'');
-  if(result.ok){
-    await loadCars();
-    await loadDriverDebts();
-  }
-}
-
-async function payDriverDebt(debtId,balance){
-  const entered=prompt(
-    `Остаток долга: ${rub(balance)}.\\nСколько оплатил водитель?`,
-    ''
-  );
-  if(entered===null)return;
-
-  const amount=Number(String(entered).replace(/\\s/g,''));
-  if(!Number.isFinite(amount) || amount<=0){
-    alert('Укажи сумму оплаты');
-    return;
-  }
-
-  const comment=prompt('Комментарий к оплате:','Частичная оплата долга')||'Частичная оплата долга';
-  const result=await api('/api/driver-debt-payment',{
-    method:'POST',
-    headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({debt_id:debtId,amount:Math.round(amount),comment})
-  });
-
-  alert(result.message||'');
-  if(result.ok)await loadDriverDebts();
-}
-
-async function showDriverDebtHistory(debtId,driverName){
-  const result=await api('/api/driver-debt-payments/'+debtId);
-  const rows=Array.isArray(result.items)?result.items:[];
-  if(!rows.length){
-    alert(`По долгу ${driverName} пока нет платежей`);
-    return;
-  }
-  alert(
-    `История оплат — ${driverName}\\n\\n`+
-    rows.map(row=>
-      `${driverDebtDate(row.date)} — ${rub(row.amount)}${row.comment?' — '+row.comment:''}`
-    ).join('\\n')
-  );
-}
 
 window.monthlyMileageByCar =
   window.monthlyMileageByCar || {};
@@ -3584,7 +3294,7 @@ async function loadCars(){
   }
 
   const carsTable=document.getElementById('cars');
-  const paymentSelect=document.getElementById('payment_car');
+  const paymentSelect=document.getElementById('paymentCar');
   const paymentsTable=document.getElementById('driverPayments');
 
   try{
@@ -3605,8 +3315,6 @@ async function loadCars(){
     if(paymentsTable){
       renderDriverPayments(response);
     }
-
-    await loadDriverDebts();
 
     if(!carsTable){
       return;
