@@ -9303,6 +9303,65 @@ BLOCK_PREVIEW_TELEMETRY_MAX_AGE_SECONDS = int(os.environ.get("BLOCK_PREVIEW_TELE
 BLOCK_PREVIEW_MAX_CHECK_GAP_SECONDS = int(os.environ.get("BLOCK_PREVIEW_MAX_CHECK_GAP_SECONDS", "360"))
 
 
+# --- V15.11 fleet Wialon configuration ---
+# Only 665 is enabled by default. Add other cars later through environment/config
+# after their unit IDs and commands have been verified.
+WIALON_FLEET_CONFIG = {
+    "665": {
+        "unit_id": WIALON_665_UNIT_ID,
+        "auto_block": True,
+        "threshold": int(os.environ.get("WIALON_665_BLOCK_THRESHOLD", str(BLOCK_PREVIEW_THRESHOLD))),
+        "stationary_minutes": int(os.environ.get("WIALON_665_STATIONARY_MINUTES", str(BLOCK_PREVIEW_STATIONARY_MINUTES))),
+        "telemetry_max_age_seconds": BLOCK_PREVIEW_TELEMETRY_MAX_AGE_SECONDS,
+        "block_command": {"name": "Блокировка", "param": "S20,163017,1,1"},
+        "unblock_command": {"name": "Снять блокировку", "param": "S20,161052,0,0"},
+    },
+}
+
+
+def _wialon_car_config(car_code):
+    return WIALON_FLEET_CONFIG.get(normalize_code(car_code))
+
+
+def _wialon_latest_motion_for_unit(unit_id):
+    """READ ONLY: latest speed/message age for any configured Wialon unit."""
+    sid = _wialon_login_sid()
+    result = _wialon_call("messages/load_last", {
+        "itemId": int(unit_id), "lastTime": 0, "lastCount": 1,
+        "flags": 0, "flagsMask": 0, "loadCount": 1,
+    }, sid=sid)
+    if isinstance(result, dict) and result.get("error") is not None:
+        raise RuntimeError(f"Wialon messages/load_last: {result}")
+    messages = (result.get("messages") or result.get("msgs") or []) if isinstance(result, dict) else (result if isinstance(result, list) else [])
+    if not messages:
+        raise RuntimeError(f"Wialon не вернул последнее сообщение unit {unit_id}")
+    msg = messages[-1] if isinstance(messages[-1], dict) else {}
+    pos = msg.get("pos") or {}
+    message_time = int(msg.get("t") or msg.get("rt") or 0)
+    now_epoch = int(__import__("time").time())
+    return {
+        "speed": int(pos.get("s") or 0),
+        "message_time": message_time,
+        "telemetry_age_seconds": max(now_epoch - message_time, 0) if message_time else None,
+    }
+
+
+def _send_wialon_engine_command_for_car(car_code, command_type):
+    cfg = _wialon_car_config(car_code)
+    if not cfg or not cfg.get("auto_block"):
+        raise RuntimeError(f"Wialon autoblock не включён для машины {car_code}")
+    key = "block_command" if command_type == "block_engine" else "unblock_command" if command_type == "unblock_engine" else None
+    if not key:
+        raise ValueError("Недопустимая команда")
+    command = cfg[key]
+    sid = _wialon_login_sid()
+    return _wialon_call("unit/send_cmd", {
+        "itemId": int(cfg["unit_id"]), "commandType": "custom_msg",
+        "commandName": command["name"], "linkType": "tcp",
+        "param": command["param"], "timeout": 60, "flags": 0,
+    }, sid=sid)
+
+
 def _ensure_block_preview_table(session):
     session.execute(sql_text("""
         CREATE TABLE IF NOT EXISTS driver_blocking_preview_state (
@@ -9385,18 +9444,23 @@ def _evaluate_665_stationary_block_preview(session, allow_commands=False):
     last_command_error = (row.get("last_command_error") or "") if row else ""
     command_sent_now = False
 
-    motion = _wialon_665_latest_motion()
+    cfg = _wialon_car_config(BLOCK_PREVIEW_CAR_CODE)
+    if not cfg or not cfg.get("auto_block"):
+        raise RuntimeError("Автоблокировка 665 выключена в Wialon config")
+    threshold = int(cfg["threshold"])
+    stationary_minutes = int(cfg["stationary_minutes"])
+    motion = _wialon_latest_motion_for_unit(cfg["unit_id"])
     speed = int(motion["speed"] or 0)
     age = motion.get("telemetry_age_seconds")
-    telemetry_fresh = age is not None and age <= BLOCK_PREVIEW_TELEMETRY_MAX_AGE_SECONDS
-    debt_triggered = balance < BLOCK_PREVIEW_THRESHOLD
+    telemetry_fresh = age is not None and age <= int(cfg["telemetry_max_age_seconds"])
+    debt_triggered = balance < threshold
 
     # V15.8: if the car was blocked by automation and the wallet recovered
     # to the threshold or above, remove the immobilizer immediately.
     if not debt_triggered and blocked and allow_commands:
         stationary_since = None
         try:
-            command_result = _send_665_engine_command("unblock_engine")
+            command_result = _send_wialon_engine_command_for_car(BLOCK_PREVIEW_CAR_CODE, "unblock_engine")
             if isinstance(command_result, dict) and command_result.get("error") is not None:
                 raise RuntimeError(f"Wialon error: {command_result}")
             blocked = False
@@ -9425,10 +9489,10 @@ def _evaluate_665_stationary_block_preview(session, allow_commands=False):
             status = "STATIONARY_WAITING"
         else:
             elapsed = max(int((now - stationary_since).total_seconds()), 0)
-            status = "READY_TO_BLOCK_PREVIEW" if elapsed >= BLOCK_PREVIEW_STATIONARY_MINUTES * 60 else "STATIONARY_WAITING"
+            status = "READY_TO_BLOCK_PREVIEW" if elapsed >= stationary_minutes * 60 else "STATIONARY_WAITING"
 
     elapsed_seconds = max(int((now - stationary_since).total_seconds()), 0) if stationary_since else 0
-    required_seconds = BLOCK_PREVIEW_STATIONARY_MINUTES * 60
+    required_seconds = stationary_minutes * 60
     remaining_seconds = max(required_seconds - elapsed_seconds, 0) if stationary_since else required_seconds
     ready = status == "READY_TO_BLOCK_PREVIEW"
 
@@ -9436,7 +9500,7 @@ def _evaluate_665_stationary_block_preview(session, allow_commands=False):
     # send the already-tested Wialon block command exactly once after all gates pass.
     if ready and not blocked and allow_commands:
         try:
-            command_result = _send_665_engine_command("block_engine")
+            command_result = _send_wialon_engine_command_for_car(BLOCK_PREVIEW_CAR_CODE, "block_engine")
             if isinstance(command_result, dict) and command_result.get("error") is not None:
                 raise RuntimeError(f"Wialon error: {command_result}")
             blocked = True
@@ -9476,18 +9540,18 @@ def _evaluate_665_stationary_block_preview(session, allow_commands=False):
     })
     session.commit()
     return {
-        "ok": True, "version": "V15.10", "dry_run": not allow_commands, "commands_sent": command_sent_now,
+        "ok": True, "version": "V15.11", "dry_run": not allow_commands, "commands_sent": command_sent_now,
         "car_code": BLOCK_PREVIEW_CAR_CODE, "balance": balance,
-        "threshold": BLOCK_PREVIEW_THRESHOLD, "debt_triggered": debt_triggered,
+        "threshold": threshold, "debt_triggered": debt_triggered,
         "speed_kmh": speed, "message_time": motion.get("message_time"),
         "telemetry_age_seconds": age, "telemetry_fresh": telemetry_fresh,
-        "stationary_required_minutes": BLOCK_PREVIEW_STATIONARY_MINUTES,
+        "stationary_required_minutes": stationary_minutes,
         "stationary_since": stationary_since.isoformat(timespec="seconds") if stationary_since else None,
         "stationary_elapsed_seconds": elapsed_seconds, "remaining_seconds": remaining_seconds,
         "ready_to_block": ready, "status": status,
         "blocked": blocked, "command_sent_at": command_sent_at,
         "last_command_error": last_command_error,
-        "note": ("V15.10 SECURE WATCHER — команды разрешены только защищённому cron" if allow_commands else "V15.10 READ ONLY — публичный просмотр без команд Wialon"),
+        "note": ("V15.11 FLEET CONFIG + SECURE WATCHER — команды разрешены только защищённому cron" if allow_commands else "V15.11 READ ONLY — публичный просмотр без команд Wialon"),
     }
 
 
