@@ -152,6 +152,46 @@ def create_payment(amount_rubles, order_id, description="Оплата аренд
     if not result.get("Success"):
         raise RuntimeError("T-Bank acquiring error: " + str(result))
     return result
+
+
+def create_sbp_link(payment_id):
+    """
+    Получает ссылку СБП для уже созданного платежа T-Банка.
+    Существующую логику create_payment и webhook не изменяет.
+    """
+    if not TBANK_TERMINAL_KEY:
+        raise RuntimeError("TBANK_EACQ_TERMINAL_KEY не задан в Render")
+
+    payload = {
+        "TerminalKey": TBANK_TERMINAL_KEY,
+        "PaymentId": str(payment_id),
+        "DataType": "PAYLOAD",
+        "PaymentMethod": "SBP",
+    }
+    payload["Token"] = _acquiring_token(payload)
+
+    response = requests.post(
+        f"{TBANK_ACQUIRING_URL}/GetQr",
+        json=payload,
+        timeout=30,
+        verify=_get_acquiring_ca_bundle(),
+    )
+    if not response.ok:
+        raise RuntimeError(
+            f"T-Bank GetQr HTTP error {response.status_code}: {response.text}"
+        )
+
+    result = response.json()
+    if not result.get("Success"):
+        raise RuntimeError("T-Bank GetQr error: " + str(result))
+
+    payment_url = str(result.get("Data") or "").strip()
+    if not payment_url:
+        raise RuntimeError("T-Bank GetQr не вернул ссылку СБП")
+
+    return payment_url
+
+
 def verify_notification(data):
     """
     Проверяет Token входящего уведомления T-Банка.
