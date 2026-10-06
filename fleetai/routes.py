@@ -9298,7 +9298,7 @@ loadState();
 # IMPORTANT: this state machine NEVER sends a Wialon block/unblock command.
 BLOCK_PREVIEW_CAR_CODE = "665"
 BLOCK_PREVIEW_THRESHOLD = int(os.environ.get("BLOCK_PREVIEW_THRESHOLD", "-2000"))
-BLOCK_PREVIEW_STATIONARY_MINUTES = int(os.environ.get("BLOCK_PREVIEW_STATIONARY_MINUTES", "3"))
+BLOCK_PREVIEW_STATIONARY_MINUTES = int(os.environ.get("BLOCK_PREVIEW_STATIONARY_MINUTES", "30"))
 BLOCK_PREVIEW_TELEMETRY_MAX_AGE_SECONDS = int(os.environ.get("BLOCK_PREVIEW_TELEMETRY_MAX_AGE_SECONDS", "120"))
 BLOCK_PREVIEW_MAX_CHECK_GAP_SECONDS = int(os.environ.get("BLOCK_PREVIEW_MAX_CHECK_GAP_SECONDS", "360"))
 
@@ -9476,7 +9476,7 @@ def _evaluate_665_stationary_block_preview(session):
     })
     session.commit()
     return {
-        "ok": True, "version": "V15.8", "dry_run": False, "commands_sent": command_sent_now,
+        "ok": True, "version": "V15.9", "dry_run": False, "commands_sent": command_sent_now,
         "car_code": BLOCK_PREVIEW_CAR_CODE, "balance": balance,
         "threshold": BLOCK_PREVIEW_THRESHOLD, "debt_triggered": debt_triggered,
         "speed_kmh": speed, "message_time": motion.get("message_time"),
@@ -9487,7 +9487,7 @@ def _evaluate_665_stationary_block_preview(session):
         "ready_to_block": ready, "status": status,
         "blocked": blocked, "command_sent_at": command_sent_at,
         "last_command_error": last_command_error,
-        "note": "V15.8 AUTO BLOCK/UNBLOCK — только машина 665; блокировка ниже порога после стоянки, разблокировка при восстановлении баланса",
+        "note": "V15.9 AUTO BLOCK/UNBLOCK — только машина 665; блокировка ниже порога после 30 минут стоянки, разблокировка при восстановлении баланса",
     }
 
 
