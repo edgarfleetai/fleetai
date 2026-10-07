@@ -3727,7 +3727,29 @@ function renderCalendar(ops){
 
 async function openCar(code){
   showAppPage('fleet');
-  let d=await api('/api/car/'+code);
+
+  const target=document.getElementById('carCard');
+  if(!target){
+    alert('Не найден блок карточки машины. Обнови страницу.');
+    return;
+  }
+
+  target.innerHTML='<div class="card"><p class="raw">Открываем машину '+String(code)+'…</p></div>';
+  target.scrollIntoView({behavior:'smooth',block:'start'});
+
+  let d;
+  try{
+    d=await api('/api/car/'+encodeURIComponent(code));
+  }catch(error){
+    target.innerHTML='<div class="card warn"><h3>Не удалось открыть машину '+String(code)+'</h3><p class="bad">'+String(error?.message||error)+'</p></div>';
+    return;
+  }
+
+  if(!d || !d.car){
+    target.innerHTML='<div class="card warn"><h3>Не удалось открыть машину '+String(code)+'</h3><p class="bad">Сервер не вернул данные машины.</p></div>';
+    return;
+  }
+
   let c=d.car;
 
   const statusBlock=c.is_in_downtime
@@ -3789,8 +3811,8 @@ async function openCar(code){
     </div>
   `;
 
-  carCard.innerHTML=html;
-  window.scrollTo(0,carCard.offsetTop);
+  target.innerHTML=html;
+  target.scrollIntoView({behavior:'smooth',block:'start'});
 }
 async function openInvestorBalance(code){let d=await api('/api/investor-balance/'+code);let b=d.balance;carCard.innerHTML=`<div class="card warn"><h2>Взаиморасчет ${code}</h2><p><b>Доля прибыли инвестора:</b> ${rub(b.investor_share_total)}</p><p><b>Погашено долгом:</b> ${rub(b.debt_repaid_by_profit)}</p><p><b>Инвестор должен парку:</b> ${rub(b.investor_debt_to_park)}</p><p><b>Парк должен инвестору:</b> ${rub(b.park_debt_to_investor)}</p><p><b>Выплачено:</b> ${rub(b.paid_to_investor)}</p><p><b>Доступно к выплате:</b> ${rub(b.available_to_pay)}</p></div><div class="card"><h3>Журнал взаиморасчетов</h3><table><tr><th>Дата</th><th>Всего</th><th>Инвестор оплатил</th><th>Парк оплатил</th><th>Долг инвестора</th><th>Комментарий</th></tr>${d.settlements.map(x=>`<tr><td>${x.date}</td><td>${rub(x.total_cost)}</td><td>${rub(x.investor_paid)}</td><td>${rub(x.park_paid)}</td><td>${rub(x.investor_debt_to_park)}</td><td>${x.comment||''}</td></tr>`).join('')}</table></div>`;window.scrollTo(0,carCard.offsetTop)}
 let openedPeriodData=null;
