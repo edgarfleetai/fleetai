@@ -7651,6 +7651,56 @@ def _send_driver_balance_alert(session, car, force=False):
 
 
 
+def _ensure_auto_rent_settings(session):
+    """Persistent list of cars enabled for automatic daily rent."""
+    session.execute(sql_text("""
+        CREATE TABLE IF NOT EXISTS auto_rent_vehicle_settings (
+            car_code VARCHAR(32) PRIMARY KEY,
+            enabled INTEGER NOT NULL DEFAULT 1,
+            updated_at TIMESTAMP NULL
+        )
+    """))
+    count = int(session.execute(sql_text(
+        "SELECT COUNT(*) FROM auto_rent_vehicle_settings"
+    )).scalar() or 0)
+    if count == 0:
+        legacy_raw = (os.getenv("AUTO_RENT_CARS") or "665,897,550").strip()
+        now = moscow_now().replace(tzinfo=None)
+        for raw in legacy_raw.split(","):
+            code = normalize_code(raw)
+            if code:
+                session.execute(sql_text("""
+                    INSERT INTO auto_rent_vehicle_settings (car_code, enabled, updated_at)
+                    VALUES (:code, 1, :updated_at)
+                    ON CONFLICT (car_code) DO NOTHING
+                """), {"code": code, "updated_at": now})
+        session.commit()
+
+
+def _set_auto_rent_enabled(session, car_code, enabled=True):
+    _ensure_auto_rent_settings(session)
+    code = normalize_code(car_code)
+    session.execute(sql_text("""
+        INSERT INTO auto_rent_vehicle_settings (car_code, enabled, updated_at)
+        VALUES (:code, :enabled, :updated_at)
+        ON CONFLICT (car_code) DO UPDATE SET
+            enabled = EXCLUDED.enabled,
+            updated_at = EXCLUDED.updated_at
+    """), {
+        "code": code,
+        "enabled": 1 if enabled else 0,
+        "updated_at": moscow_now().replace(tzinfo=None),
+    })
+
+
+def _auto_rent_enabled_codes(session):
+    _ensure_auto_rent_settings(session)
+    rows = session.execute(sql_text(
+        "SELECT car_code FROM auto_rent_vehicle_settings WHERE enabled = 1"
+    )).scalars().all()
+    return {normalize_code(x) for x in rows if normalize_code(x)}
+
+
 @bp.route("/api/cron/daily-rent-and-alerts", methods=["GET", "POST"])
 def api_cron_daily_rent_and_alerts():
     """
@@ -7678,9 +7728,9 @@ def api_cron_daily_rent_and_alerts():
     details = []
 
     try:
-        # V15.5 TEST SCOPE: default automation is restricted to car 665.
-        allowed_raw = (os.getenv("AUTO_RENT_CARS") or "665,897,550").strip()
-        allowed_codes = {normalize_code(x) for x in allowed_raw.split(",") if normalize_code(x)}
+        # V15.25: persistent DB scope. New cars can be enabled from dispatcher UI
+        # without editing Python or Render environment variables.
+        allowed_codes = _auto_rent_enabled_codes(session)
         cars = session.query(Car).all()
 
         for car in cars:
@@ -8739,6 +8789,157 @@ def api_setup_550():
             "expected_after_first_rent": -2000,
             "auto_rent_default_scope": ["665", "897", "550"],
             "note": "Если AUTO_RENT_CARS задан в Render вручную, добавьте туда 550.",
+        })
+    except Exception as error:
+        session.rollback()
+        return jsonify({"ok": False, "message": f"{type(error).__name__}: {error}"}), 500
+    finally:
+        session.close()
+
+
+@bp.route("/api/driver-assignment/<code>", methods=["GET"])
+def api_driver_assignment_get(code):
+    session = Session()
+    try:
+        car = find_car(session, code)
+        if not car:
+            return jsonify({"ok": False, "message": "Машина не найдена"}), 404
+        snapshot = driver_wallet_snapshot(session, car)
+        _ensure_auto_rent_settings(session)
+        enabled = normalize_code(car.code) in _auto_rent_enabled_codes(session)
+        return jsonify({
+            "ok": True,
+            "car_code": normalize_code(car.code),
+            "driver": (car.driver or "").strip(),
+            "daily_rent": int(effective_daily_rent(car) or 0),
+            "balance": int(snapshot.get("balance", 0) or 0),
+            "auto_rent_enabled": bool(enabled),
+        })
+    finally:
+        session.close()
+
+
+@bp.route("/api/driver-assignment", methods=["POST"])
+def api_driver_assignment_save():
+    """
+    Universal driver assignment/change endpoint.
+    start_date is the opening-balance date; first daily rent charge is next day.
+    Old negative wallet balance is moved to DriverDebt before the new driver starts.
+    """
+    data = request.get_json(silent=True) or request.form
+    code = normalize_code(data.get("car_code") or data.get("code") or "")
+    new_driver = str(data.get("driver") or "").strip()
+    start_raw = str(data.get("start_date") or "").strip()
+    try:
+        daily_rent = int(data.get("daily_rent") or 0)
+        opening_balance = int(data.get("opening_balance") or 0)
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "message": "Проверь ставку и стартовый баланс"}), 400
+
+    if not code or not new_driver:
+        return jsonify({"ok": False, "message": "Укажи машину и имя водителя"}), 400
+    if daily_rent <= 0:
+        return jsonify({"ok": False, "message": "Аренда в сутки должна быть больше 0"}), 400
+    try:
+        start_date = datetime.strptime(start_raw, "%Y-%m-%d").date() if start_raw else moscow_now().date()
+    except ValueError:
+        return jsonify({"ok": False, "message": "Дата должна быть в формате ГГГГ-ММ-ДД"}), 400
+    if start_date > moscow_now().date():
+        return jsonify({"ok": False, "message": "Дата старта не может быть в будущем"}), 400
+
+    session = Session()
+    try:
+        car = find_car(session, code)
+        if not car:
+            return jsonify({"ok": False, "message": f"Машина {code} не найдена"}), 404
+
+        # Bring the old driver's rent up to date before closing their wallet period.
+        old_driver = (car.driver or "").strip()
+        if old_driver and int(effective_daily_rent(car) or 0) > 0:
+            _sync_daily_rent(session, car)
+
+        current_balance = int(
+            session.query(func.coalesce(func.sum(DriverWalletTransaction.amount), 0))
+            .filter(func.trim(DriverWalletTransaction.car_code) == normalize_code(car.code))
+            .scalar() or 0
+        )
+
+        driver_changed = bool(old_driver and old_driver.casefold() != new_driver.casefold())
+        debt_created = 0
+        if driver_changed and current_balance < 0:
+            debt_created = abs(current_balance)
+            session.add(DriverDebt(
+                driver_name=old_driver,
+                car_code=car.code,
+                original_amount=debt_created,
+                paid_amount=0,
+                balance=debt_created,
+                status="open",
+                reason=f"Остаток кошелька при смене водителя с машины {normalize_code(car.code)}",
+                comment=f"Автоматически сохранено при назначении водителя {new_driver}",
+            ))
+
+        now = moscow_now().replace(tzinfo=None)
+        adjustment = opening_balance - current_balance
+        assignment_id = uuid.uuid4().hex[:12]
+
+        # Reset this car wallet to the new driver's requested opening balance
+        # without deleting any historical transactions.
+        if adjustment != 0:
+            session.add(DriverWalletTransaction(
+                driver_name=new_driver,
+                car_code=car.code,
+                amount=adjustment,
+                transaction_type="driver_change_balance",
+                source="dispatcher",
+                comment=f"DRIVER_ASSIGN:{assignment_id}; {old_driver or 'без водителя'} -> {new_driver}",
+                date=now,
+            ))
+
+        car.driver = new_driver
+        car.daily_rent = daily_rent
+        car.weekly_payment = daily_rent * 7
+
+        # Latest V7_START wins. First charge is the day after start_date.
+        session.add(DriverWalletTransaction(
+            driver_name=new_driver,
+            car_code=car.code,
+            amount=0,
+            transaction_type="daily_rent",
+            source="dispatcher",
+            comment=f"V7_START:{start_date.isoformat()}",
+            date=now,
+        ))
+
+        # Old Telegram account must never receive the new driver's alerts.
+        if driver_changed:
+            session.execute(sql_text("""
+                DELETE FROM driver_telegram_bindings
+                WHERE TRIM(car_code) = :car_code
+            """), {"car_code": normalize_code(car.code)})
+
+        _set_auto_rent_enabled(session, car.code, True)
+        session.commit()
+
+        final_balance = int(
+            session.query(func.coalesce(func.sum(DriverWalletTransaction.amount), 0))
+            .filter(func.trim(DriverWalletTransaction.car_code) == normalize_code(car.code))
+            .scalar() or 0
+        )
+        return jsonify({
+            "ok": True,
+            "message": f"{new_driver} назначен на машину {normalize_code(car.code)}",
+            "car_code": normalize_code(car.code),
+            "old_driver": old_driver,
+            "driver": new_driver,
+            "daily_rent": daily_rent,
+            "opening_balance": opening_balance,
+            "balance": final_balance,
+            "start_date": start_date.isoformat(),
+            "first_rent_date": (start_date + timedelta(days=1)).isoformat(),
+            "old_driver_debt_created": debt_created,
+            "telegram_reset": bool(driver_changed),
+            "auto_rent_enabled": True,
         })
     except Exception as error:
         session.rollback()
