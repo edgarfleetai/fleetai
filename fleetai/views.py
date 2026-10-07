@@ -2986,7 +2986,7 @@ function driverAssignmentToday(){
 function fillDriverAssignmentCars(selectedCode=''){
   const select=document.getElementById('assignment_car');
   if(!select)return;
-  const cars=paymentCars||[];
+  const cars=(paymentCars&&paymentCars.length ? paymentCars : (window.cachedCars||[]));
   select.innerHTML='<option value="">Выбери машину</option>'+cars.map(car=>
     `<option value="${car.code}">${car.code} ${car.brand||''} ${car.model||''}</option>`
   ).join('');
@@ -2994,6 +2994,10 @@ function fillDriverAssignmentCars(selectedCode=''){
 }
 
 async function openDriverAssignment(code=''){
+  // Если список машин ещё не загружен, загружаем его перед открытием формы.
+  if(!(paymentCars&&paymentCars.length) && !(window.cachedCars&&window.cachedCars.length)){
+    try{ await loadCars(); }catch(error){ console.error('Не удалось загрузить машины для назначения водителя:',error); }
+  }
   fillDriverAssignmentCars(code);
   const modal=document.getElementById('driverAssignmentModal');
   const res=document.getElementById('driverAssignmentRes');
@@ -3558,7 +3562,7 @@ async function loadCars(){
   }
 
   const carsTable=document.getElementById('cars');
-  const paymentSelect=document.getElementById('paymentCar');
+  const paymentSelect=document.getElementById('payment_car');
   const paymentsTable=document.getElementById('driverPayments');
 
   try{
@@ -3727,29 +3731,7 @@ function renderCalendar(ops){
 
 async function openCar(code){
   showAppPage('fleet');
-
-  const target=document.getElementById('carCard');
-  if(!target){
-    alert('Не найден блок карточки машины. Обнови страницу.');
-    return;
-  }
-
-  target.innerHTML='<div class="card"><p class="raw">Открываем машину '+String(code)+'…</p></div>';
-  target.scrollIntoView({behavior:'smooth',block:'start'});
-
-  let d;
-  try{
-    d=await api('/api/car/'+encodeURIComponent(code));
-  }catch(error){
-    target.innerHTML='<div class="card warn"><h3>Не удалось открыть машину '+String(code)+'</h3><p class="bad">'+String(error?.message||error)+'</p></div>';
-    return;
-  }
-
-  if(!d || !d.car){
-    target.innerHTML='<div class="card warn"><h3>Не удалось открыть машину '+String(code)+'</h3><p class="bad">Сервер не вернул данные машины.</p></div>';
-    return;
-  }
-
+  let d=await api('/api/car/'+code);
   let c=d.car;
 
   const statusBlock=c.is_in_downtime
@@ -3811,8 +3793,8 @@ async function openCar(code){
     </div>
   `;
 
-  target.innerHTML=html;
-  target.scrollIntoView({behavior:'smooth',block:'start'});
+  carCard.innerHTML=html;
+  window.scrollTo(0,carCard.offsetTop);
 }
 async function openInvestorBalance(code){let d=await api('/api/investor-balance/'+code);let b=d.balance;carCard.innerHTML=`<div class="card warn"><h2>Взаиморасчет ${code}</h2><p><b>Доля прибыли инвестора:</b> ${rub(b.investor_share_total)}</p><p><b>Погашено долгом:</b> ${rub(b.debt_repaid_by_profit)}</p><p><b>Инвестор должен парку:</b> ${rub(b.investor_debt_to_park)}</p><p><b>Парк должен инвестору:</b> ${rub(b.park_debt_to_investor)}</p><p><b>Выплачено:</b> ${rub(b.paid_to_investor)}</p><p><b>Доступно к выплате:</b> ${rub(b.available_to_pay)}</p></div><div class="card"><h3>Журнал взаиморасчетов</h3><table><tr><th>Дата</th><th>Всего</th><th>Инвестор оплатил</th><th>Парк оплатил</th><th>Долг инвестора</th><th>Комментарий</th></tr>${d.settlements.map(x=>`<tr><td>${x.date}</td><td>${rub(x.total_cost)}</td><td>${rub(x.investor_paid)}</td><td>${rub(x.park_paid)}</td><td>${rub(x.investor_debt_to_park)}</td><td>${x.comment||''}</td></tr>`).join('')}</table></div>`;window.scrollTo(0,carCard.offsetTop)}
 let openedPeriodData=null;
