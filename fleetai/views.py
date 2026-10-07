@@ -1921,6 +1921,7 @@ body > *{
     <h1>Водители</h1>
     <p>Баланс, кабинет водителя, штрафы, расчёты и уведомления.</p>
   </div>
+  <button class="page-primary-action" onclick="openDriverAssignment()">+ Назначить водителя</button>
 </div>
 
 <div class="card">
@@ -1981,6 +1982,46 @@ body > *{
 
     <h3>График платежей</h3>
     <table id="driverPayments"></table>
+  </div>
+</div>
+
+<div id="driverAssignmentModal" class="operation-edit-modal" onclick="closeDriverAssignmentOnBackdrop(event)">
+  <div class="operation-edit-dialog" onclick="event.stopPropagation()">
+    <div class="operation-edit-head">
+      <div>
+        <div class="eyebrow">ВОДИТЕЛЬ МАШИНЫ</div>
+        <h2 id="driverAssignmentTitle">Назначить водителя</h2>
+      </div>
+      <button class="operation-edit-close" onclick="closeDriverAssignment()">×</button>
+    </div>
+
+    <label>Машина
+      <select id="assignment_car" onchange="loadDriverAssignmentForSelectedCar()">
+        <option value="">Выбери машину</option>
+      </select>
+    </label>
+    <label>Имя водителя
+      <input id="assignment_driver" placeholder="Например, Расул">
+    </label>
+    <label>Аренда в сутки, ₽
+      <input id="assignment_daily_rent" type="number" min="1" step="1" placeholder="2000">
+    </label>
+    <label>Стартовый баланс, ₽
+      <input id="assignment_opening_balance" type="number" step="1" placeholder="0">
+    </label>
+    <label>Дата старта
+      <input id="assignment_start_date" type="date">
+    </label>
+
+    <div id="driverAssignmentCurrent" class="operation-edit-note">
+      Выбери машину. Первое суточное списание будет на следующий день после даты старта.
+    </div>
+    <div id="driverAssignmentRes" class="operation-edit-note" style="display:none"></div>
+
+    <div class="operation-edit-actions">
+      <button class="secondary" onclick="closeDriverAssignment()">Отмена</button>
+      <button id="driverAssignmentSave" onclick="saveDriverAssignment()">Сохранить</button>
+    </div>
   </div>
 </div>
 
@@ -2934,6 +2975,125 @@ async function saveDriverPayment(){
 }
 
 
+function driverAssignmentToday(){
+  const parts=new Intl.DateTimeFormat('en-CA',{
+    timeZone:'Europe/Moscow',year:'numeric',month:'2-digit',day:'2-digit'
+  }).formatToParts(new Date());
+  const get=type=>parts.find(item=>item.type===type)?.value||'';
+  return `${get('year')}-${get('month')}-${get('day')}`;
+}
+
+function fillDriverAssignmentCars(selectedCode=''){
+  const select=document.getElementById('assignment_car');
+  if(!select)return;
+  const cars=paymentCars||[];
+  select.innerHTML='<option value="">Выбери машину</option>'+cars.map(car=>
+    `<option value="${car.code}">${car.code} ${car.brand||''} ${car.model||''}</option>`
+  ).join('');
+  if(selectedCode)select.value=String(selectedCode);
+}
+
+async function openDriverAssignment(code=''){
+  fillDriverAssignmentCars(code);
+  const modal=document.getElementById('driverAssignmentModal');
+  const res=document.getElementById('driverAssignmentRes');
+  const date=document.getElementById('assignment_start_date');
+  if(res){res.style.display='none';res.textContent='';}
+  if(date)date.value=driverAssignmentToday();
+  modal?.classList.add('open');
+  if(code)await loadDriverAssignmentForSelectedCar();
+  else{
+    document.getElementById('assignment_driver').value='';
+    document.getElementById('assignment_daily_rent').value='';
+    document.getElementById('assignment_opening_balance').value='0';
+    document.getElementById('driverAssignmentCurrent').textContent=
+      'Выбери машину. Первое суточное списание будет на следующий день после даты старта.';
+  }
+}
+
+function closeDriverAssignment(){
+  document.getElementById('driverAssignmentModal')?.classList.remove('open');
+}
+
+function closeDriverAssignmentOnBackdrop(event){
+  if(event.target?.id==='driverAssignmentModal')closeDriverAssignment();
+}
+
+async function loadDriverAssignmentForSelectedCar(){
+  const code=document.getElementById('assignment_car')?.value||'';
+  if(!code)return;
+  const current=document.getElementById('driverAssignmentCurrent');
+  current.textContent='Загрузка текущих данных…';
+  try{
+    const data=await api('/api/driver-assignment/'+encodeURIComponent(code));
+    if(!data.ok)throw new Error(data.message||'Не удалось загрузить данные');
+    document.getElementById('assignment_driver').value=data.driver||'';
+    document.getElementById('assignment_daily_rent').value=data.daily_rent||'';
+    document.getElementById('assignment_opening_balance').value=Number(data.balance||0);
+    document.getElementById('driverAssignmentTitle').textContent=
+      data.driver ? `Водитель машины ${code}` : `Назначить водителя на ${code}`;
+    current.innerHTML=
+      `Сейчас: <b>${data.driver||'водитель не назначен'}</b> · `+
+      `баланс <b>${rub(Number(data.balance||0))}</b> · `+
+      `аренда <b>${rub(Number(data.daily_rent||0))}/сутки</b>`;
+  }catch(error){
+    current.textContent='Ошибка: '+error;
+  }
+}
+
+async function saveDriverAssignment(){
+  const code=document.getElementById('assignment_car')?.value||'';
+  const driver=document.getElementById('assignment_driver')?.value.trim()||'';
+  const dailyRent=Number(document.getElementById('assignment_daily_rent')?.value||0);
+  const openingBalance=Number(document.getElementById('assignment_opening_balance')?.value||0);
+  const startDate=document.getElementById('assignment_start_date')?.value||'';
+  const res=document.getElementById('driverAssignmentRes');
+  const button=document.getElementById('driverAssignmentSave');
+
+  if(!code||!driver||dailyRent<=0||!startDate){
+    res.style.display='block';
+    res.textContent='Заполни машину, имя водителя, аренду и дату старта.';
+    return;
+  }
+
+  const car=(paymentCars||[]).find(item=>String(item.code)===String(code));
+  const oldDriver=(car?.driver||'').trim();
+  const changing=oldDriver && oldDriver.toLowerCase()!==driver.toLowerCase();
+  const question=changing
+    ? `Сменить водителя ${oldDriver} на ${driver} у машины ${code}?\n\nСтартовый баланс: ${openingBalance.toLocaleString('ru-RU')} ₽\nАренда: ${dailyRent.toLocaleString('ru-RU')} ₽/сутки\nСтарый Telegram будет отвязан. Если у старого водителя есть минус, он сохранится отдельным долгом.`
+    : `Сохранить водителя ${driver} для машины ${code}?\n\nСтартовый баланс: ${openingBalance.toLocaleString('ru-RU')} ₽\nАренда: ${dailyRent.toLocaleString('ru-RU')} ₽/сутки`;
+  if(!confirm(question))return;
+
+  button.disabled=true;
+  button.textContent='Сохраняем…';
+  res.style.display='block';
+  res.textContent='Сохраняем назначение…';
+  try{
+    const data=await api('/api/driver-assignment',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({
+        car_code:code,driver:driver,daily_rent:dailyRent,
+        opening_balance:openingBalance,start_date:startDate
+      })
+    });
+    if(!data.ok)throw new Error(data.message||'Не удалось сохранить');
+    let message=`${data.message}. Баланс: ${rub(Number(data.balance||0))}. Первое списание: ${data.first_rent_date}.`;
+    if(Number(data.old_driver_debt_created||0)>0){
+      message+=` Долг старого водителя сохранён: ${rub(Number(data.old_driver_debt_created))}.`;
+    }
+    if(data.telegram_reset)message+=' Старый Telegram отвязан.';
+    res.textContent=message;
+    await loadCars();
+    setTimeout(()=>closeDriverAssignment(),900);
+  }catch(error){
+    res.textContent='Ошибка: '+error;
+  }finally{
+    button.disabled=false;
+    button.textContent='Сохранить';
+  }
+}
+
 async function markDriverPeriodPaid(
   carCode,
   periodStart,
@@ -3161,6 +3321,12 @@ function renderDriverPayments(carsList){
                 onclick="window.open('/driver-fines?code=${encodeURIComponent(car.code)}','_blank')"
               >
                 ⚠️ Штраф
+              </button>
+              <button
+                class="secondary"
+                onclick="openDriverAssignment('${String(car.code).replace(/'/g,"\'")}')"
+              >
+                Сменить водителя
               </button>
               ${
                 Number(calc.overdue_periods_count||0)>0
