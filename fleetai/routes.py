@@ -7481,10 +7481,10 @@ loadCars();
 # V15.27 — ELECTRONIC DRIVER RENTAL CONTRACTS / SMS PEP
 # =========================================================
 FLEET_CONTRACT_OWNERS = {
-    "119": ("ИП Эдгар Лебедкин", "Собственник", ""),
-    "665": ("ИП Эдгар Лебедкин", "Собственник", ""),
-    "218": ("ИП Эдгар Лебедкин", "Собственник", ""),
-    "404": ("ИП Эдгар Лебедкин", "Собственник", ""),
+    "119": ("ИП Лебедкин Эдгар Алексеевич", "Собственник", ""),
+    "665": ("ИП Лебедкин Эдгар Алексеевич", "Собственник", ""),
+    "218": ("ИП Лебедкин Эдгар Алексеевич", "Собственник", ""),
+    "404": ("ИП Лебедкин Эдгар Алексеевич", "Собственник", ""),
     "897": ("Сергеев Владислав Александрович", "Доверенность", "16АА 9137325"),
     "373": ("Рачеев Илья Игоревич", "Доверенность", "16АА 9146919"),
     "703": ("Рачеев Илья Игоревич", "Доверенность", "16АА 9146919"),
@@ -7577,7 +7577,7 @@ def api_driver_contract_create():
         car=find_car(session,code)
         if not car:return jsonify({"ok":False,"message":"Машина не найдена"}),404
         _ensure_driver_contract_tables(session); owner=_contract_owner(code); now=moscow_now().replace(tzinfo=None); cid="KP-"+now.strftime("%Y%m%d")+"-"+code+"-"+uuid.uuid4().hex[:6].upper(); token=secrets.token_urlsafe(32)
-        session.execute(sql_text("""INSERT INTO driver_contracts(id,public_token,car_code,status,driver_name,daily_rent,rental_start_date,owner_name,owner_basis,owner_poa,lessor_name,lessor_inn,lessor_ogrnip,created_at,updated_at) VALUES(:id,:token,:code,'draft',:driver,:rent,:start,:owner,:basis,:poa,:lessor,:inn,:ogrnip,:now,:now)"""),{"id":cid,"token":token,"code":code,"driver":(car.driver or "").strip(),"rent":int(effective_daily_rent(car) or 0),"start":str(data.get("start_date") or moscow_now().date().isoformat()),"owner":owner["owner"],"basis":owner["basis"],"poa":owner["poa"],"lessor":(os.getenv("LESSOR_FULL_NAME") or "ИП Эдгар Лебедкин").strip(),"inn":LESSOR_INN,"ogrnip":LESSOR_OGRNIP,"now":now}); session.commit()
+        session.execute(sql_text("""INSERT INTO driver_contracts(id,public_token,car_code,status,driver_name,daily_rent,rental_start_date,owner_name,owner_basis,owner_poa,lessor_name,lessor_inn,lessor_ogrnip,created_at,updated_at) VALUES(:id,:token,:code,'draft',:driver,:rent,:start,:owner,:basis,:poa,:lessor,:inn,:ogrnip,:now,:now)"""),{"id":cid,"token":token,"code":code,"driver":(car.driver or "").strip(),"rent":int(effective_daily_rent(car) or 0),"start":str(data.get("start_date") or moscow_now().date().isoformat()),"owner":owner["owner"],"basis":owner["basis"],"poa":owner["poa"],"lessor":(os.getenv("LESSOR_FULL_NAME") or "ИП Лебедкин Эдгар Алексеевич").strip(),"inn":LESSOR_INN,"ogrnip":LESSOR_OGRNIP,"now":now}); session.commit()
         return jsonify({"ok":True,"contract_id":cid,"driver_url":request.url_root.rstrip("/")+"/driver-contract?token="+token})
     finally: session.close()
 
