@@ -1797,6 +1797,10 @@ body > *{
         <span class="nav-icon">◎</span>
         <span>Водители</span>
       </button>
+      <button class="nav-item" onclick="window.location.href='/driver-contracts'">
+        <span class="nav-icon">▤</span>
+        <span>Договоры</span>
+      </button>
       <button class="nav-item" data-page="analytics" onclick="showAppPage('analytics',this)">
         <span class="nav-icon">↗</span>
         <span>Аналитика</span>
