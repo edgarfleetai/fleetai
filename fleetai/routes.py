@@ -7531,6 +7531,14 @@ FLEET_CONTRACT_VEHICLES = {
         "car_year": "2020",
         "car_sts": "99 87 971581",
     },
+    "550": {
+        "car_make": "KIA",
+        "car_model": "RIO",
+        "car_plate": "Т550ХС716",
+        "car_vin": "Z94C241BBJR006037",
+        "car_year": "2017",
+        "car_sts": "99 91 621491",
+    },
 }
 
 def _contract_vehicle(code):
