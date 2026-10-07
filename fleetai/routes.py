@@ -7559,7 +7559,7 @@ def _contract_pdf(row, signed=True):
     for h,t in sections: story.extend([P(h,head),P(t)])
     story.extend([P(f"Водительское удостоверение: {row['license_number']}; действительно до {row['license_expires']}.") ,P(f"SHA-256 данных договора: {row['canonical_sha256']}")])
     if signed:
-        story.extend([P("ЭЛЕКТРОННО ПОДПИСАНО",head),P(f"Арендатор: {row['driver_name']}. ПЭП: одноразовый код подтверждения по звонку. Телефон: +{row['phone']}. Дата и время: {signed_text} МСК.")])
+        story.extend([P("ЭЛЕКТРОННО ПОДПИСАНО",head),P(f"Арендатор: {row['driver_name']}. ПЭП: подтверждение номера телефона звонком с номера арендатора. Телефон: +{row['phone']}. Дата и время: {signed_text} МСК.")])
     doc.build(story); return buf.getvalue()
 
 def _send_contract_call_code(phone, user_ip):
@@ -7714,32 +7714,75 @@ def api_driver_contract_send_code(token):
         row=_contract_row(session,token)
         if not row:return jsonify({"ok":False,"message":"Договор не найден"}),404
         if row["status"]!="ready":return jsonify({"ok":False,"message":"Сначала сохрани договор"}),400
+        api_id=(os.getenv("SMSRU_API_ID") or "").strip()
+        if not api_id:return jsonify({"ok":False,"message":"SMSRU_API_ID не настроен в Render"}),503
         now=moscow_now().replace(tzinfo=None)
-        if row.get("otp_last_sent_at") and (now-row["otp_last_sent_at"]).total_seconds()<60:return jsonify({"ok":False,"message":"Повторный код можно запросить через минуту"}),429
+        if row.get("otp_last_sent_at") and (now-row["otp_last_sent_at"]).total_seconds()<60:
+            return jsonify({"ok":False,"message":"Новую проверку можно запросить через минуту"}),429
         forwarded=(request.headers.get("X-Forwarded-For") or "").split(",")[0].strip()
         user_ip=forwarded or request.remote_addr or "-1"
-        ok,code,call_id,error=_send_contract_call_code(row["phone"],user_ip)
-        if not ok:return jsonify({"ok":False,"message":"Звонок не выполнен: "+error}),503
-        salt=secrets.token_hex(16); oh=salt+":"+hashlib.sha256((salt+code).encode()).hexdigest()
-        session.execute(sql_text("UPDATE driver_contracts SET otp_hash=:h,otp_expires_at=:exp,otp_last_sent_at=:now,otp_attempts=0,sms_id=:call_id,updated_at=:now WHERE public_token=:t"),{"h":oh,"exp":now+timedelta(minutes=10),"now":now,"call_id":call_id,"t":token})
+        try:
+            r=requests.post("https://sms.ru/callcheck/add",data={"api_id":api_id,"phone":row["phone"],"ip":user_ip,"json":1},timeout=20)
+            r.raise_for_status(); data=r.json()
+        except Exception as e:
+            return jsonify({"ok":False,"message":f"SMS.ru недоступен: {type(e).__name__}: {e}"}),503
+        if data.get("status")!="OK" or not data.get("check_id") or not data.get("call_phone"):
+            return jsonify({"ok":False,"message":"Проверка звонком не создана: "+str(data.get("status_text") or data.get("status_code") or "неизвестная ошибка")}),503
+        check_id=str(data["check_id"])
+        session.execute(sql_text("""UPDATE driver_contracts
+            SET otp_hash=:h,otp_expires_at=:exp,otp_last_sent_at=:now,otp_attempts=0,sms_id=:check_id,updated_at=:now
+            WHERE public_token=:t"""),
+            {"h":"callcheck:"+check_id,"exp":now+timedelta(minutes=5),"now":now,"check_id":check_id,"t":token})
         session.commit()
-        return jsonify({"ok":True,"message":"Сейчас поступит звонок. Введи последние 4 цифры номера звонящего"})
+        return jsonify({
+            "ok":True,
+            "message":"Позвони с номера, указанного в договоре. SMS.ru автоматически сбросит звонок.",
+            "call_phone":str(data.get("call_phone") or ""),
+            "call_phone_pretty":str(data.get("call_phone_pretty") or data.get("call_phone") or ""),
+            "expires_seconds":300
+        })
     finally:session.close()
+
 
 @bp.route("/api/driver-contract/<token>/sign",methods=["POST"])
 def api_driver_contract_sign(token):
-    entered=re.sub(r"\D","",str((request.get_json(silent=True) or {}).get("code") or ""));session=Session()
+    session=Session()
     try:
         row=_contract_row(session,token)
         if not row:return jsonify({"ok":False,"message":"Договор не найден"}),404
         if row["status"]=="signed":return jsonify({"ok":True,"message":"Договор уже подписан"})
         now=moscow_now().replace(tzinfo=None)
-        if not row.get("otp_hash") or not row.get("otp_expires_at") or now>row["otp_expires_at"]:return jsonify({"ok":False,"message":"Код истёк. Запроси новый"}),400
-        if int(row.get("otp_attempts") or 0)>=5:return jsonify({"ok":False,"message":"Лимит попыток исчерпан"}),429
-        salt,digest=row["otp_hash"].split(":",1); actual=hashlib.sha256((salt+entered).encode()).hexdigest()
-        if not secrets.compare_digest(actual,digest):session.execute(sql_text("UPDATE driver_contracts SET otp_attempts=otp_attempts+1 WHERE public_token=:t"),{"t":token});session.commit();return jsonify({"ok":False,"message":"Неверный код"}),400
-        h=_contract_hash(row);session.execute(sql_text("UPDATE driver_contracts SET canonical_sha256=:h,signed_at=:now,status='signed',otp_hash='',updated_at=:now WHERE public_token=:t"),{"h":h,"now":now,"t":token});session.commit();signed=_contract_row(session,token);pdf=_contract_pdf(signed,signed=True);ph=hashlib.sha256(pdf).hexdigest();session.execute(sql_text("UPDATE driver_contracts SET pdf_data=:pdf,pdf_sha256=:ph WHERE public_token=:t"),{"pdf":pdf,"ph":ph,"t":token});session.commit();return jsonify({"ok":True,"message":"Договор подписан","pdf_sha256":ph})
+        marker=str(row.get("otp_hash") or "")
+        if not marker.startswith("callcheck:") or not row.get("otp_expires_at") or now>row["otp_expires_at"]:
+            return jsonify({"ok":False,"message":"Время подтверждения истекло. Запроси новый номер для звонка"}),400
+        check_id=marker.split(":",1)[1]
+        api_id=(os.getenv("SMSRU_API_ID") or "").strip()
+        if not api_id:return jsonify({"ok":False,"message":"SMSRU_API_ID не настроен в Render"}),503
+        try:
+            r=requests.post("https://sms.ru/callcheck/status",data={"api_id":api_id,"check_id":check_id,"json":1},timeout=20)
+            r.raise_for_status(); data=r.json()
+        except Exception as e:
+            return jsonify({"ok":False,"message":f"Не удалось проверить звонок: {type(e).__name__}: {e}"}),503
+        check_status=str(data.get("check_status") or "")
+        if data.get("status")!="OK":
+            return jsonify({"ok":False,"message":"Ошибка проверки SMS.ru: "+str(data.get("status_text") or data.get("status_code") or "неизвестная ошибка")}),503
+        if check_status=="400":
+            return jsonify({"ok":False,"pending":True,"message":"Звонок пока не подтверждён. Позвони с номера, указанного в договоре, затем нажми «Проверить и подписать» ещё раз"}),409
+        if check_status=="402":
+            return jsonify({"ok":False,"message":"5 минут истекли. Запроси новый номер для звонка"}),400
+        if check_status!="401":
+            return jsonify({"ok":False,"message":"Неожиданный статус проверки: "+str(data.get("check_status_text") or check_status)}),400
+        h=_contract_hash(row)
+        session.execute(sql_text("""UPDATE driver_contracts
+            SET canonical_sha256=:h,signed_at=:now,status='signed',otp_hash='',otp_expires_at=NULL,updated_at=:now
+            WHERE public_token=:t"""),{"h":h,"now":now,"t":token})
+        session.commit()
+        signed=_contract_row(session,token);pdf=_contract_pdf(signed,signed=True);ph=hashlib.sha256(pdf).hexdigest()
+        session.execute(sql_text("UPDATE driver_contracts SET pdf_data=:pdf,pdf_sha256=:ph WHERE public_token=:t"),{"pdf":pdf,"ph":ph,"t":token})
+        session.commit()
+        return jsonify({"ok":True,"message":"Номер телефона подтверждён. Договор подписан","pdf_sha256":ph})
     finally:session.close()
+
 
 @bp.route("/driver-contract/<token>/preview.pdf")
 def driver_contract_preview_pdf(token):
@@ -7776,7 +7819,7 @@ def driver_contract_admin_page():
         return render_template_string(DRIVER_CONTRACT_ADMIN_HTML,code=code,driver=(car.driver or "").strip(),owner=o["owner"],poa=o["poa"],rent=int(effective_daily_rent(car) or 0),today=moscow_now().date().isoformat())
     finally:session.close()
 
-DRIVER_CONTRACT_HTML = r'''<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Клевер Парк — договор</title><style>*{box-sizing:border-box}body{margin:0;background:#f4f3f1;color:#1f1d1a;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}.wrap{max-width:780px;margin:auto;padding:18px}.card{background:#fff;border:1px solid #e6e2de;border-radius:18px;padding:20px;margin:12px 0}.grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}label{font-size:12px;color:#6f6a64}input{width:100%;padding:11px;border:1px solid #d7d1cb;border-radius:10px;margin-top:4px;font-size:15px}button,a{display:inline-block;padding:11px 15px;border:0;border-radius:11px;background:#35312d;color:#fff;text-decoration:none;font-weight:700;cursor:pointer}.hidden{display:none}.ok{color:#356046}.err{color:#a73a3a}.meta{font-size:13px;color:#6f6a64}.full{grid-column:1/-1}@media(max-width:650px){.grid{grid-template-columns:1fr}}</style></head><body><div class="wrap"><h1>🍀 Клевер Парк</h1><div id="root" class="card">Загрузка…</div></div><script>const token={{token|tojson}};let C;const F=[['driver_name','ФИО'],['driver_birth_date','Дата рождения','date'],['passport_series','Серия паспорта'],['passport_number','Номер паспорта'],['passport_issued_by','Кем выдан'],['passport_issue_date','Дата выдачи','date'],['passport_department_code','Код подразделения'],['registration_address','Адрес регистрации'],['phone','Телефон'],['license_number','Водительское удостоверение'],['license_expires','ВУ до','date'],['car_make','Марка'],['car_model','Модель'],['car_plate','Госномер'],['car_vin','VIN'],['car_year','Год','number'],['car_sts','СТС'],['deposit','Залог, ₽','number']];const E=s=>String(s??'').replace(/[&<>\"]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;'}[m]));async function Q(u,o){let r=await fetch(u,o),d=await r.json();if(!r.ok||!d.ok)throw Error(d.message||'Ошибка');return d}async function load(){try{C=(await Q('/api/driver-contract/'+encodeURIComponent(token))).contract;draw()}catch(e){root.innerHTML='<b class="err">'+E(e.message)+'</b>'}}function draw(){if(C.status==='signed'){root.innerHTML=`<h2>Договор подписан</h2><p>${E(C.id)} · машина ${E(C.car_code)}</p><p class="meta">PDF SHA-256: ${E(C.pdf_sha256)}</p><a href="/driver-contract/${encodeURIComponent(token)}/pdf">Скачать PDF</a>`;return}root.innerHTML=`<h2>Договор аренды · ${E(C.car_code)}</h2><p class="meta">${E(C.lessor_name)} · ИНН ${E(C.lessor_inn)} · ОГРНИП ${E(C.lessor_ogrnip)}</p><p class="meta">Собственник: ${E(C.owner_name||'—')} ${C.owner_poa?'· доверенность '+E(C.owner_poa):''}</p><p><b>${Number(C.daily_rent||0).toLocaleString('ru-RU')} ₽/сутки</b> · с ${E(C.rental_start_date)}</p><div class="grid">${F.map(([k,l,t])=>`<label class="${['passport_issued_by','registration_address'].includes(k)?'full':''}">${l}<input id="f_${k}" type="${t||'text'}" value="${E(C[k]||'')}"></label>`).join('')}</div><p><button onclick="save()">Сохранить данные</button></p><div id="sign" class="${C.status==='ready'?'':'hidden'}"><hr><h3>Подписание</h3><p>После проверки данных запроси код звонком. Тебе поступит звонок: последние 4 цифры номера звонящего — код подтверждения. Его ввод означает подписание этой версии договора простой электронной подписью.</p><p><a href="/driver-contract/${encodeURIComponent(token)}/preview.pdf" target="_blank">Открыть договор перед подписанием</a></p><button onclick="sendCode()">Получить код звонком</button><p><input id="otp" inputmode="numeric" maxlength="4" placeholder="4 цифры"><button onclick="signNow()">Подписать</button></p></div><p id="msg"></p>`}async function save(){let b={};F.forEach(([k])=>b[k]=document.getElementById('f_'+k).value);try{await Q('/api/driver-contract/'+encodeURIComponent(token)+'/save',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)});await load();msg.className='ok';msg.textContent='Сохранено. Проверь данные и запроси код звонком.'}catch(e){msg.className='err';msg.textContent=e.message}}async function sendCode(){try{let d=await Q('/api/driver-contract/'+encodeURIComponent(token)+'/send-code',{method:'POST'});msg.className='ok';msg.textContent=d.message+' Код действует 10 минут.'}catch(e){msg.className='err';msg.textContent=e.message}}async function signNow(){try{await Q('/api/driver-contract/'+encodeURIComponent(token)+'/sign',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({code:otp.value})});await load()}catch(e){msg.className='err';msg.textContent=e.message}}load();</script></body></html>'''
+DRIVER_CONTRACT_HTML = r'''<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Клевер Парк — договор</title><style>*{box-sizing:border-box}body{margin:0;background:#f4f3f1;color:#1f1d1a;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}.wrap{max-width:780px;margin:auto;padding:18px}.card{background:#fff;border:1px solid #e6e2de;border-radius:18px;padding:20px;margin:12px 0}.grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}label{font-size:12px;color:#6f6a64}input{width:100%;padding:11px;border:1px solid #d7d1cb;border-radius:10px;margin-top:4px;font-size:15px}button,a{display:inline-block;padding:11px 15px;border:0;border-radius:11px;background:#35312d;color:#fff;text-decoration:none;font-weight:700;cursor:pointer}.hidden{display:none}.ok{color:#356046}.err{color:#a73a3a}.meta{font-size:13px;color:#6f6a64}.full{grid-column:1/-1}@media(max-width:650px){.grid{grid-template-columns:1fr}}</style></head><body><div class="wrap"><h1>🍀 Клевер Парк</h1><div id="root" class="card">Загрузка…</div></div><script>const token={{token|tojson}};let C;const F=[['driver_name','ФИО'],['driver_birth_date','Дата рождения','date'],['passport_series','Серия паспорта'],['passport_number','Номер паспорта'],['passport_issued_by','Кем выдан'],['passport_issue_date','Дата выдачи','date'],['passport_department_code','Код подразделения'],['registration_address','Адрес регистрации'],['phone','Телефон'],['license_number','Водительское удостоверение'],['license_expires','ВУ до','date'],['car_make','Марка'],['car_model','Модель'],['car_plate','Госномер'],['car_vin','VIN'],['car_year','Год','number'],['car_sts','СТС'],['deposit','Залог, ₽','number']];const E=s=>String(s??'').replace(/[&<>\"]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;'}[m]));async function Q(u,o){let r=await fetch(u,o),d=await r.json();if(!r.ok||!d.ok)throw Error(d.message||'Ошибка');return d}async function load(){try{C=(await Q('/api/driver-contract/'+encodeURIComponent(token))).contract;draw()}catch(e){root.innerHTML='<b class="err">'+E(e.message)+'</b>'}}function draw(){if(C.status==='signed'){root.innerHTML=`<h2>Договор подписан</h2><p>${E(C.id)} · машина ${E(C.car_code)}</p><p class="meta">PDF SHA-256: ${E(C.pdf_sha256)}</p><a href="/driver-contract/${encodeURIComponent(token)}/pdf">Скачать PDF</a>`;return}root.innerHTML=`<h2>Договор аренды · ${E(C.car_code)}</h2><p class="meta">${E(C.lessor_name)} · ИНН ${E(C.lessor_inn)} · ОГРНИП ${E(C.lessor_ogrnip)}</p><p class="meta">Собственник: ${E(C.owner_name||'—')} ${C.owner_poa?'· доверенность '+E(C.owner_poa):''}</p><p><b>${Number(C.daily_rent||0).toLocaleString('ru-RU')} ₽/сутки</b> · с ${E(C.rental_start_date)}</p><div class="grid">${F.map(([k,l,t])=>`<label class="${['passport_issued_by','registration_address'].includes(k)?'full':''}">${l}<input id="f_${k}" type="${t||'text'}" value="${E(C[k]||'')}"></label>`).join('')}</div><p><button onclick="save()">Сохранить данные</button></p><div id="sign" class="${C.status==='ready'?'':'hidden'}"><hr><h3>Подписание</h3><p>После проверки договора получи номер для подтверждения. Позвони на него <b>с телефона, указанного в договоре</b>. SMS.ru автоматически сбросит звонок. После этого нажми «Проверить и подписать».</p><p><a href="/driver-contract/${encodeURIComponent(token)}/preview.pdf" target="_blank">Открыть договор перед подписанием</a></p><button onclick="sendCode()">Получить номер для звонка</button><div id="callbox" class="hidden"><p>Позвони в течение 5 минут:</p><p><a id="calllink" href="#" style="font-size:20px"></a></p><button onclick="signNow()">Проверить и подписать</button></div></div><p id="msg"></p>`}async function save(){let b={};F.forEach(([k])=>b[k]=document.getElementById('f_'+k).value);try{await Q('/api/driver-contract/'+encodeURIComponent(token)+'/save',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)});await load();msg.className='ok';msg.textContent='Сохранено. Проверь договор и получи номер для подтверждения.'}catch(e){msg.className='err';msg.textContent=e.message}}async function sendCode(){try{let d=await Q('/api/driver-contract/'+encodeURIComponent(token)+'/send-code',{method:'POST'});callbox.classList.remove('hidden');calllink.textContent=d.call_phone_pretty||d.call_phone;calllink.href='tel:+'+String(d.call_phone||'').replace(/\D/g,'');msg.className='ok';msg.textContent=d.message+' На звонок есть 5 минут.'}catch(e){msg.className='err';msg.textContent=e.message}}async function signNow(){try{await Q('/api/driver-contract/'+encodeURIComponent(token)+'/sign',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});await load()}catch(e){msg.className='err';msg.textContent=e.message}}load();</script></body></html>'''
 
 DRIVER_CONTRACT_ADMIN_HTML = r'''<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Создать договор</title><style>body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#f4f3f1}.wrap{max-width:650px;margin:30px auto;background:#fff;padding:22px;border-radius:18px}button{padding:11px 15px;border:0;border-radius:11px;background:#35312d;color:#fff;font-weight:700}input{width:100%;padding:10px;margin:7px 0}</style></head><body><div class="wrap"><h2>Новый договор · {{code}}</h2><p>Водитель: <b>{{driver}}</b></p><p>Собственник: <b>{{owner}}</b>{% if poa %}<br>Доверенность: <b>{{poa}}</b>{% endif %}</p><p>Аренда: <b>{{rent}} ₽/сутки</b></p><label>Дата начала<input id="start" type="date" value="{{today}}"></label><button onclick="go()">Создать ссылку</button><div id="res"></div></div><script>async function go(){let r=await fetch('/api/driver-contract/create',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({car_code:{{code|tojson}},start_date:start.value})}),d=await r.json();if(!r.ok||!d.ok){res.textContent=d.message||'Ошибка';return}res.innerHTML='<p><b>Ссылка для водителя:</b></p><input id="link" value="'+d.driver_url+'" readonly><button onclick="navigator.clipboard.writeText(link.value);this.textContent=\'✓ Скопировано\'">Скопировать</button><p>'+d.contract_id+'</p>'}</script></body></html>'''
 
