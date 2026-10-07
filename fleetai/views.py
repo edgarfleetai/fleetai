@@ -3388,10 +3388,11 @@ async function loadDriverTelegramStatuses(carsList){
           'telegram-status '+
           (connected?'connected':'disconnected');
 
-        badge.textContent=
-          connected
-            ? '🟢 Подключён'
-            : '🔴 Не подключён';
+        if(connected){
+          badge.textContent='🟢 Подключён';
+        }else{
+          badge.innerHTML=`🔴 Не подключён <button type="button" class="secondary small" style="margin-left:6px" onclick="copyDriverTelegramLink('${code}', this)">Скопировать ссылку</button>`;
+        }
 
       }catch(error){
         console.error(
@@ -3399,11 +3400,48 @@ async function loadDriverTelegramStatuses(carsList){
           error
         );
         badge.className='telegram-status disconnected';
-        badge.textContent='🔴 Не подключён';
+        badge.innerHTML=`🔴 Не подключён <button type="button" class="secondary small" style="margin-left:6px" onclick="copyDriverTelegramLink('${code}', this)">Скопировать ссылку</button>`;
         badge.title='Не удалось проверить статус Telegram';
       }
     })
   );
+}
+
+
+async function copyDriverTelegramLink(code, button){
+  const link=
+    window.location.origin +
+    '/driver-telegram?code=' +
+    encodeURIComponent(String(code||''));
+
+  const oldText=button ? button.textContent : '';
+
+  try{
+    if(navigator.clipboard && window.isSecureContext){
+      await navigator.clipboard.writeText(link);
+    }else{
+      const area=document.createElement('textarea');
+      area.value=link;
+      area.setAttribute('readonly','');
+      area.style.position='fixed';
+      area.style.opacity='0';
+      document.body.appendChild(area);
+      area.select();
+      const copied=document.execCommand('copy');
+      document.body.removeChild(area);
+      if(!copied)throw new Error('copy failed');
+    }
+
+    if(button){
+      button.textContent='✓ Скопировано';
+      setTimeout(()=>{
+        button.textContent=oldText || 'Скопировать ссылку';
+      },1800);
+    }
+  }catch(error){
+    console.error('Не удалось скопировать Telegram-ссылку:',error);
+    window.prompt('Скопируй ссылку для водителя:',link);
+  }
 }
 
 
