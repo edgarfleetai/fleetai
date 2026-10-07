@@ -174,6 +174,116 @@ def send_telegram_document(file_bytes, filename, caption=""):
         return False
 
 
+
+def send_telegram_document_to_chat(chat_id, file_bytes, filename, caption=""):
+    """Отправляет PDF/документ конкретному привязанному водителю."""
+    token = (os.getenv("TELEGRAM_BOT_TOKEN") or "").strip()
+    if not token or not str(chat_id or "").strip() or not file_bytes:
+        return False
+    try:
+        response = requests.post(
+            f"https://api.telegram.org/bot{token}/sendDocument",
+            data={
+                "chat_id": str(chat_id),
+                "caption": caption,
+                "parse_mode": "HTML",
+            },
+            files={
+                "document": (
+                    filename or "license.pdf",
+                    file_bytes,
+                    "application/pdf",
+                )
+            },
+            timeout=60,
+        )
+        response.raise_for_status()
+        return True
+    except requests.RequestException as error:
+        print(f"Ошибка отправки документа водителю: {error}")
+        return False
+
+
+def send_driver_welcome(chat_id, car):
+    """Приветствие + кнопка личного кабинета."""
+    base_url = request.url_root.rstrip("/")
+    code = normalize_code(car.code)
+    token = (os.getenv("TELEGRAM_BOT_TOKEN") or "").strip()
+    if not token:
+        return False
+    text_value = (
+        "🍀 <b>Добро пожаловать в Клевер Парк</b>\n\n"
+        f"Вы закреплены за автомобилем <b>{code}</b>.\n"
+        f"Водитель: <b>{(car.driver or '').strip()}</b>\n\n"
+        "В личном кабинете можно посмотреть баланс, аренду, "
+        "пополнения, штрафы и списания.\n\n"
+        "Следите за балансом — сюда также будут приходить "
+        "уведомления при его снижении."
+    )
+    try:
+        response = requests.post(
+            f"https://api.telegram.org/bot{token}/sendMessage",
+            json={
+                "chat_id": str(chat_id),
+                "text": text_value,
+                "parse_mode": "HTML",
+                "reply_markup": {
+                    "inline_keyboard": [[
+                        {
+                            "text": "👤 Открыть личный кабинет",
+                            "url": f"{base_url}/driver?code={code}",
+                        }
+                    ]]
+                },
+            },
+            timeout=15,
+        )
+        response.raise_for_status()
+        return True
+    except requests.RequestException as error:
+        print(f"Ошибка приветствия водителю: {error}")
+        return False
+
+
+def _ensure_vehicle_documents_table(session):
+    session.execute(sql_text("""
+        CREATE TABLE IF NOT EXISTS vehicle_documents (
+            car_code VARCHAR(32) PRIMARY KEY,
+            license_filename VARCHAR(255) NOT NULL,
+            license_mime_type VARCHAR(100) NOT NULL DEFAULT 'application/pdf',
+            license_data BYTEA NOT NULL,
+            uploaded_at TIMESTAMP NOT NULL
+        )
+    """))
+    session.commit()
+
+
+def _vehicle_license_row(session, car_code):
+    _ensure_vehicle_documents_table(session)
+    return session.execute(
+        sql_text("""
+            SELECT car_code, license_filename, license_mime_type,
+                   license_data, uploaded_at
+            FROM vehicle_documents
+            WHERE TRIM(car_code) = :car_code
+            LIMIT 1
+        """),
+        {"car_code": normalize_code(car_code)},
+    ).mappings().first()
+
+
+def _send_vehicle_license_to_chat(session, car, chat_id):
+    row = _vehicle_license_row(session, car.code)
+    if not row:
+        return False
+    return send_telegram_document_to_chat(
+        chat_id,
+        bytes(row["license_data"]),
+        row["license_filename"],
+        f"📄 Лицензия автомобиля {normalize_code(car.code)}",
+    )
+
+
 def register_pdf_font():
     font_paths = [
         "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
@@ -7363,6 +7473,104 @@ loadCars();
 
 
 
+
+@bp.route("/api/vehicle-license/<code>/status", methods=["GET"])
+def api_vehicle_license_status(code):
+    session = Session()
+    try:
+        car = find_car(session, code)
+        if not car:
+            return jsonify({"ok": False, "message": "Машина не найдена"}), 404
+        row = _vehicle_license_row(session, car.code)
+        return jsonify({
+            "ok": True,
+            "car_code": normalize_code(car.code),
+            "has_license": bool(row),
+            "filename": row["license_filename"] if row else "",
+            "uploaded_at": (
+                row["uploaded_at"].isoformat()
+                if row and row.get("uploaded_at")
+                else ""
+            ),
+        })
+    finally:
+        session.close()
+
+
+@bp.route("/api/vehicle-license/<code>", methods=["POST"])
+def api_vehicle_license_upload(code):
+    session = Session()
+    try:
+        car = find_car(session, code)
+        if not car:
+            return jsonify({"ok": False, "message": "Машина не найдена"}), 404
+        uploaded = request.files.get("file")
+        if not uploaded or not uploaded.filename:
+            return jsonify({"ok": False, "message": "Выбери PDF-файл лицензии"}), 400
+        filename = uploaded.filename.strip()
+        mime_type = (uploaded.mimetype or "").lower()
+        if not filename.lower().endswith(".pdf") and mime_type != "application/pdf":
+            return jsonify({"ok": False, "message": "Лицензия должна быть PDF"}), 400
+        file_bytes = uploaded.read()
+        if not file_bytes:
+            return jsonify({"ok": False, "message": "Файл пустой"}), 400
+        if len(file_bytes) > 10 * 1024 * 1024:
+            return jsonify({"ok": False, "message": "Файл больше 10 МБ"}), 400
+
+        _ensure_vehicle_documents_table(session)
+        now = moscow_now().replace(tzinfo=None)
+        session.execute(sql_text("""
+            INSERT INTO vehicle_documents
+                (car_code, license_filename, license_mime_type,
+                 license_data, uploaded_at)
+            VALUES
+                (:car_code, :filename, :mime_type, :file_data, :uploaded_at)
+            ON CONFLICT (car_code) DO UPDATE SET
+                license_filename = EXCLUDED.license_filename,
+                license_mime_type = EXCLUDED.license_mime_type,
+                license_data = EXCLUDED.license_data,
+                uploaded_at = EXCLUDED.uploaded_at
+        """), {
+            "car_code": normalize_code(car.code),
+            "filename": filename,
+            "mime_type": "application/pdf",
+            "file_data": file_bytes,
+            "uploaded_at": now,
+        })
+        session.commit()
+        return jsonify({
+            "ok": True,
+            "message": f"Лицензия машины {normalize_code(car.code)} сохранена",
+            "car_code": normalize_code(car.code),
+            "filename": filename,
+        })
+    except Exception as error:
+        session.rollback()
+        return jsonify({"ok": False, "message": f"{type(error).__name__}: {error}"}), 500
+    finally:
+        session.close()
+
+
+@bp.route("/api/vehicle-license/<code>", methods=["GET"])
+def api_vehicle_license_download(code):
+    session = Session()
+    try:
+        car = find_car(session, code)
+        if not car:
+            return jsonify({"ok": False, "message": "Машина не найдена"}), 404
+        row = _vehicle_license_row(session, car.code)
+        if not row:
+            return jsonify({"ok": False, "message": "Лицензия ещё не загружена"}), 404
+        return send_file(
+            io.BytesIO(bytes(row["license_data"])),
+            mimetype="application/pdf",
+            as_attachment=False,
+            download_name=row["license_filename"],
+        )
+    finally:
+        session.close()
+
+
 @bp.route("/driver-telegram")
 def driver_telegram_page():
     html = r"""<!doctype html>
@@ -7946,6 +8154,41 @@ def api_telegram_webhook():
     chat = message.get("chat") or {}
     sender = message.get("from") or {}
 
+    if text_value == "/start":
+        chat_id = str(chat.get("id") or "").strip()
+        if not chat_id:
+            return jsonify({"ok": True})
+        session = Session()
+        try:
+            binding = session.execute(
+                sql_text("""
+                    SELECT car_code, driver_name
+                    FROM driver_telegram_bindings
+                    WHERE telegram_chat_id = :chat_id
+                    LIMIT 1
+                """),
+                {"chat_id": chat_id},
+            ).mappings().first()
+            if not binding:
+                send_telegram_to_chat(
+                    chat_id,
+                    "Telegram ещё не привязан к автомобилю. "
+                    "Откройте персональную ссылку, которую прислал диспетчер.",
+                )
+                return jsonify({"ok": True})
+            car = find_car(session, binding["car_code"])
+            if not car or (car.driver or "").strip() != (binding["driver_name"] or "").strip():
+                send_telegram_to_chat(
+                    chat_id,
+                    "Привязка устарела. Попросите диспетчера создать новую ссылку.",
+                )
+                return jsonify({"ok": True})
+            send_driver_welcome(chat_id, car)
+            _send_vehicle_license_to_chat(session, car, chat_id)
+            return jsonify({"ok": True})
+        finally:
+            session.close()
+
     if not text_value.startswith("/start driver_"):
         return jsonify({"ok": True})
 
@@ -8053,15 +8296,14 @@ def api_telegram_webhook():
         )
         session.commit()
 
-        send_telegram_to_chat(
-            chat_id,
-            (
-                "🍀 <b>Клевер Парк</b>\n\n"
-                f"Telegram успешно привязан к машине <b>{normalize_code(car.code)}</b>.\n"
-                f"Водитель: <b>{(car.driver or '').strip()}</b>.\n\n"
-                "Сюда будут приходить уведомления по балансу."
-            ),
-        )
+        send_driver_welcome(chat_id, car)
+        license_sent = _send_vehicle_license_to_chat(session, car, chat_id)
+        if not license_sent:
+            send_telegram_to_chat(
+                chat_id,
+                "📄 Лицензия автомобиля пока не загружена. "
+                "После загрузки диспетчером её можно будет получить через бота.",
+            )
         return jsonify({"ok": True})
 
     except Exception as error:
