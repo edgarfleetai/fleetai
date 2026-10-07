@@ -7553,7 +7553,7 @@ def _contract_pdf(row, signed=True):
       ("2. Арендная плата",f"Арендная плата — {int(row['daily_rent'] or 0)} ₽ в сутки. Обеспечительный платёж — {int(row['deposit'] or 0)} ₽. Начисления и платежи учитываются в FleetAI. Арендатор обязан контролировать баланс и своевременно его пополнять."),
       ("3. Обязанности Арендатора","Арендатор обязан бережно использовать автомобиль, соблюдать ПДД и требования к перевозкам легковым такси, иметь действующее водительское удостоверение, сообщать о ДТП, неисправностях, эвакуации и повреждениях и не передавать управление третьим лицам без согласия Арендодателя."),
       ("4. Штрафы, ДТП и ущерб","Штрафы за нарушения, совершённые в период пользования автомобилем и относящиеся к действиям Арендатора, оплачиваются Арендатором. Возмещение ущерба определяется с учётом обстоятельств, вины, страхового возмещения и законодательства РФ. Нормальный эксплуатационный износ ущербом не считается."),
-      ("5. Простая электронная подпись","Стороны используют FleetAI для заключения договора. Ключом простой электронной подписи Арендатора является одноразовый код, направленный на указанный номер телефона. Ввод кода после ознакомления с договором означает подписание этой версии. Арендатор обязан сохранять код и доступ к номеру телефона в конфиденциальности. FleetAI фиксирует договор, телефон, дату и время подтверждения и контрольную сумму."),
+      ("5. Простая электронная подпись","Стороны используют FleetAI для заключения договора. Простой электронной подписью Арендатора является подтверждение владения указанным в договоре номером телефона посредством контрольного звонка с этого номера на номер, предоставленный сервисом подтверждения. После ознакомления с договором успешное подтверждение номера и нажатие кнопки подписания означает подписание этой версии договора. FleetAI фиксирует договор, номер телефона, дату и время подтверждения и контрольную сумму."),
       ("6. Передача и возврат","Передача и возврат автомобиля могут оформляться электронными актами с фиксацией пробега, топлива, ключей, документов, повреждений и фотографий."),
       ("7. Персональные данные и прочие условия","Персональные данные обрабатываются в объёме, необходимом для заключения и исполнения договора. В неурегулированной части стороны руководствуются законодательством Российской Федерации.")]
     for h,t in sections: story.extend([P(h,head),P(t)])
@@ -7808,6 +7808,66 @@ def driver_contract_pdf(token):
 def driver_contract_page():
     token=(request.args.get("token") or "").strip()
     return render_template_string(DRIVER_CONTRACT_HTML, token=token)
+
+
+@bp.route("/driver-contracts")
+def driver_contracts_archive_page():
+    session=Session()
+    try:
+        _ensure_driver_contract_tables(session)
+        rows=session.execute(sql_text("""
+            SELECT id,public_token,car_code,status,driver_name,car_make,car_model,car_plate,
+                   daily_rent,rental_start_date,signed_at,created_at,pdf_sha256,
+                   CASE WHEN pdf_data IS NOT NULL THEN TRUE ELSE FALSE END AS has_pdf
+            FROM driver_contracts
+            ORDER BY COALESCE(signed_at,created_at) DESC
+        """)).mappings().all()
+        return render_template_string(DRIVER_CONTRACTS_ARCHIVE_HTML,rows=rows)
+    finally:session.close()
+
+
+@bp.route("/driver-contracts/<contract_id>/pdf")
+def driver_contracts_archive_pdf(contract_id):
+    session=Session()
+    try:
+        _ensure_driver_contract_tables(session)
+        row=session.execute(sql_text("""
+            SELECT id,car_code,status,pdf_data
+            FROM driver_contracts WHERE id=:id LIMIT 1
+        """),{"id":contract_id}).mappings().first()
+        if not row:return "Договор не найден",404
+        if row["status"]!="signed" or not row.get("pdf_data"):return "Подписанный PDF не найден",404
+        return send_file(io.BytesIO(bytes(row["pdf_data"])),mimetype="application/pdf",
+                         as_attachment=True,download_name=f"dogovor_{row['car_code']}_{row['id']}.pdf")
+    finally:session.close()
+
+
+DRIVER_CONTRACTS_ARCHIVE_HTML=r"""<!doctype html><html lang="ru"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>Клевер Парк — договоры</title>
+<style>*{box-sizing:border-box}body{margin:0;background:#f4f3f1;color:#1f1d1a;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+.wrap{max-width:1100px;margin:auto;padding:20px}.card{background:#fff;border:1px solid #e6e2de;border-radius:18px;padding:20px}
+h1{margin:8px 0 18px}.filters{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:15px}input,select{padding:10px;border:1px solid #d7d1cb;border-radius:10px;font-size:14px}
+input{min-width:250px}.table{overflow:auto}table{width:100%;border-collapse:collapse;min-width:850px}th,td{text-align:left;padding:11px 8px;border-bottom:1px solid #eee;font-size:14px}
+th{font-size:12px;color:#6f6a64}.signed{color:#356046;font-weight:700}.other{color:#8a6a20;font-weight:700}
+a.btn{display:inline-block;background:#35312d;color:#fff;text-decoration:none;padding:8px 11px;border-radius:9px;font-weight:700;white-space:nowrap}
+.hash{font-family:monospace;font-size:11px;color:#777;max-width:150px;overflow:hidden;text-overflow:ellipsis}
+.empty{padding:25px;text-align:center;color:#777}</style></head><body><div class="wrap">
+<h1>🍀 Договоры</h1><div class="card"><div class="filters">
+<input id="q" placeholder="Машина, водитель, госномер, № договора" oninput="filterRows()">
+<select id="st" onchange="filterRows()"><option value="">Все статусы</option><option value="signed">Подписанные</option><option value="ready">Готовые</option><option value="draft">Черновики</option></select>
+</div><div class="table"><table><thead><tr><th>Договор</th><th>Машина</th><th>Водитель</th><th>Начало</th><th>Статус</th><th>Подписан</th><th>PDF SHA-256</th><th></th></tr></thead><tbody id="tbody">
+{% for r in rows %}<tr data-status="{{r.status}}" data-search="{{(r.id~' '~r.car_code~' '~r.driver_name~' '~r.car_plate)|lower}}">
+<td><b>{{r.id}}</b></td><td>{{r.car_code}} · {{r.car_make}} {{r.car_model}}<br><small>{{r.car_plate}}</small></td>
+<td>{{r.driver_name or '—'}}</td><td>{{r.rental_start_date or '—'}}</td>
+<td class="{{'signed' if r.status=='signed' else 'other'}}">{{'Подписан' if r.status=='signed' else ('Готов' if r.status=='ready' else 'Черновик')}}</td>
+<td>{{r.signed_at.strftime('%d.%m.%Y %H:%M') if r.signed_at else '—'}}</td>
+<td class="hash" title="{{r.pdf_sha256}}">{{r.pdf_sha256 or '—'}}</td>
+<td>{% if r.status=='signed' and r.has_pdf %}<a class="btn" href="/driver-contracts/{{r.id}}/pdf">Скачать PDF</a>{% else %}<a class="btn" href="/driver-contract?token={{r.public_token}}">Открыть</a>{% endif %}</td>
+</tr>{% endfor %}</tbody></table>{% if not rows %}<div class="empty">Договоров пока нет</div>{% endif %}</div></div></div>
+<script>function filterRows(){let q=document.getElementById('q').value.toLowerCase().trim(),st=document.getElementById('st').value;
+document.querySelectorAll('#tbody tr').forEach(r=>{r.style.display=(!q||r.dataset.search.includes(q))&&(!st||r.dataset.status===st)?'':'none'})}</script>
+</body></html>"""
+
 
 @bp.route("/driver-contract-admin")
 def driver_contract_admin_page():
