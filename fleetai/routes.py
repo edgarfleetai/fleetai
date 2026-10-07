@@ -3,6 +3,10 @@ import io
 import re
 import requests
 import uuid
+import hashlib
+import secrets
+import json
+import html
 
 from pathlib import Path
 from urllib.parse import unquote
@@ -7472,6 +7476,207 @@ loadCars();
 
 
 
+
+# =========================================================
+# V15.27 — ELECTRONIC DRIVER RENTAL CONTRACTS / SMS PEP
+# =========================================================
+FLEET_CONTRACT_OWNERS = {
+    "119": ("ИП Эдгар Лебедкин", "Собственник", ""),
+    "665": ("ИП Эдгар Лебедкин", "Собственник", ""),
+    "218": ("ИП Эдгар Лебедкин", "Собственник", ""),
+    "404": ("ИП Эдгар Лебедкин", "Собственник", ""),
+    "897": ("Сергеев Владислав Александрович", "Доверенность", "16АА 9137325"),
+    "373": ("Рачеев Илья Игоревич", "Доверенность", "16АА 9146919"),
+    "703": ("Рачеев Илья Игоревич", "Доверенность", "16АА 9146919"),
+    "636": ("Рачеев Илья Игоревич", "Доверенность", "16АА 9146919"),
+    "621": ("Рачеев Илья Игоревич", "Доверенность", "16АА 9146919"),
+    "951": ("Рачеев Илья Игоревич", "Доверенность", "16АА 9146919"),
+    "550": ("Авлаяров Равшан Фархатович", "Доверенность", "16АА 9150802"),
+}
+LESSOR_INN = "165052451205"
+LESSOR_OGRNIP = "326169000013491"
+
+def _contract_owner(code):
+    owner, basis, poa = FLEET_CONTRACT_OWNERS.get(normalize_code(code), ("", "Не указано", ""))
+    return {"owner": owner, "basis": basis, "poa": poa}
+
+def _ensure_driver_contract_tables(session):
+    session.execute(sql_text("""
+        CREATE TABLE IF NOT EXISTS driver_contracts (
+            id VARCHAR(64) PRIMARY KEY, public_token VARCHAR(128) UNIQUE NOT NULL,
+            car_code VARCHAR(32) NOT NULL, status VARCHAR(24) NOT NULL DEFAULT 'draft',
+            driver_name VARCHAR(255) NOT NULL DEFAULT '', driver_birth_date VARCHAR(20) NOT NULL DEFAULT '',
+            passport_series VARCHAR(20) NOT NULL DEFAULT '', passport_number VARCHAR(30) NOT NULL DEFAULT '',
+            passport_issued_by TEXT NOT NULL DEFAULT '', passport_issue_date VARCHAR(20) NOT NULL DEFAULT '',
+            passport_department_code VARCHAR(30) NOT NULL DEFAULT '', registration_address TEXT NOT NULL DEFAULT '',
+            phone VARCHAR(40) NOT NULL DEFAULT '', license_number VARCHAR(80) NOT NULL DEFAULT '',
+            license_expires VARCHAR(20) NOT NULL DEFAULT '', car_make VARCHAR(100) NOT NULL DEFAULT '',
+            car_model VARCHAR(100) NOT NULL DEFAULT '', car_plate VARCHAR(40) NOT NULL DEFAULT '',
+            car_vin VARCHAR(80) NOT NULL DEFAULT '', car_year VARCHAR(10) NOT NULL DEFAULT '', car_sts VARCHAR(80) NOT NULL DEFAULT '',
+            daily_rent INTEGER NOT NULL DEFAULT 0, deposit INTEGER NOT NULL DEFAULT 0, rental_start_date VARCHAR(20) NOT NULL DEFAULT '',
+            owner_name VARCHAR(255) NOT NULL DEFAULT '', owner_basis VARCHAR(100) NOT NULL DEFAULT '', owner_poa VARCHAR(100) NOT NULL DEFAULT '',
+            lessor_name VARCHAR(255) NOT NULL DEFAULT '', lessor_inn VARCHAR(30) NOT NULL DEFAULT '', lessor_ogrnip VARCHAR(30) NOT NULL DEFAULT '',
+            canonical_sha256 VARCHAR(64) NOT NULL DEFAULT '', pdf_sha256 VARCHAR(64) NOT NULL DEFAULT '', pdf_data BYTEA,
+            otp_hash VARCHAR(128) NOT NULL DEFAULT '', otp_expires_at TIMESTAMP, otp_last_sent_at TIMESTAMP,
+            otp_attempts INTEGER NOT NULL DEFAULT 0, sms_id VARCHAR(255) NOT NULL DEFAULT '', signed_at TIMESTAMP,
+            created_at TIMESTAMP NOT NULL, updated_at TIMESTAMP NOT NULL
+        )
+    """)); session.commit()
+
+def _contract_row(session, token):
+    _ensure_driver_contract_tables(session)
+    return session.execute(sql_text("SELECT * FROM driver_contracts WHERE public_token=:t LIMIT 1"), {"t": token}).mappings().first()
+
+def _contract_phone(value):
+    d=re.sub(r"\D", "", str(value or ""))
+    if len(d)==11 and d.startswith("8"): d="7"+d[1:]
+    if len(d)==10: d="7"+d
+    return d if len(d)==11 and d.startswith("7") else ""
+
+def _contract_hash(row):
+    keys=("id","car_code","driver_name","driver_birth_date","passport_series","passport_number","passport_issued_by","passport_issue_date","passport_department_code","registration_address","phone","license_number","license_expires","car_make","car_model","car_plate","car_vin","car_year","car_sts","daily_rent","deposit","rental_start_date","owner_name","owner_basis","owner_poa","lessor_name","lessor_inn","lessor_ogrnip")
+    payload={k:row.get(k) for k in keys}
+    return hashlib.sha256(json.dumps(payload,ensure_ascii=False,sort_keys=True,default=str,separators=(",",":")).encode()).hexdigest()
+
+def _contract_pdf(row, signed=True):
+    font=register_pdf_font(); buf=io.BytesIO()
+    doc=SimpleDocTemplate(buf,pagesize=A4,rightMargin=14*mm,leftMargin=14*mm,topMargin=13*mm,bottomMargin=13*mm,title=f"Договор {row['id']}",author="FleetAI")
+    ss=getSampleStyleSheet(); body=ParagraphStyle("CB",parent=ss["BodyText"],fontName=font,fontSize=8.5,leading=12,spaceAfter=5); head=ParagraphStyle("CH",parent=body,fontSize=10.5,leading=14,spaceBefore=7); title=ParagraphStyle("CT",parent=ss["Title"],fontName=font,fontSize=14,leading=18,alignment=TA_CENTER)
+    def P(x,s=body): return Paragraph(html.escape(str(x)).replace("\n","<br/>"),s)
+    if row.get("owner_poa"):
+        lessor=f"{row['owner_name']}, в лице представителя {row['lessor_name']}, действующего на основании доверенности {row['owner_poa']}, ИНН {row['lessor_inn']}, ОГРНИП {row['lessor_ogrnip']}"
+    else: lessor=f"{row['lessor_name']}, ИНН {row['lessor_inn']}, ОГРНИП {row['lessor_ogrnip']}"
+    signed=row.get("signed_at"); signed_text=signed.strftime("%d.%m.%Y %H:%M:%S") if signed else ""
+    story=[P("ДОГОВОР АРЕНДЫ ТРАНСПОРТНОГО СРЕДСТВА БЕЗ ЭКИПАЖА",title),P(f"№ {row['id']} · г. Набережные Челны · начало аренды {row['rental_start_date']}"),P(f"Арендодатель: {lessor}"),P(f"Арендатор: {row['driver_name']}, дата рождения {row['driver_birth_date']}, паспорт {row['passport_series']} {row['passport_number']}, выдан {row['passport_issued_by']} {row['passport_issue_date']}, код {row['passport_department_code']}, адрес: {row['registration_address']}, телефон +{row['phone']}.")]
+    sections=[
+      ("1. Предмет договора",f"Арендодатель предоставляет Арендатору за плату во временное владение и пользование без экипажа автомобиль {row['car_make']} {row['car_model']}, госномер {row['car_plate']}, VIN {row['car_vin']}, {row['car_year']} года, СТС {row['car_sts']}. Автомобиль может использоваться для законной деятельности легкового такси при наличии необходимых разрешений."),
+      ("2. Арендная плата",f"Арендная плата — {int(row['daily_rent'] or 0)} ₽ в сутки. Обеспечительный платёж — {int(row['deposit'] or 0)} ₽. Начисления и платежи учитываются в FleetAI. Арендатор обязан контролировать баланс и своевременно его пополнять."),
+      ("3. Обязанности Арендатора","Арендатор обязан бережно использовать автомобиль, соблюдать ПДД и требования к перевозкам легковым такси, иметь действующее водительское удостоверение, сообщать о ДТП, неисправностях, эвакуации и повреждениях и не передавать управление третьим лицам без согласия Арендодателя."),
+      ("4. Штрафы, ДТП и ущерб","Штрафы за нарушения, совершённые в период пользования автомобилем и относящиеся к действиям Арендатора, оплачиваются Арендатором. Возмещение ущерба определяется с учётом обстоятельств, вины, страхового возмещения и законодательства РФ. Нормальный эксплуатационный износ ущербом не считается."),
+      ("5. Простая электронная подпись","Стороны используют FleetAI для заключения договора. Ключом простой электронной подписи Арендатора является одноразовый код, направленный на указанный номер телефона. Ввод кода после ознакомления с договором означает подписание этой версии. Арендатор обязан сохранять код и доступ к номеру телефона в конфиденциальности. FleetAI фиксирует договор, телефон, дату и время подтверждения и контрольную сумму."),
+      ("6. Передача и возврат","Передача и возврат автомобиля могут оформляться электронными актами с фиксацией пробега, топлива, ключей, документов, повреждений и фотографий."),
+      ("7. Персональные данные и прочие условия","Персональные данные обрабатываются в объёме, необходимом для заключения и исполнения договора. В неурегулированной части стороны руководствуются законодательством Российской Федерации.")]
+    for h,t in sections: story.extend([P(h,head),P(t)])
+    story.extend([P(f"Водительское удостоверение: {row['license_number']}; действительно до {row['license_expires']}.") ,P(f"SHA-256 данных договора: {row['canonical_sha256']}")])
+    if signed:
+        story.extend([P("ЭЛЕКТРОННО ПОДПИСАНО",head),P(f"Арендатор: {row['driver_name']}. ПЭП: одноразовый SMS-код. Телефон: +{row['phone']}. Дата и время: {signed_text} МСК.")])
+    doc.build(story); return buf.getvalue()
+
+def _send_contract_sms(phone, code):
+    api_id=(os.getenv("SMSRU_API_ID") or "").strip()
+    if not api_id: return False,"","SMSRU_API_ID не настроен в Render"
+    try:
+        response=requests.post("https://sms.ru/sms/send",data={"api_id":api_id,"to":phone,"msg":f"Клевер Парк: код подписания договора {code}. Никому не сообщайте код.","json":1},timeout=20); response.raise_for_status(); data=response.json(); item=(data.get("sms") or {}).get(phone) or {}; ok=data.get("status")=="OK" and item.get("status")=="OK"
+        return ok,str(item.get("sms_id") or ""),str(item.get("status_text") or data.get("status_text") or "")
+    except Exception as e: return False,"",f"{type(e).__name__}: {e}"
+
+@bp.route("/api/driver-contract/create",methods=["POST"])
+def api_driver_contract_create():
+    data=request.get_json(silent=True) or {}; code=normalize_code(data.get("car_code") or ""); session=Session()
+    try:
+        car=find_car(session,code)
+        if not car:return jsonify({"ok":False,"message":"Машина не найдена"}),404
+        _ensure_driver_contract_tables(session); owner=_contract_owner(code); now=moscow_now().replace(tzinfo=None); cid="KP-"+now.strftime("%Y%m%d")+"-"+code+"-"+uuid.uuid4().hex[:6].upper(); token=secrets.token_urlsafe(32)
+        session.execute(sql_text("""INSERT INTO driver_contracts(id,public_token,car_code,status,driver_name,daily_rent,rental_start_date,owner_name,owner_basis,owner_poa,lessor_name,lessor_inn,lessor_ogrnip,created_at,updated_at) VALUES(:id,:token,:code,'draft',:driver,:rent,:start,:owner,:basis,:poa,:lessor,:inn,:ogrnip,:now,:now)"""),{"id":cid,"token":token,"code":code,"driver":(car.driver or "").strip(),"rent":int(effective_daily_rent(car) or 0),"start":str(data.get("start_date") or moscow_now().date().isoformat()),"owner":owner["owner"],"basis":owner["basis"],"poa":owner["poa"],"lessor":(os.getenv("LESSOR_FULL_NAME") or "ИП Эдгар Лебедкин").strip(),"inn":LESSOR_INN,"ogrnip":LESSOR_OGRNIP,"now":now}); session.commit()
+        return jsonify({"ok":True,"contract_id":cid,"driver_url":request.url_root.rstrip("/")+"/driver-contract?token="+token})
+    finally: session.close()
+
+@bp.route("/api/driver-contract/<token>",methods=["GET"])
+def api_driver_contract_get(token):
+    session=Session()
+    try:
+        row=_contract_row(session,token)
+        if not row:return jsonify({"ok":False,"message":"Договор не найден"}),404
+        safe={k:v for k,v in dict(row).items() if k not in ("pdf_data","otp_hash")}
+        for k,v in list(safe.items()):
+            if isinstance(v,datetime):safe[k]=v.isoformat()
+        return jsonify({"ok":True,"contract":safe})
+    finally:session.close()
+
+@bp.route("/api/driver-contract/<token>/save",methods=["POST"])
+def api_driver_contract_save(token):
+    data=request.get_json(silent=True) or {}; session=Session()
+    try:
+        row=_contract_row(session,token)
+        if not row:return jsonify({"ok":False,"message":"Договор не найден"}),404
+        if row["status"]=="signed":return jsonify({"ok":False,"message":"Подписанный договор нельзя изменить"}),409
+        fields=["driver_name","driver_birth_date","passport_series","passport_number","passport_issued_by","passport_issue_date","passport_department_code","registration_address","phone","license_number","license_expires","car_make","car_model","car_plate","car_vin","car_year","car_sts","deposit"]
+        vals={k:str(data.get(k) or "").strip() for k in fields}; vals["phone"]=_contract_phone(vals["phone"])
+        if not vals["phone"]:return jsonify({"ok":False,"message":"Укажи корректный номер телефона"}),400
+        required=[k for k in fields if k!="deposit"]
+        if any(not vals[k] for k in required):return jsonify({"ok":False,"message":"Заполни все обязательные поля"}),400
+        vals["deposit"]=int(vals["deposit"] or 0); vals.update({"t":token,"now":moscow_now().replace(tzinfo=None)}); sets=", ".join(f"{k}=:{k}" for k in fields)
+        session.execute(sql_text(f"UPDATE driver_contracts SET {sets},status='ready',updated_at=:now WHERE public_token=:t"),vals); session.commit(); fresh=_contract_row(session,token); h=_contract_hash(fresh); session.execute(sql_text("UPDATE driver_contracts SET canonical_sha256=:h WHERE public_token=:t"),{"h":h,"t":token});session.commit();return jsonify({"ok":True,"message":"Данные сохранены","canonical_sha256":h})
+    except ValueError: session.rollback(); return jsonify({"ok":False,"message":"Проверь залог"}),400
+    finally:session.close()
+
+@bp.route("/api/driver-contract/<token>/send-code",methods=["POST"])
+def api_driver_contract_send_code(token):
+    session=Session()
+    try:
+        row=_contract_row(session,token)
+        if not row:return jsonify({"ok":False,"message":"Договор не найден"}),404
+        if row["status"]!="ready":return jsonify({"ok":False,"message":"Сначала сохрани договор"}),400
+        now=moscow_now().replace(tzinfo=None)
+        if row.get("otp_last_sent_at") and (now-row["otp_last_sent_at"]).total_seconds()<60:return jsonify({"ok":False,"message":"Повторный код можно запросить через минуту"}),429
+        code=f"{secrets.randbelow(1000000):06d}"; salt=secrets.token_hex(16); oh=salt+":"+hashlib.sha256((salt+code).encode()).hexdigest(); ok,sms_id,error=_send_contract_sms(row["phone"],code)
+        if not ok:return jsonify({"ok":False,"message":"SMS не отправлено: "+error}),503
+        session.execute(sql_text("UPDATE driver_contracts SET otp_hash=:h,otp_expires_at=:exp,otp_last_sent_at=:now,otp_attempts=0,sms_id=:sms,updated_at=:now WHERE public_token=:t"),{"h":oh,"exp":now+timedelta(minutes=10),"now":now,"sms":sms_id,"t":token});session.commit();return jsonify({"ok":True,"message":"Код отправлен по SMS"})
+    finally:session.close()
+
+@bp.route("/api/driver-contract/<token>/sign",methods=["POST"])
+def api_driver_contract_sign(token):
+    entered=re.sub(r"\D","",str((request.get_json(silent=True) or {}).get("code") or ""));session=Session()
+    try:
+        row=_contract_row(session,token)
+        if not row:return jsonify({"ok":False,"message":"Договор не найден"}),404
+        if row["status"]=="signed":return jsonify({"ok":True,"message":"Договор уже подписан"})
+        now=moscow_now().replace(tzinfo=None)
+        if not row.get("otp_hash") or not row.get("otp_expires_at") or now>row["otp_expires_at"]:return jsonify({"ok":False,"message":"Код истёк. Запроси новый"}),400
+        if int(row.get("otp_attempts") or 0)>=5:return jsonify({"ok":False,"message":"Лимит попыток исчерпан"}),429
+        salt,digest=row["otp_hash"].split(":",1); actual=hashlib.sha256((salt+entered).encode()).hexdigest()
+        if not secrets.compare_digest(actual,digest):session.execute(sql_text("UPDATE driver_contracts SET otp_attempts=otp_attempts+1 WHERE public_token=:t"),{"t":token});session.commit();return jsonify({"ok":False,"message":"Неверный код"}),400
+        h=_contract_hash(row);session.execute(sql_text("UPDATE driver_contracts SET canonical_sha256=:h,signed_at=:now,status='signed',otp_hash='',updated_at=:now WHERE public_token=:t"),{"h":h,"now":now,"t":token});session.commit();signed=_contract_row(session,token);pdf=_contract_pdf(signed,signed=True);ph=hashlib.sha256(pdf).hexdigest();session.execute(sql_text("UPDATE driver_contracts SET pdf_data=:pdf,pdf_sha256=:ph WHERE public_token=:t"),{"pdf":pdf,"ph":ph,"t":token});session.commit();return jsonify({"ok":True,"message":"Договор подписан","pdf_sha256":ph})
+    finally:session.close()
+
+@bp.route("/driver-contract/<token>/preview.pdf")
+def driver_contract_preview_pdf(token):
+    session=Session()
+    try:
+        row=_contract_row(session,token)
+        if not row or row["status"] not in ("ready","signed"):
+            return jsonify({"ok":False,"message":"Сначала заполни договор"}),404
+        pdf=_contract_pdf(row,signed=False)
+        return send_file(io.BytesIO(pdf),mimetype="application/pdf",as_attachment=False,download_name=f"preview_{row['car_code']}_{row['id']}.pdf")
+    finally:session.close()
+
+@bp.route("/driver-contract/<token>/pdf")
+def driver_contract_pdf(token):
+    session=Session()
+    try:
+        row=_contract_row(session,token)
+        if not row or row["status"]!="signed" or not row.get("pdf_data"):return jsonify({"ok":False,"message":"Подписанный PDF не найден"}),404
+        return send_file(io.BytesIO(bytes(row["pdf_data"])),mimetype="application/pdf",as_attachment=True,download_name=f"dogovor_{row['car_code']}_{row['id']}.pdf")
+    finally:session.close()
+
+@bp.route("/driver-contract")
+def driver_contract_page():
+    token=(request.args.get("token") or "").strip()
+    return render_template_string(DRIVER_CONTRACT_HTML, token=token)
+
+@bp.route("/driver-contract-admin")
+def driver_contract_admin_page():
+    code=normalize_code(request.args.get("code") or "");session=Session()
+    try:
+        car=find_car(session,code)
+        if not car:return "Машина не найдена",404
+        o=_contract_owner(code)
+        return render_template_string(DRIVER_CONTRACT_ADMIN_HTML,code=code,driver=(car.driver or "").strip(),owner=o["owner"],poa=o["poa"],rent=int(effective_daily_rent(car) or 0),today=moscow_now().date().isoformat())
+    finally:session.close()
+
+DRIVER_CONTRACT_HTML = r'''<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Клевер Парк — договор</title><style>*{box-sizing:border-box}body{margin:0;background:#f4f3f1;color:#1f1d1a;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}.wrap{max-width:780px;margin:auto;padding:18px}.card{background:#fff;border:1px solid #e6e2de;border-radius:18px;padding:20px;margin:12px 0}.grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}label{font-size:12px;color:#6f6a64}input{width:100%;padding:11px;border:1px solid #d7d1cb;border-radius:10px;margin-top:4px;font-size:15px}button,a{display:inline-block;padding:11px 15px;border:0;border-radius:11px;background:#35312d;color:#fff;text-decoration:none;font-weight:700;cursor:pointer}.hidden{display:none}.ok{color:#356046}.err{color:#a73a3a}.meta{font-size:13px;color:#6f6a64}.full{grid-column:1/-1}@media(max-width:650px){.grid{grid-template-columns:1fr}}</style></head><body><div class="wrap"><h1>🍀 Клевер Парк</h1><div id="root" class="card">Загрузка…</div></div><script>const token={{token|tojson}};let C;const F=[['driver_name','ФИО'],['driver_birth_date','Дата рождения','date'],['passport_series','Серия паспорта'],['passport_number','Номер паспорта'],['passport_issued_by','Кем выдан'],['passport_issue_date','Дата выдачи','date'],['passport_department_code','Код подразделения'],['registration_address','Адрес регистрации'],['phone','Телефон'],['license_number','Водительское удостоверение'],['license_expires','ВУ до','date'],['car_make','Марка'],['car_model','Модель'],['car_plate','Госномер'],['car_vin','VIN'],['car_year','Год','number'],['car_sts','СТС'],['deposit','Залог, ₽','number']];const E=s=>String(s??'').replace(/[&<>\"]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;'}[m]));async function Q(u,o){let r=await fetch(u,o),d=await r.json();if(!r.ok||!d.ok)throw Error(d.message||'Ошибка');return d}async function load(){try{C=(await Q('/api/driver-contract/'+encodeURIComponent(token))).contract;draw()}catch(e){root.innerHTML='<b class="err">'+E(e.message)+'</b>'}}function draw(){if(C.status==='signed'){root.innerHTML=`<h2>Договор подписан</h2><p>${E(C.id)} · машина ${E(C.car_code)}</p><p class="meta">PDF SHA-256: ${E(C.pdf_sha256)}</p><a href="/driver-contract/${encodeURIComponent(token)}/pdf">Скачать PDF</a>`;return}root.innerHTML=`<h2>Договор аренды · ${E(C.car_code)}</h2><p class="meta">${E(C.lessor_name)} · ИНН ${E(C.lessor_inn)} · ОГРНИП ${E(C.lessor_ogrnip)}</p><p class="meta">Собственник: ${E(C.owner_name||'—')} ${C.owner_poa?'· доверенность '+E(C.owner_poa):''}</p><p><b>${Number(C.daily_rent||0).toLocaleString('ru-RU')} ₽/сутки</b> · с ${E(C.rental_start_date)}</p><div class="grid">${F.map(([k,l,t])=>`<label class="${['passport_issued_by','registration_address'].includes(k)?'full':''}">${l}<input id="f_${k}" type="${t||'text'}" value="${E(C[k]||'')}"></label>`).join('')}</div><p><button onclick="save()">Сохранить данные</button></p><div id="sign" class="${C.status==='ready'?'':'hidden'}"><hr><h3>Подписание</h3><p>После проверки данных получи SMS-код. Его ввод означает подписание этой версии договора простой электронной подписью.</p><p><a href="/driver-contract/${encodeURIComponent(token)}/preview.pdf" target="_blank">Открыть договор перед подписанием</a></p><button onclick="sendCode()">Получить SMS-код</button><p><input id="otp" inputmode="numeric" maxlength="6" placeholder="6 цифр"><button onclick="signNow()">Подписать</button></p></div><p id="msg"></p>`}async function save(){let b={};F.forEach(([k])=>b[k]=document.getElementById('f_'+k).value);try{await Q('/api/driver-contract/'+encodeURIComponent(token)+'/save',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)});await load();msg.className='ok';msg.textContent='Сохранено. Проверь данные и запроси SMS-код.'}catch(e){msg.className='err';msg.textContent=e.message}}async function sendCode(){try{let d=await Q('/api/driver-contract/'+encodeURIComponent(token)+'/send-code',{method:'POST'});msg.className='ok';msg.textContent=d.message+' Код действует 10 минут.'}catch(e){msg.className='err';msg.textContent=e.message}}async function signNow(){try{await Q('/api/driver-contract/'+encodeURIComponent(token)+'/sign',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({code:otp.value})});await load()}catch(e){msg.className='err';msg.textContent=e.message}}load();</script></body></html>'''
+
+DRIVER_CONTRACT_ADMIN_HTML = r'''<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Создать договор</title><style>body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#f4f3f1}.wrap{max-width:650px;margin:30px auto;background:#fff;padding:22px;border-radius:18px}button{padding:11px 15px;border:0;border-radius:11px;background:#35312d;color:#fff;font-weight:700}input{width:100%;padding:10px;margin:7px 0}</style></head><body><div class="wrap"><h2>Новый договор · {{code}}</h2><p>Водитель: <b>{{driver}}</b></p><p>Собственник: <b>{{owner}}</b>{% if poa %}<br>Доверенность: <b>{{poa}}</b>{% endif %}</p><p>Аренда: <b>{{rent}} ₽/сутки</b></p><label>Дата начала<input id="start" type="date" value="{{today}}"></label><button onclick="go()">Создать ссылку</button><div id="res"></div></div><script>async function go(){let r=await fetch('/api/driver-contract/create',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({car_code:{{code|tojson}},start_date:start.value})}),d=await r.json();if(!r.ok||!d.ok){res.textContent=d.message||'Ошибка';return}res.innerHTML='<p><b>Ссылка для водителя:</b></p><input id="link" value="'+d.driver_url+'" readonly><button onclick="navigator.clipboard.writeText(link.value);this.textContent=\'✓ Скопировано\'">Скопировать</button><p>'+d.contract_id+'</p>'}</script></body></html>'''
 
 
 @bp.route("/api/vehicle-license/<code>/status", methods=["GET"])
