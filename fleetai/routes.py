@@ -124,6 +124,30 @@ def send_telegram_to_chat(chat_id, text):
         return False
 
 
+
+def send_telegram_to_chat_with_keyboard(chat_id, text, inline_keyboard):
+    """Отправка сообщения конкретному водителю с inline-кнопками."""
+    token = (os.getenv("TELEGRAM_BOT_TOKEN") or "").strip()
+    if not token or not str(chat_id or "").strip():
+        return False
+    try:
+        response = requests.post(
+            f"https://api.telegram.org/bot{token}/sendMessage",
+            json={
+                "chat_id": str(chat_id),
+                "text": text,
+                "parse_mode": "HTML",
+                "reply_markup": {"inline_keyboard": inline_keyboard},
+            },
+            timeout=15,
+        )
+        response.raise_for_status()
+        return True
+    except requests.RequestException as error:
+        print(f"Ошибка Telegram с кнопками: {error}")
+        return False
+
+
 def _telegram_bot_username():
     token = (os.getenv("TELEGRAM_BOT_TOKEN") or "").strip()
     if not token:
@@ -7667,6 +7691,110 @@ def api_sms_call_check_call():
     except Exception as e:
         return jsonify({"ok":False,"stage":"code/call","message":f"{type(e).__name__}: {e}"}),503
 
+
+def _contract_for_driver_telegram(session, car):
+    """Возвращает актуальный неподписанный договор или создаёт новый."""
+    _ensure_driver_contract_tables(session)
+    code=normalize_code(car.code)
+    driver=(car.driver or "").strip()
+    existing=session.execute(sql_text("""
+        SELECT * FROM driver_contracts
+        WHERE TRIM(car_code)=:code
+          AND TRIM(driver_name)=:driver
+          AND status IN ('draft','ready')
+        ORDER BY created_at DESC
+        LIMIT 1
+    """),{"code":code,"driver":driver}).mappings().first()
+    if existing:
+        return existing
+
+    owner=_contract_owner(code)
+    now=moscow_now().replace(tzinfo=None)
+    cid="KP-"+now.strftime("%Y%m%d")+"-"+code+"-"+uuid.uuid4().hex[:6].upper()
+    public_token=secrets.token_urlsafe(32)
+    session.execute(sql_text("""
+        INSERT INTO driver_contracts(
+            id,public_token,car_code,status,driver_name,daily_rent,rental_start_date,
+            owner_name,owner_basis,owner_poa,lessor_name,lessor_inn,lessor_ogrnip,
+            created_at,updated_at
+        ) VALUES(
+            :id,:token,:code,'draft',:driver,:rent,:start,
+            :owner,:basis,:poa,:lessor,:inn,:ogrnip,:now,:now
+        )
+    """),{
+        "id":cid,"token":public_token,"code":code,"driver":driver,
+        "rent":int(effective_daily_rent(car) or 0),
+        "start":moscow_now().date().isoformat(),
+        "owner":owner["owner"],"basis":owner["basis"],"poa":owner["poa"],
+        "lessor":(os.getenv("LESSOR_FULL_NAME") or "ИП Лебедкин Эдгар Алексеевич").strip(),
+        "inn":LESSOR_INN,"ogrnip":LESSOR_OGRNIP,"now":now,
+    })
+    session.commit()
+    return _contract_row(session,public_token)
+
+
+def _send_driver_contract_step(session, car, chat_id):
+    row=_contract_for_driver_telegram(session,car)
+    base_url=request.url_root.rstrip("/")
+    contract_url=f"{base_url}/driver-contract?token={row['public_token']}"
+    text=(
+        "🍀 <b>Клевер Парк</b>\n\n"
+        f"Вы привязаны к автомобилю <b>{normalize_code(car.code)}</b>.\n"
+        f"Водитель: <b>{html.escape((car.driver or '').strip())}</b>\n\n"
+        "Следующий шаг — проверьте и подпишите договор аренды. "
+        "После успешного подписания бот отправит подписанный договор и лицензию автомобиля."
+    )
+    return send_telegram_to_chat_with_keyboard(
+        chat_id,text,[[{"text":"📄 Подписать договор","url":contract_url}]]
+    )
+
+
+def _telegram_binding_for_contract(session,row):
+    return session.execute(sql_text("""
+        SELECT telegram_chat_id,driver_name
+        FROM driver_telegram_bindings
+        WHERE TRIM(car_code)=:code
+        ORDER BY linked_at DESC
+        LIMIT 1
+    """),{"code":normalize_code(row["car_code"])}).mappings().first()
+
+
+def _send_signed_contract_and_license(session,row):
+    """После подписи: PDF договора -> лицензия -> личный кабинет."""
+    binding=_telegram_binding_for_contract(session,row)
+    if not binding:
+        return {"sent":False,"reason":"telegram_not_linked"}
+    if (binding.get("driver_name") or "").strip() != (row.get("driver_name") or "").strip():
+        return {"sent":False,"reason":"driver_changed"}
+
+    chat_id=str(binding["telegram_chat_id"])
+    pdf_bytes=bytes(row.get("pdf_data") or b"")
+    if not pdf_bytes:
+        return {"sent":False,"reason":"contract_pdf_missing"}
+
+    contract_sent=send_telegram_document_to_chat(
+        chat_id,pdf_bytes,
+        f"dogovor_{normalize_code(row['car_code'])}_{row['id']}.pdf",
+        f"✅ Договор {row['id']} подписан и сохранён."
+    )
+
+    car=find_car(session,row["car_code"])
+    license_sent=False
+    if car:
+        license_sent=_send_vehicle_license_to_chat(session,car,chat_id)
+
+    base_url=request.url_root.rstrip("/")
+    portal_url=f"{base_url}/driver?code={normalize_code(row['car_code'])}"
+    if license_sent:
+        final_text="✅ Оформление завершено.\n\nДоговор подписан, лицензия автомобиля отправлена. Личный кабинет доступен по кнопке ниже."
+    else:
+        final_text="✅ Договор подписан.\n\nЛицензия автомобиля пока не загружена. После загрузки диспетчером её можно будет получить отдельно."
+    send_telegram_to_chat_with_keyboard(
+        chat_id,final_text,[[{"text":"👤 Открыть личный кабинет","url":portal_url}]]
+    )
+    return {"sent":bool(contract_sent),"contract_sent":bool(contract_sent),"license_sent":bool(license_sent)}
+
+
 @bp.route("/api/driver-contract/create",methods=["POST"])
 def api_driver_contract_create():
     data=request.get_json(silent=True) or {}; code=normalize_code(data.get("car_code") or ""); session=Session()
@@ -7780,7 +7908,14 @@ def api_driver_contract_sign(token):
         signed=_contract_row(session,token);pdf=_contract_pdf(signed,signed=True);ph=hashlib.sha256(pdf).hexdigest()
         session.execute(sql_text("UPDATE driver_contracts SET pdf_data=:pdf,pdf_sha256=:ph WHERE public_token=:t"),{"pdf":pdf,"ph":ph,"t":token})
         session.commit()
-        return jsonify({"ok":True,"message":"Номер телефона подтверждён. Договор подписан","pdf_sha256":ph})
+        signed=_contract_row(session,token)
+        telegram_result=_send_signed_contract_and_license(session,signed)
+        return jsonify({
+            "ok":True,
+            "message":"Номер телефона подтверждён. Договор подписан",
+            "pdf_sha256":ph,
+            "telegram":telegram_result,
+        })
     finally:session.close()
 
 
@@ -8593,8 +8728,15 @@ def api_telegram_webhook():
                     "Привязка устарела. Попросите диспетчера создать новую ссылку.",
                 )
                 return jsonify({"ok": True})
-            send_driver_welcome(chat_id, car)
-            _send_vehicle_license_to_chat(session, car, chat_id)
+            signed_contract=session.execute(sql_text("""
+                SELECT * FROM driver_contracts
+                WHERE TRIM(car_code)=:code AND TRIM(driver_name)=:driver AND status='signed'
+                ORDER BY signed_at DESC LIMIT 1
+            """),{"code":normalize_code(car.code),"driver":(car.driver or "").strip()}).mappings().first()
+            if signed_contract:
+                send_driver_welcome(chat_id, car)
+            else:
+                _send_driver_contract_step(session, car, chat_id)
             return jsonify({"ok": True})
         finally:
             session.close()
@@ -8706,14 +8848,7 @@ def api_telegram_webhook():
         )
         session.commit()
 
-        send_driver_welcome(chat_id, car)
-        license_sent = _send_vehicle_license_to_chat(session, car, chat_id)
-        if not license_sent:
-            send_telegram_to_chat(
-                chat_id,
-                "📄 Лицензия автомобиля пока не загружена. "
-                "После загрузки диспетчером её можно будет получить через бота.",
-            )
+        _send_driver_contract_step(session, car, chat_id)
         return jsonify({"ok": True})
 
     except Exception as error:
