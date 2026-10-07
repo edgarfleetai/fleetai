@@ -7679,7 +7679,7 @@ def api_cron_daily_rent_and_alerts():
 
     try:
         # V15.5 TEST SCOPE: default automation is restricted to car 665.
-        allowed_raw = (os.getenv("AUTO_RENT_CARS") or "665,897").strip()
+        allowed_raw = (os.getenv("AUTO_RENT_CARS") or "665,897,550").strip()
         allowed_codes = {normalize_code(x) for x in allowed_raw.split(",") if normalize_code(x)}
         cars = session.query(Car).all()
 
@@ -8628,6 +8628,117 @@ def api_setup_897():
             "expected_after_first_rent": 44943,
             "auto_rent_default_scope": ["665", "897"],
             "note": "Если AUTO_RENT_CARS задан в Render вручную, добавьте туда 897.",
+        })
+    except Exception as error:
+        session.rollback()
+        return jsonify({"ok": False, "message": f"{type(error).__name__}: {error}"}), 500
+    finally:
+        session.close()
+
+
+@bp.route("/api/setup/550", methods=["POST"])
+def api_setup_550():
+    """
+    One-time, idempotent preparation of car 550 / Расул.
+    Sets wallet to exactly 0 ₽ at setup time and starts daily rent
+    from 2026-10-08 (V7_START marker dated 2026-10-07).
+    Protected by the existing CRON_SECRET.
+    """
+    secret = (os.getenv("CRON_SECRET") or "").strip()
+    received = (
+        request.headers.get("X-Admin-Secret")
+        or request.args.get("secret")
+        or ""
+    ).strip()
+    if not secret:
+        return jsonify({"ok": False, "message": "CRON_SECRET не настроен"}), 503
+    if received != secret:
+        return jsonify({"ok": False, "message": "Нет доступа"}), 403
+
+    session = Session()
+    marker = "SETUP_550_2026-10-07"
+    try:
+        car = find_car(session, "550")
+        if not car:
+            return jsonify({"ok": False, "message": "Машина 550 не найдена"}), 404
+
+        existing = (
+            session.query(DriverWalletTransaction)
+            .filter(
+                func.trim(DriverWalletTransaction.car_code) == normalize_code(car.code),
+                DriverWalletTransaction.comment == marker,
+            )
+            .first()
+        )
+        if existing:
+            balance = int(
+                session.query(func.coalesce(func.sum(DriverWalletTransaction.amount), 0))
+                .filter(func.trim(DriverWalletTransaction.car_code) == normalize_code(car.code))
+                .scalar() or 0
+            )
+            return jsonify({
+                "ok": True,
+                "already_applied": True,
+                "car_code": normalize_code(car.code),
+                "driver": car.driver or "",
+                "daily_rent": int(effective_daily_rent(car) or 0),
+                "balance": balance,
+                "rent_start": "2026-10-08",
+            })
+
+        car.driver = "Расул"
+        car.daily_rent = 2000
+        car.weekly_payment = 2000 * 7
+
+        current_balance = int(
+            session.query(func.coalesce(func.sum(DriverWalletTransaction.amount), 0))
+            .filter(func.trim(DriverWalletTransaction.car_code) == normalize_code(car.code))
+            .scalar() or 0
+        )
+        adjustment = 0 - current_balance
+        now = moscow_now().replace(tzinfo=None)
+
+        # Bring the wallet to exactly 0 ₽ for the new rental period.
+        session.add(DriverWalletTransaction(
+            driver_name="Расул",
+            car_code=car.code,
+            amount=adjustment,
+            transaction_type="opening_balance",
+            source="system_setup",
+            comment=marker,
+            date=now,
+        ))
+
+        # New rent period: first charge will be for 2026-10-08.
+        session.add(DriverWalletTransaction(
+            driver_name="Расул",
+            car_code=car.code,
+            amount=0,
+            transaction_type="daily_rent",
+            source="system",
+            comment="V7_START:2026-10-07",
+            date=datetime(2026, 10, 7, 12, 0, 0),
+        ))
+
+        session.commit()
+
+        balance = int(
+            session.query(func.coalesce(func.sum(DriverWalletTransaction.amount), 0))
+            .filter(func.trim(DriverWalletTransaction.car_code) == normalize_code(car.code))
+            .scalar() or 0
+        )
+        return jsonify({
+            "ok": True,
+            "already_applied": False,
+            "car_code": "550",
+            "driver": "Расул",
+            "daily_rent": 2000,
+            "balance": balance,
+            "adjustment_created": adjustment,
+            "rent_start": "2026-10-08",
+            "expected_after_first_rent": -2000,
+            "auto_rent_default_scope": ["665", "897", "550"],
+            "note": "Если AUTO_RENT_CARS задан в Render вручную, добавьте туда 550.",
         })
     except Exception as error:
         session.rollback()
