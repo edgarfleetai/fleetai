@@ -233,45 +233,23 @@ def send_telegram_document_to_chat(chat_id, file_bytes, filename, caption=""):
 
 
 def send_driver_welcome(chat_id, car):
-    """Приветствие + кнопка личного кабинета."""
+    """Приветствие + рабочие кнопки водителя."""
     base_url = request.url_root.rstrip("/")
     code = normalize_code(car.code)
-    token = (os.getenv("TELEGRAM_BOT_TOKEN") or "").strip()
-    if not token:
-        return False
     text_value = (
         "🍀 <b>Добро пожаловать в Клевер Парк</b>\n\n"
         f"Вы закреплены за автомобилем <b>{code}</b>.\n"
-        f"Водитель: <b>{(car.driver or '').strip()}</b>\n\n"
+        f"Водитель: <b>{html.escape((car.driver or '').strip())}</b>\n\n"
         "В личном кабинете можно посмотреть баланс, аренду, "
-        "пополнения, штрафы и списания.\n\n"
-        "Следите за балансом — сюда также будут приходить "
-        "уведомления при его снижении."
+        "пополнения, штрафы и списания."
     )
-    try:
-        response = requests.post(
-            f"https://api.telegram.org/bot{token}/sendMessage",
-            json={
-                "chat_id": str(chat_id),
-                "text": text_value,
-                "parse_mode": "HTML",
-                "reply_markup": {
-                    "inline_keyboard": [[
-                        {
-                            "text": "👤 Открыть личный кабинет",
-                            "url": f"{base_url}/driver?code={code}",
-                        }
-                    ]]
-                },
-            },
-            timeout=15,
-        )
-        response.raise_for_status()
-        return True
-    except requests.RequestException as error:
-        print(f"Ошибка приветствия водителю: {error}")
-        return False
-
+    return send_telegram_to_chat_with_keyboard(
+        chat_id, text_value,
+        [
+            [{"text": "👤 Личный кабинет", "url": f"{base_url}/driver?code={code}"}],
+            [{"text": "📄 Получить лицензию", "callback_data": f"license:{code}"}],
+        ],
+    )
 
 def _ensure_vehicle_documents_table(session):
     session.execute(sql_text("""
@@ -8742,6 +8720,53 @@ def api_telegram_webhook():
             return jsonify({"ok": False}), 403
 
     update = request.get_json(silent=True) or {}
+
+    # Inline-кнопка «Получить лицензию».
+    callback = update.get("callback_query") or {}
+    if callback:
+        callback_id = str(callback.get("id") or "").strip()
+        callback_data = str(callback.get("data") or "").strip()
+        callback_message = callback.get("message") or {}
+        callback_chat_id = str((callback_message.get("chat") or {}).get("id") or "").strip()
+
+        if callback_data.startswith("license:") and callback_chat_id:
+            requested_code = normalize_code(callback_data.split(":", 1)[1])
+            session = Session()
+            ok = False
+            answer = "Не удалось выдать лицензию"
+            try:
+                binding = session.execute(sql_text("""
+                    SELECT car_code, driver_name
+                    FROM driver_telegram_bindings
+                    WHERE telegram_chat_id = :chat_id
+                    ORDER BY linked_at DESC
+                    LIMIT 1
+                """), {"chat_id": callback_chat_id}).mappings().first()
+
+                if not binding or normalize_code(binding["car_code"]) != requested_code:
+                    answer = "Эта машина не привязана к вашему Telegram"
+                else:
+                    car = find_car(session, requested_code)
+                    if not car or (binding.get("driver_name") or "").strip() != (car.driver or "").strip():
+                        answer = "Привязка водителя устарела"
+                    else:
+                        ok = _send_vehicle_license_to_chat(session, car, callback_chat_id)
+                        answer = "Лицензия отправлена" if ok else "Лицензия для этой машины пока не загружена"
+            finally:
+                session.close()
+
+            token = (os.getenv("TELEGRAM_BOT_TOKEN") or "").strip()
+            if token and callback_id:
+                try:
+                    requests.post(
+                        f"https://api.telegram.org/bot{token}/answerCallbackQuery",
+                        json={"callback_query_id": callback_id, "text": answer, "show_alert": not ok},
+                        timeout=15,
+                    )
+                except requests.RequestException:
+                    pass
+            return jsonify({"ok": True, "license_sent": bool(ok)})
+
     message = update.get("message") or {}
     text_value = str(message.get("text") or "").strip()
     chat = message.get("chat") or {}
