@@ -7565,6 +7565,22 @@ FLEET_CONTRACT_VEHICLES = {
         "car_year": "2019",
         "car_sts": "99 92 485169",
     },
+    "119": {
+        "car_make": "KIA",
+        "car_model": "RIO",
+        "car_plate": "В119ЕН716",
+        "car_vin": "Z94C241AAKR095784",
+        "car_year": "2018",
+        "car_sts": "99 88 430043",
+    },
+    "404": {
+        "car_make": "HYUNDAI",
+        "car_model": "SOLARIS",
+        "car_plate": "Н404ЕК716",
+        "car_vin": "Z94K241BAJR052647",
+        "car_year": "2017",
+        "car_sts": "99 88 430878",
+    },
 }
 
 def _contract_vehicle(code):
