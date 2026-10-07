@@ -7520,6 +7520,23 @@ FLEET_CONTRACT_OWNERS = {
 LESSOR_INN = "165052451205"
 LESSOR_OGRNIP = "326169000013491"
 
+
+# V15.35 — реквизиты машины для автоматического заполнения договора.
+FLEET_CONTRACT_VEHICLES = {
+    "665": {
+        "car_make": "Kia",
+        "car_model": "Rio",
+        "car_plate": "С665ХК716",
+        "car_vin": "Z94C341BBLR184307",
+        "car_year": "2020",
+        "car_sts": "99 87 971581",
+    },
+}
+
+def _contract_vehicle(code):
+    return dict(FLEET_CONTRACT_VEHICLES.get(normalize_code(code), {}))
+
+
 def _contract_owner(code):
     owner, basis, poa = FLEET_CONTRACT_OWNERS.get(normalize_code(code), ("", "Не указано", ""))
     return {"owner": owner, "basis": basis, "poa": poa}
@@ -7709,6 +7726,7 @@ def _contract_for_driver_telegram(session, car):
         return existing
 
     owner=_contract_owner(code)
+    vehicle=_contract_vehicle(code)
     now=moscow_now().replace(tzinfo=None)
     cid="KP-"+now.strftime("%Y%m%d")+"-"+code+"-"+uuid.uuid4().hex[:6].upper()
     public_token=secrets.token_urlsafe(32)
@@ -7716,10 +7734,13 @@ def _contract_for_driver_telegram(session, car):
         INSERT INTO driver_contracts(
             id,public_token,car_code,status,driver_name,daily_rent,rental_start_date,
             owner_name,owner_basis,owner_poa,lessor_name,lessor_inn,lessor_ogrnip,
+            car_make,car_model,car_plate,car_vin,car_year,car_sts,
             created_at,updated_at
         ) VALUES(
             :id,:token,:code,'draft',:driver,:rent,:start,
-            :owner,:basis,:poa,:lessor,:inn,:ogrnip,:now,:now
+            :owner,:basis,:poa,:lessor,:inn,:ogrnip,
+            :car_make,:car_model,:car_plate,:car_vin,:car_year,:car_sts,
+            :now,:now
         )
     """),{
         "id":cid,"token":public_token,"code":code,"driver":driver,
@@ -7727,7 +7748,14 @@ def _contract_for_driver_telegram(session, car):
         "start":moscow_now().date().isoformat(),
         "owner":owner["owner"],"basis":owner["basis"],"poa":owner["poa"],
         "lessor":(os.getenv("LESSOR_FULL_NAME") or "ИП Лебедкин Эдгар Алексеевич").strip(),
-        "inn":LESSOR_INN,"ogrnip":LESSOR_OGRNIP,"now":now,
+        "inn":LESSOR_INN,"ogrnip":LESSOR_OGRNIP,
+        "car_make":vehicle.get("car_make",""),
+        "car_model":vehicle.get("car_model",""),
+        "car_plate":vehicle.get("car_plate",""),
+        "car_vin":vehicle.get("car_vin",""),
+        "car_year":vehicle.get("car_year",""),
+        "car_sts":vehicle.get("car_sts",""),
+        "now":now,
     })
     session.commit()
     return _contract_row(session,public_token)
@@ -7801,8 +7829,8 @@ def api_driver_contract_create():
     try:
         car=find_car(session,code)
         if not car:return jsonify({"ok":False,"message":"Машина не найдена"}),404
-        _ensure_driver_contract_tables(session); owner=_contract_owner(code); now=moscow_now().replace(tzinfo=None); cid="KP-"+now.strftime("%Y%m%d")+"-"+code+"-"+uuid.uuid4().hex[:6].upper(); token=secrets.token_urlsafe(32)
-        session.execute(sql_text("""INSERT INTO driver_contracts(id,public_token,car_code,status,driver_name,daily_rent,rental_start_date,owner_name,owner_basis,owner_poa,lessor_name,lessor_inn,lessor_ogrnip,created_at,updated_at) VALUES(:id,:token,:code,'draft',:driver,:rent,:start,:owner,:basis,:poa,:lessor,:inn,:ogrnip,:now,:now)"""),{"id":cid,"token":token,"code":code,"driver":(car.driver or "").strip(),"rent":int(effective_daily_rent(car) or 0),"start":str(data.get("start_date") or moscow_now().date().isoformat()),"owner":owner["owner"],"basis":owner["basis"],"poa":owner["poa"],"lessor":(os.getenv("LESSOR_FULL_NAME") or "ИП Лебедкин Эдгар Алексеевич").strip(),"inn":LESSOR_INN,"ogrnip":LESSOR_OGRNIP,"now":now}); session.commit()
+        _ensure_driver_contract_tables(session); owner=_contract_owner(code); vehicle=_contract_vehicle(code); now=moscow_now().replace(tzinfo=None); cid="KP-"+now.strftime("%Y%m%d")+"-"+code+"-"+uuid.uuid4().hex[:6].upper(); token=secrets.token_urlsafe(32)
+        session.execute(sql_text("""INSERT INTO driver_contracts(id,public_token,car_code,status,driver_name,daily_rent,rental_start_date,owner_name,owner_basis,owner_poa,lessor_name,lessor_inn,lessor_ogrnip,car_make,car_model,car_plate,car_vin,car_year,car_sts,created_at,updated_at) VALUES(:id,:token,:code,'draft',:driver,:rent,:start,:owner,:basis,:poa,:lessor,:inn,:ogrnip,:car_make,:car_model,:car_plate,:car_vin,:car_year,:car_sts,:now,:now)"""),{"id":cid,"token":token,"code":code,"driver":(car.driver or "").strip(),"rent":int(effective_daily_rent(car) or 0),"start":str(data.get("start_date") or moscow_now().date().isoformat()),"owner":owner["owner"],"basis":owner["basis"],"poa":owner["poa"],"lessor":(os.getenv("LESSOR_FULL_NAME") or "ИП Лебедкин Эдгар Алексеевич").strip(),"inn":LESSOR_INN,"ogrnip":LESSOR_OGRNIP,"car_make":vehicle.get("car_make",""),"car_model":vehicle.get("car_model",""),"car_plate":vehicle.get("car_plate",""),"car_vin":vehicle.get("car_vin",""),"car_year":vehicle.get("car_year",""),"car_sts":vehicle.get("car_sts",""),"now":now}); session.commit()
         return jsonify({"ok":True,"contract_id":cid,"driver_url":request.url_root.rstrip("/")+"/driver-contract?token="+token})
     finally: session.close()
 
@@ -7812,6 +7840,18 @@ def api_driver_contract_get(token):
     try:
         row=_contract_row(session,token)
         if not row:return jsonify({"ok":False,"message":"Договор не найден"}),404
+        # V15.35: исправляем и уже созданные черновики, где реквизиты машины пустые.
+        if row["status"]!="signed":
+            vehicle=_contract_vehicle(row["car_code"])
+            missing={k:v for k,v in vehicle.items() if v and not str(row.get(k) or "").strip()}
+            if missing:
+                params={**missing,"t":token,"now":moscow_now().replace(tzinfo=None)}
+                sets=", ".join(f"{k}=:{k}" for k in missing)
+                session.execute(sql_text(
+                    f"UPDATE driver_contracts SET {sets},updated_at=:now WHERE public_token=:t"
+                ),params)
+                session.commit()
+                row=_contract_row(session,token)
         safe={k:v for k,v in dict(row).items() if k not in ("pdf_data","otp_hash")}
         for k,v in list(safe.items()):
             if isinstance(v,datetime):safe[k]=v.isoformat()
