@@ -7580,6 +7580,93 @@ def _send_contract_call_code(phone, user_ip):
     except Exception as e:
         return False,"","",f"{type(e).__name__}: {e}"
 
+
+@bp.route("/sms-call-check")
+def sms_call_check_page():
+    """Диагностика SMS.ru без раскрытия API ID. Сам звонок запускается только POST-кнопкой."""
+    return render_template_string(r"""<!doctype html>
+<html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>SMS.ru · диагностика звонка</title>
+<style>
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#f4f3f1;color:#1f1d1a;margin:0}
+.wrap{max-width:760px;margin:30px auto;padding:18px}.card{background:#fff;border:1px solid #e6e2de;border-radius:18px;padding:20px}
+input,button{padding:11px;border-radius:10px;font-size:15px}input{width:100%;border:1px solid #d7d1cb;box-sizing:border-box}
+button{border:0;background:#35312d;color:#fff;font-weight:700;cursor:pointer;margin-top:10px}
+pre{white-space:pre-wrap;word-break:break-word;background:#f6f6f6;padding:14px;border-radius:12px}.muted{color:#6f6a64;font-size:13px}
+</style></head><body><div class="wrap"><div class="card">
+<h2>SMS.ru · диагностика звонка</h2>
+<p class="muted">API ID на странице не отображается. Введи номер для теста в формате 79991234567.</p>
+<input id="phone" inputmode="tel" placeholder="79991234567">
+<button onclick="checkAuth()">1. Проверить API ID</button>
+<button onclick="callTest()">2. Сделать тестовый звонок</button>
+<pre id="out">Готово к проверке.</pre>
+</div></div><script>
+async function run(url, body){
+  out.textContent='Запрос...';
+  try{
+    const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body||{})});
+    const d=await r.json(); out.textContent=JSON.stringify(d,null,2);
+  }catch(e){out.textContent='Ошибка: '+e.message}
+}
+function checkAuth(){run('/api/sms-call-check/auth',{})}
+function callTest(){run('/api/sms-call-check/call',{phone:phone.value})}
+</script></body></html>""")
+
+
+@bp.route("/api/sms-call-check/auth", methods=["POST"])
+def api_sms_call_check_auth():
+    api_id=(os.getenv("SMSRU_API_ID") or "").strip()
+    if not api_id:
+        return jsonify({"ok":False,"stage":"config","message":"SMSRU_API_ID не настроен"}),503
+    try:
+        r=requests.post("https://sms.ru/auth/check",data={"api_id":api_id,"json":1},timeout=20)
+        r.raise_for_status()
+        data=r.json()
+        # API ID намеренно никогда не возвращаем в браузер.
+        return jsonify({
+            "ok": data.get("status")=="OK",
+            "stage":"auth/check",
+            "http_status":r.status_code,
+            "status":data.get("status"),
+            "status_code":data.get("status_code"),
+            "status_text":data.get("status_text"),
+        })
+    except Exception as e:
+        return jsonify({"ok":False,"stage":"auth/check","message":f"{type(e).__name__}: {e}"}),503
+
+
+@bp.route("/api/sms-call-check/call", methods=["POST"])
+def api_sms_call_check_call():
+    api_id=(os.getenv("SMSRU_API_ID") or "").strip()
+    if not api_id:
+        return jsonify({"ok":False,"stage":"config","message":"SMSRU_API_ID не настроен"}),503
+    body=request.get_json(silent=True) or {}
+    phone=_contract_phone(body.get("phone") or "")
+    if not phone:
+        return jsonify({"ok":False,"stage":"validation","message":"Укажи корректный номер телефона"}),400
+    forwarded=(request.headers.get("X-Forwarded-For") or "").split(",")[0].strip()
+    user_ip=forwarded or request.remote_addr or "-1"
+    try:
+        r=requests.post("https://sms.ru/code/call",data={"api_id":api_id,"phone":phone,"ip":user_ip},timeout=20)
+        r.raise_for_status()
+        data=r.json()
+        # Код не выводим: для реального теста его надо определить по номеру входящего звонка.
+        return jsonify({
+            "ok":data.get("status")=="OK",
+            "stage":"code/call",
+            "http_status":r.status_code,
+            "phone_masked":("*"*max(len(phone)-4,0))+phone[-4:],
+            "status":data.get("status"),
+            "status_code":data.get("status_code"),
+            "status_text":data.get("status_text"),
+            "call_id":data.get("call_id"),
+            "cost":data.get("cost"),
+            "balance":data.get("balance"),
+            "code_received_from_api":bool(data.get("code")),
+        })
+    except Exception as e:
+        return jsonify({"ok":False,"stage":"code/call","message":f"{type(e).__name__}: {e}"}),503
+
 @bp.route("/api/driver-contract/create",methods=["POST"])
 def api_driver_contract_create():
     data=request.get_json(silent=True) or {}; code=normalize_code(data.get("car_code") or ""); session=Session()
