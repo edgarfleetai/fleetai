@@ -3363,6 +3363,12 @@ function renderDriverPayments(carsList){
               >
                 📄 Лицензия
               </button>
+              <button
+                class="secondary"
+                onclick="window.open('/driver-contract-admin?code=${encodeURIComponent(car.code)}','_blank')"
+              >
+                📝 Договор
+              </button>
               ${
                 Number(calc.overdue_periods_count||0)>0
                   ? '<span class="raw">Закрой недели по очереди</span>'
