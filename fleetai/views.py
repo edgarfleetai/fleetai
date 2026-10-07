@@ -3198,6 +3198,31 @@ function overduePeriodsHtml(carCode,calc){
   `;
 }
 
+
+function chooseVehicleLicense(code){
+  const input=document.createElement('input');
+  input.type='file';
+  input.accept='application/pdf,.pdf';
+  input.onchange=async()=>{
+    const file=input.files && input.files[0];
+    if(!file)return;
+    const form=new FormData();
+    form.append('file',file);
+    try{
+      const response=await fetch('/api/vehicle-license/'+encodeURIComponent(code),{
+        method:'POST',
+        body:form
+      });
+      const result=await response.json();
+      if(!response.ok || !result.ok)throw new Error(result.message||'Ошибка загрузки');
+      alert(result.message+'\\nТеперь бот автоматически выдаст её водителю этой машины.');
+    }catch(error){
+      alert('Не удалось загрузить лицензию: '+error.message);
+    }
+  };
+  input.click();
+}
+
 function renderDriverPayments(carsList){
   const configured=carsList.filter(
     car=>
@@ -3331,6 +3356,12 @@ function renderDriverPayments(carsList){
                 onclick="openDriverAssignment('${String(car.code).replace(/'/g,"\'")}')"
               >
                 Сменить водителя
+              </button>
+              <button
+                class="secondary"
+                onclick="chooseVehicleLicense('${String(car.code).replace(/'/g,"\'")}')"
+              >
+                📄 Лицензия
               </button>
               ${
                 Number(calc.overdue_periods_count||0)>0
