@@ -22,3 +22,7 @@ jobs:
         env:
           DATABASE_URL: 'sqlite://'
         run: python -m unittest discover -s tests -p 'test_admin*.py' -v
+      - name: Run all unit tests with isolated SQLite
+        env:
+          DATABASE_URL: 'sqlite://'
+        run: python -m unittest discover -s tests -p 'test_*.py' -v
