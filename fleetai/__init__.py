@@ -1,6 +1,7 @@
 import os
 from datetime import timedelta
 from urllib.parse import urlsplit
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 from flask import Flask, request, jsonify, session, redirect, render_template_string, url_for
 from .db import init_db
@@ -25,6 +26,10 @@ LOGIN_HTML = """
 
 def create_app():
     app = Flask(__name__)
+    # Trust forwarded scheme only when explicitly enabled for a known single proxy.
+    # Never enable this for a directly exposed application server.
+    if os.getenv("FLEETAI_TRUST_PROXY") == "1":
+        app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1, x_for=0, x_host=0, x_port=0, x_prefix=0)
     app.secret_key = os.getenv("FLASK_SECRET_KEY") or os.urandom(32)
     app.config.update(
         SESSION_COOKIE_HTTPONLY=True,
@@ -77,7 +82,7 @@ def create_app():
             if not source:
                 return jsonify({"ok": False, "message": "Отсутствует источник запроса"}), 403
             source_url = urlsplit(source)
-            if source_url.scheme != request.scheme or source_url.netloc != request.host:
+            if (source_url.scheme, source_url.netloc) != (request.scheme, request.host):
                 return jsonify({"ok": False, "message": "Недопустимый источник запроса"}), 403
         return None
 
