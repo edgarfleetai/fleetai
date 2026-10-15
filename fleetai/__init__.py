@@ -43,6 +43,11 @@ def create_app():
     def admin_login():
         if request.method == "GET":
             return render_template_string(LOGIN_HTML, error=None)
+        login_source = request.headers.get("Origin") or request.headers.get("Referer")
+        if login_source:
+            source_url = urlsplit(login_source)
+            if (source_url.scheme, source_url.netloc) != (request.scheme, request.host):
+                return render_template_string(LOGIN_HTML, error="Недопустимый источник запроса"), 403
         if not os.getenv("FLASK_SECRET_KEY") or not os.getenv("FLEETAI_ADMIN_PASSWORD_HASH"):
             return render_template_string(LOGIN_HTML, error="Вход не настроен на сервере"), 503
         client_ip = request.remote_addr or "unknown"
