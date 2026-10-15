@@ -86,5 +86,15 @@ def create_app():
                 return jsonify({"ok": False, "message": "Недопустимый источник запроса"}), 403
         return None
 
+    @app.after_request
+    def protect_admin_responses(response):
+        rule = request.url_rule.rule if request.url_rule else request.path
+        if rule.startswith("/admin/") or requires_owner(rule, request.method):
+            response.headers["Cache-Control"] = "no-store"
+            response.headers["X-Content-Type-Options"] = "nosniff"
+            response.headers["X-Frame-Options"] = "DENY"
+            response.headers["Referrer-Policy"] = "same-origin"
+        return response
+
     app.register_blueprint(bp)
     return app
