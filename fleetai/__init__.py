@@ -1,4 +1,5 @@
 import os
+import secrets
 from datetime import timedelta
 from urllib.parse import urlsplit
 from werkzeug.middleware.proxy_fix import ProxyFix
@@ -39,6 +40,16 @@ def create_app():
     )
     init_db()
 
+    @app.route("/api/admin/csrf-token", methods=["GET"])
+    def admin_csrf_token():
+        if not is_admin():
+            return jsonify({"ok": False, "message": "Требуется вход администратора"}), 401
+        token = session.get("fleetai_csrf_token")
+        if not token:
+            token = secrets.token_urlsafe(32)
+            session["fleetai_csrf_token"] = token
+        return jsonify({"ok": True, "csrf_token": token})
+
     @app.route("/admin/login", methods=["GET", "POST"])
     def admin_login():
         if request.method == "GET":
@@ -59,6 +70,7 @@ def create_app():
         clear_login_failures(client_ip)
         session.clear()
         session["fleetai_admin"] = True
+        session["fleetai_csrf_token"] = secrets.token_urlsafe(32)
         session.permanent = True
         return redirect("/")
 
@@ -89,6 +101,11 @@ def create_app():
                 return redirect(url_for("admin_login"))
             return jsonify({"ok": False, "message": "Требуется вход администратора"}), 401
         if request.method in ("POST", "PUT", "PATCH", "DELETE"):
+            if os.getenv("FLEETAI_REQUIRE_CSRF_TOKEN") == "1":
+                expected = session.get("fleetai_csrf_token", "")
+                supplied = request.headers.get("X-FleetAI-CSRF-Token", "")
+                if not expected or not supplied or not secrets.compare_digest(expected, supplied):
+                    return jsonify({"ok": False, "message": "Неверный CSRF-токен"}), 403
             # Browser Fetch Metadata offers defense-in-depth even when Origin is absent.
             # Do not trust it as a substitute for a session-bound CSRF token.
             fetch_site = request.headers.get("Sec-Fetch-Site", "").lower()
