@@ -7,6 +7,7 @@ from .db import init_db
 from .routes import bp
 from .admin_auth import verify_admin_password, is_admin
 from .login_limiter import login_blocked, record_login_failure, clear_login_failures
+from .admin_policy import requires_owner, DANGEROUS_WIALON_COMMAND
 
 
 LOGIN_HTML = """
@@ -57,19 +58,21 @@ def create_app():
         return redirect(url_for("admin_login"))
 
     @app.before_request
-    def protect_dispatcher_wallet():
-        protected = {
-            ("/driver-topup", "GET"),
-            ("/api/driver-wallet/cars", "GET"),
-            ("/api/driver-wallet/topup", "POST"),
-        }
-        if (request.path, request.method) not in protected:
+    def protect_sensitive_routes():
+        rule = request.url_rule.rule if request.url_rule else request.path
+        # A text confirmation cannot establish engine-off safety.
+        # Never dispatch a remote engine-block command from this endpoint.
+        if rule == DANGEROUS_WIALON_COMMAND and request.method == "POST":
+            data = request.get_json(silent=True) or {}
+            if data.get("action", "").strip().lower() == "block":
+                return jsonify({"ok": False, "message": "Удалённая блокировка отключена до аппаратной проверки безопасности"}), 403
+        if not requires_owner(rule, request.method):
             return None
         if not is_admin():
-            if request.path == "/driver-topup":
+            if not rule.startswith("/api/"):
                 return redirect(url_for("admin_login"))
             return jsonify({"ok": False, "message": "Требуется вход администратора"}), 401
-        if request.method == "POST":
+        if request.method in ("POST", "PUT", "PATCH", "DELETE"):
             source = request.headers.get("Origin") or request.headers.get("Referer")
             if not source:
                 return jsonify({"ok": False, "message": "Отсутствует источник запроса"}), 403
