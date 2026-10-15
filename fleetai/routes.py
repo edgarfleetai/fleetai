@@ -2901,6 +2901,29 @@ def index():
     return render_template_string(page)
 
 
+
+
+def _owner_csrf_html(page):
+    """Install CSRF headers for same-origin fetch mutations in owner-only pages."""
+    script = """<script>
+(() => {
+  const nativeFetch = window.fetch.bind(window);
+  let csrfPromise;
+  window.fetch = async (input, init = {}) => {
+    const url = new URL(typeof input === 'string' ? input : input.url, location.href);
+    const method = (init.method || (typeof input === 'string' ? 'GET' : input.method) || 'GET').toUpperCase();
+    if (url.origin !== location.origin || !['POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) return nativeFetch(input, init);
+    if (!csrfPromise) csrfPromise = nativeFetch('/api/admin/csrf-token', {credentials: 'same-origin'}).then(r => r.ok ? r.json() : null).then(d => d && d.csrf_token);
+    const token = await csrfPromise;
+    if (!token) return nativeFetch(input, init);
+    const headers = new Headers(init.headers || (typeof input === 'string' ? undefined : input.headers));
+    headers.set('X-FleetAI-CSRF-Token', token);
+    return nativeFetch(input, {...init, headers});
+  };
+})();
+</script>"""
+    return page.replace("</head>", script + "</head>", 1)
+
 @bp.route("/driver-debts-admin")
 def driver_debts_admin():
     html = r"""<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Клевер Парк — долги водителей</title><style>
@@ -8345,7 +8368,7 @@ function escapeHtml(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;',
 function escapeAttr(v){return escapeHtml(v);}
 loadCars();
 </script></body></html>"""
-    return render_template_string(html)
+    return render_template_string(_owner_csrf_html(html))
 
 
 @bp.route("/api/driver-telegram/link", methods=["POST"])
