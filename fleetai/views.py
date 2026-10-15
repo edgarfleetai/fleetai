@@ -2283,6 +2283,32 @@ body > *{
 </div>
 
 <script>
+// Attach a session-bound CSRF token to same-origin state-changing requests.
+// The native fetch is retained to avoid recursively fetching the token.
+(() => {
+  const nativeFetch = window.fetch.bind(window);
+  let tokenPromise;
+  window.fetch = async (input, init = {}) => {
+    const url = new URL(typeof input === 'string' ? input : input.url, location.href);
+    const method = (init.method || (typeof input === 'string' ? 'GET' : input.method) || 'GET').toUpperCase();
+    if (url.origin !== location.origin || !['POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) {
+      return nativeFetch(input, init);
+    }
+    if (!tokenPromise) {
+      tokenPromise = nativeFetch('/api/admin/csrf-token', {credentials: 'same-origin'})
+        .then(r => r.ok ? r.json() : null)
+        .then(data => data && data.csrf_token)
+        .catch(() => null);
+    }
+    const token = await tokenPromise;
+    if (!token) return nativeFetch(input, init);
+    const headers = new Headers(init.headers || (typeof input === 'string' ? undefined : input.headers));
+    headers.set('X-FleetAI-CSRF-Token', token);
+    return nativeFetch(input, {...init, headers});
+  };
+})();
+</script>
+<script>
 
 function showAppPage(page,button){
   const pages=document.querySelectorAll('.app-page');
