@@ -4,6 +4,23 @@ Public driver links, bank callbacks and secret-protected cron routes are
 deliberately excluded. Keep this allowlist explicit and review new routes.
 """
 ADMIN_WRITE_RULES = frozenset({
+    "/api/add",
+    "/api/close-period/<code>",
+    "/api/reopen-period/<code>",
+    "/api/fix-investor-data",
+    "/api/warehouse/add-item",
+    "/api/warehouse/restock",
+    "/api/warehouse/adjust",
+    "/api/warehouse/write-off",
+    "/api/warehouse/update-item",
+    "/api/warehouse/delete-item/<int:item_id>",
+    "/api/rebuild-calculations",
+    "/api/repair-downtime-statuses",
+    "/api/vehicle-license/<code>",
+    "/api/telegram/setup-webhook-ui",
+    "/api/telegram/setup-webhook",
+    "/api/setup/897",
+    "/api/setup/550",
     "/api/driver-wallet/topup",
     "/api/driver-wallet/fine",
     "/api/driver-debt-from-car",
