@@ -7428,7 +7428,7 @@ def api_driver_wallet_topup():
 
 @bp.route("/driver-topup")
 def driver_topup_page():
-    return render_template_string("""
+    return render_template_string(_owner_csrf_html("""
 <!doctype html>
 <html lang="ru">
 <head>
@@ -7531,7 +7531,7 @@ loadCars();
 </script>
 </body>
 </html>
-""")
+"""))
 
 
 
