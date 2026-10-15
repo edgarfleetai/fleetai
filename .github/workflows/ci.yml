@@ -1,0 +1,31 @@
+name: FleetAI checks
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [development]
+
+jobs:
+  python-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Check Python syntax
+        run: python -m compileall -q app.py fleetai db.py models.py finance.py migrations.py parser.py tbank.py utils.py
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Import check without production database
+        env:
+          DATABASE_URL: ''
+        run: |
+          python - <<'PY'
+          import ast
+          from pathlib import Path
+          for path in [Path('app.py'), *Path('fleetai').rglob('*.py')]:
+              ast.parse(path.read_text(encoding='utf-8'), filename=str(path))
+          print('Syntax checks passed; production app was not started')
+          PY
