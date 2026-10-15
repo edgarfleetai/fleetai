@@ -19,7 +19,9 @@ class AdminPolicyCoverageTests(unittest.TestCase):
         from fleetai import create_app
         with patch("fleetai.init_db"):
             app = create_app()
-        methods = {rule.rule: rule.methods for rule in app.url_map.iter_rules()}
+        methods = {}
+        for route in app.url_map.iter_rules():
+            methods.setdefault(route.rule, set()).update(route.methods)
         for rule in ADMIN_WRITE_RULES:
             with self.subTest(rule=rule):
                 self.assertTrue(
