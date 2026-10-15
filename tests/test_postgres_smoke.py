@@ -15,8 +15,8 @@ class PostgresSmokeTests(unittest.TestCase):
             self.skipTest("PostgreSQL connection required")
         self.assertEqual(url.database, "fleetai_test")
         with engine.connect() as conn:
-            self.assertEqual(conn.execute(text("SELECT 1")).scalar_one(), 1)
             transaction = conn.begin()
+            self.assertEqual(conn.execute(text("SELECT 1")).scalar_one(), 1)
             try:
                 conn.execute(text("CREATE TEMP TABLE fleetai_smoke (value INTEGER) ON COMMIT DROP"))
                 conn.execute(text("INSERT INTO fleetai_smoke (value) VALUES (42)"))
