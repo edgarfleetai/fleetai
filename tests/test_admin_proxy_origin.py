@@ -12,7 +12,7 @@ class AdminProxyOriginTests(unittest.TestCase):
                 app = create_app()
         app.config["SESSION_COOKIE_SECURE"] = False  # test client uses HTTP transport
         client = app.test_client()
-        with client.session_transaction() as session:
+        with client.session_transaction(base_url="http://fleetai-1.onrender.com") as session:
             session["fleetai_admin"] = True
         return client
 
@@ -23,7 +23,7 @@ class AdminProxyOriginTests(unittest.TestCase):
             json={},
             headers={"Origin": "https://fleetai-1.onrender.com",
                      "X-Forwarded-Proto": "https"},
-            environ_overrides={"HTTP_HOST": "fleetai-1.onrender.com"},
+            base_url="http://fleetai-1.onrender.com",
         )
         self.assertNotIn(response.status_code, (401, 403))
 
@@ -34,7 +34,7 @@ class AdminProxyOriginTests(unittest.TestCase):
             json={},
             headers={"Origin": "https://fleetai-1.onrender.com",
                      "X-Forwarded-Proto": "https"},
-            environ_overrides={"HTTP_HOST": "fleetai-1.onrender.com"},
+            base_url="http://fleetai-1.onrender.com",
         )
         self.assertEqual(response.status_code, 403)
 
@@ -45,7 +45,7 @@ class AdminProxyOriginTests(unittest.TestCase):
             json={},
             headers={"Origin": "https://evil.example",
                      "X-Forwarded-Proto": "https"},
-            environ_overrides={"HTTP_HOST": "fleetai-1.onrender.com"},
+            base_url="http://fleetai-1.onrender.com",
         )
         self.assertEqual(response.status_code, 403)
 
