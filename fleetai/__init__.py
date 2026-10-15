@@ -122,7 +122,7 @@ def create_app():
     @app.after_request
     def protect_admin_responses(response):
         rule = request.url_rule.rule if request.url_rule else request.path
-        if rule.startswith("/admin/") or requires_owner(rule, request.method):
+        if rule.startswith("/admin/") or rule == "/api/admin/csrf-token" or requires_owner(rule, request.method):
             response.headers["Cache-Control"] = "no-store"
             response.headers["X-Content-Type-Options"] = "nosniff"
             response.headers["X-Frame-Options"] = "DENY"
