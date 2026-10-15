@@ -5,6 +5,8 @@ deliberately excluded. Keep this allowlist explicit and review new routes.
 """
 ADMIN_WRITE_RULES = frozenset({
     "/api/add",
+    "/api/ask-history",
+    "/api/warehouse/check-match",
     "/api/close-period/<code>",
     "/api/reopen-period/<code>",
     "/api/fix-investor-data",
@@ -49,6 +51,7 @@ ADMIN_WRITE_RULES = frozenset({
     "/api/wialon/665/command",
 })
 ADMIN_READ_RULES = frozenset({
+    "/api/warehouse",
     "/api/driver-debts",
     "/api/driver-debt-payments/<int:debt_id>",
     "/api/operations",
