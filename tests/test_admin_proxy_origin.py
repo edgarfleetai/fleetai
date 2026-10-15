@@ -10,6 +10,7 @@ class AdminProxyOriginTests(unittest.TestCase):
         with patch.dict(os.environ, {"FLEETAI_TRUST_PROXY": "1" if trust_proxy else "0"}):
             with patch("fleetai.init_db"):
                 app = create_app()
+        app.config["SESSION_COOKIE_SECURE"] = False  # test client uses HTTP transport
         client = app.test_client()
         with client.session_transaction() as session:
             session["fleetai_admin"] = True
