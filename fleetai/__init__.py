@@ -74,7 +74,8 @@ def create_app():
         # Never dispatch a remote engine-block command from this endpoint.
         if rule == DANGEROUS_WIALON_COMMAND and request.method == "POST":
             data = request.get_json(silent=True) or {}
-            if data.get("action", "").strip().lower() == "block":
+            action = data.get("action", "") if isinstance(data, dict) else ""
+            if isinstance(action, str) and action.strip().lower() == "block":
                 return jsonify({"ok": False, "message": "Удалённая блокировка отключена до аппаратной проверки безопасности"}), 403
         if not requires_owner(rule, request.method):
             return None
