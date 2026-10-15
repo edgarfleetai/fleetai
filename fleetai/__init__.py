@@ -89,6 +89,11 @@ def create_app():
                 return redirect(url_for("admin_login"))
             return jsonify({"ok": False, "message": "Требуется вход администратора"}), 401
         if request.method in ("POST", "PUT", "PATCH", "DELETE"):
+            # Browser Fetch Metadata offers defense-in-depth even when Origin is absent.
+            # Do not trust it as a substitute for a session-bound CSRF token.
+            fetch_site = request.headers.get("Sec-Fetch-Site", "").lower()
+            if fetch_site == "cross-site":
+                return jsonify({"ok": False, "message": "Межсайтовый запрос запрещён"}), 403
             source = request.headers.get("Origin") or request.headers.get("Referer")
             if not source:
                 return jsonify({"ok": False, "message": "Отсутствует источник запроса"}), 403
