@@ -64,6 +64,11 @@ def create_app():
 
     @app.route("/admin/logout", methods=["POST"])
     def admin_logout():
+        source = request.headers.get("Origin") or request.headers.get("Referer")
+        if source:
+            source_url = urlsplit(source)
+            if (source_url.scheme, source_url.netloc) != (request.scheme, request.host):
+                return jsonify({"ok": False, "message": "Недопустимый источник запроса"}), 403
         session.clear()
         return redirect(url_for("admin_login"))
 
