@@ -17,6 +17,8 @@ ADMIN_WRITE_RULES = frozenset({
     "/api/rebuild-calculations",
     "/api/repair-downtime-statuses",
     "/api/vehicle-license/<code>",
+    "/api/sms-call-check/auth",
+    "/api/sms-call-check/call",
     "/api/telegram/setup-webhook-ui",
     "/api/setup/897",
     "/api/setup/550",
