@@ -20,6 +20,7 @@ class AdminCsrfTokenTests(unittest.TestCase):
         token_response = self.client.get("/api/admin/csrf-token")
         self.assertEqual(token_response.status_code, 200)
         token = token_response.json["csrf_token"]
+        self.assertEqual(token_response.headers.get("Cache-Control"), "no-store")
         with patch.dict(os.environ, {"FLEETAI_REQUIRE_CSRF_TOKEN": "1"}):
             denied = self.client.post(
                 "/api/driver-wallet/topup", json={},
