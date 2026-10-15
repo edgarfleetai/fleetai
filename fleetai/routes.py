@@ -2911,8 +2911,23 @@ def driver_debts_admin():
 const rub=n=>new Intl.NumberFormat('ru-RU').format(Number(n||0))+' ₽';
 async function loadCars(){const r=await fetch('/api/cars'),d=await r.json(),sel=document.getElementById('car');let cars=[];if(Array.isArray(d))cars=d;else if(Array.isArray(d.cars))cars=d.cars;else if(Array.isArray(d.items))cars=d.items;sel.innerHTML=cars.map(c=>`<option value="${c.code}">${c.code} · ${c.driver||'без водителя'} · ${c.brand||''} ${c.model||''}</option>`).join('');const q=new URLSearchParams(location.search).get('code');if(q&&[...sel.options].some(o=>o.value===q))sel.value=q}
 async function loadDebts(){const r=await fetch('/api/driver-debts'),d=await r.json(),box=document.getElementById('debts');if(!d.ok){box.textContent=d.message||'Ошибка';return}if(!d.items.length){box.innerHTML='<span class="muted">Открытых долгов нет</span>';return}box.innerHTML=d.items.map(x=>`<div class="debt"><div class="muted">${x.driver_name||'Водитель'} · машина ${x.car_code||'—'}</div><div class="amount danger">${rub(x.balance)}</div><div class="muted">${x.reason||'Долг'}${x.original_amount?` · изначально ${rub(x.original_amount)}`:''}</div><div class="actions"><div class="field"><label>Погасить, ₽</label><input id="pay-${x.id}" type="number" min="1" max="${x.balance}" step="1" placeholder="Сумма"></div><button class="btn pay" onclick="payDebt(${x.id})">Погасить</button></div><div id="msg-${x.id}" class="msg"></div></div>`).join('')}
-async function addDebt(){const code=car.value,amount=parseInt(document.getElementById('amount').value||'0',10),reason=document.getElementById('reason').value.trim(),m=document.getElementById('addmsg');if(!code||amount<=0){m.className='msg bad';m.textContent='Выбери машину и укажи сумму больше 0 ₽';return}if(!confirm(`Зафиксировать долг ${rub(amount)} за водителем машины ${code}?`))return;const r=await fetch('/api/driver-debt-from-car',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({car_code:code,amount,reason,detach_driver:false})}),d=await r.json();m.className='msg '+(d.ok?'good':'bad');m.textContent=d.message||'';if(d.ok){document.getElementById('amount').value='';await loadDebts()}}
-async function payDebt(id){const input=document.getElementById('pay-'+id),amount=parseInt(input.value||'0',10),m=document.getElementById('msg-'+id);if(amount<=0){m.className='msg bad';m.textContent='Укажи сумму погашения';return}if(!confirm(`Записать погашение ${rub(amount)}?`))return;const r=await fetch('/api/driver-debt-payment',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({debt_id:id,amount,comment:'Погашение долга через админку'})}),d=await r.json();m.className='msg '+(d.ok?'good':'bad');m.textContent=d.message||'';if(d.ok)await loadDebts()}
+// Attach the session CSRF token to debt mutations.
+const debtNativeFetch = window.fetch.bind(window);
+let debtCsrfToken;
+async function debtFetch(input, init = {}) {
+  const method = (init.method || 'GET').toUpperCase();
+  if (!['POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) return debtNativeFetch(input, init);
+  if (!debtCsrfToken) {
+    const response = await debtNativeFetch('/api/admin/csrf-token', {credentials:'same-origin'});
+    if (!response.ok) throw new Error('Сессия администратора истекла');
+    debtCsrfToken = (await response.json()).csrf_token;
+  }
+  const headers = new Headers(init.headers);
+  headers.set('X-FleetAI-CSRF-Token', debtCsrfToken);
+  return debtNativeFetch(input, {...init, headers});
+}
+async function addDebt(){const code=car.value,amount=parseInt(document.getElementById('amount').value||'0',10),reason=document.getElementById('reason').value.trim(),m=document.getElementById('addmsg');if(!code||amount<=0){m.className='msg bad';m.textContent='Выбери машину и укажи сумму больше 0 ₽';return}if(!confirm(`Зафиксировать долг ${rub(amount)} за водителем машины ${code}?`))return;const r=await debtFetch('/api/driver-debt-from-car',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({car_code:code,amount,reason,detach_driver:false})}),d=await r.json();m.className='msg '+(d.ok?'good':'bad');m.textContent=d.message||'';if(d.ok){document.getElementById('amount').value='';await loadDebts()}}
+async function payDebt(id){const input=document.getElementById('pay-'+id),amount=parseInt(input.value||'0',10),m=document.getElementById('msg-'+id);if(amount<=0){m.className='msg bad';m.textContent='Укажи сумму погашения';return}if(!confirm(`Записать погашение ${rub(amount)}?`))return;const r=await debtFetch('/api/driver-debt-payment',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({debt_id:id,amount,comment:'Погашение долга через админку'})}),d=await r.json();m.className='msg '+(d.ok?'good':'bad');m.textContent=d.message||'';if(d.ok)await loadDebts()}
 Promise.all([loadCars(),loadDebts()]);
 </script></body></html>"""
     return render_template_string(html)
