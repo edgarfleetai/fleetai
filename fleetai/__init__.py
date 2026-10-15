@@ -6,6 +6,7 @@ from flask import Flask, request, jsonify, session, redirect, render_template_st
 from .db import init_db
 from .routes import bp
 from .admin_auth import verify_admin_password, is_admin
+from .login_limiter import login_blocked, record_login_failure, clear_login_failures
 
 
 LOGIN_HTML = """
@@ -38,8 +39,13 @@ def create_app():
             return render_template_string(LOGIN_HTML, error=None)
         if not os.getenv("FLASK_SECRET_KEY") or not os.getenv("FLEETAI_ADMIN_PASSWORD_HASH"):
             return render_template_string(LOGIN_HTML, error="Вход не настроен на сервере"), 503
+        client_ip = request.remote_addr or "unknown"
+        if login_blocked(client_ip):
+            return render_template_string(LOGIN_HTML, error="Слишком много попыток. Попробуйте через 15 минут"), 429
         if not verify_admin_password(request.form.get("password", "")):
+            record_login_failure(client_ip)
             return render_template_string(LOGIN_HTML, error="Неверный пароль"), 401
+        clear_login_failures(client_ip)
         session.clear()
         session["fleetai_admin"] = True
         session.permanent = True
