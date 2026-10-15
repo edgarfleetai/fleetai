@@ -1,5 +1,6 @@
 import os
 from datetime import timedelta
+from urllib.parse import urlsplit
 
 from flask import Flask, request, jsonify, session, redirect, render_template_string, url_for
 from .db import init_db
@@ -50,10 +51,26 @@ def create_app():
         return redirect(url_for("admin_login"))
 
     @app.before_request
-    def protect_manual_wallet_topup():
-        if request.path == "/api/driver-wallet/topup" and request.method == "POST":
-            if not is_admin():
-                return jsonify({"ok": False, "message": "Требуется вход администратора"}), 401
+    def protect_dispatcher_wallet():
+        protected = {
+            ("/driver-topup", "GET"),
+            ("/api/driver-wallet/cars", "GET"),
+            ("/api/driver-wallet/topup", "POST"),
+        }
+        if (request.path, request.method) not in protected:
+            return None
+        if not is_admin():
+            if request.path == "/driver-topup":
+                return redirect(url_for("admin_login"))
+            return jsonify({"ok": False, "message": "Требуется вход администратора"}), 401
+        if request.method == "POST":
+            source = request.headers.get("Origin") or request.headers.get("Referer")
+            if not source:
+                return jsonify({"ok": False, "message": "Отсутствует источник запроса"}), 403
+            source_url = urlsplit(source)
+            if source_url.scheme != request.scheme or source_url.netloc != request.host:
+                return jsonify({"ok": False, "message": "Недопустимый источник запроса"}), 403
+        return None
 
     app.register_blueprint(bp)
     return app
