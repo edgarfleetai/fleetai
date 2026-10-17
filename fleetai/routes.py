@@ -4267,6 +4267,36 @@ def ensure_all_previous_periods_saved(session):
     }
 
 
+@bp.route("/api/overview-readonly", methods=["GET"])
+def api_overview_readonly():
+    """Read-only inventory snapshot; never archive periods or reconcile downtime."""
+    session = Session()
+    try:
+        cars = session.query(Car).order_by(Car.code.asc()).all()
+        items = [{
+            "code": car.code,
+            "brand": car.brand or "",
+            "model": car.model or "",
+            "driver": car.driver or "",
+            "status": car.status or "",
+            "owner_type": car.owner_type or "own",
+        } for car in cars]
+        return jsonify({
+            "ok": True,
+            "cars": len(items),
+            "own_cars": sum(1 for item in items if item["owner_type"] != "investor"),
+            "investor_cars": sum(1 for item in items if item["owner_type"] == "investor"),
+            "items": items,
+            "read_only": True,
+            "financial_totals_included": False,
+        })
+    except Exception:
+        session.rollback()
+        return jsonify({"ok": False, "message": "Не удалось получить список автомобилей"}), 500
+    finally:
+        session.close()
+
+
 @bp.route("/api/summary")
 def api_summary():
     session = Session()
