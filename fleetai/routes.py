@@ -4445,6 +4445,43 @@ def api_car_profile_readonly(code):
         session.close()
 
 
+@bp.route("/api/investor-ledger-readonly", methods=["GET"])
+def api_investor_ledger_readonly():
+    """Raw investor-linked records, no automatic settlements or mutations."""
+    session = Session()
+    try:
+        cars = session.query(Car).filter(Car.owner_type == "investor").order_by(Car.code).all()
+        codes = [str(car.code).strip() for car in cars]
+        income = session.query(Income).filter(Income.car_code.in_(codes)).all() if codes else []
+        expenses = session.query(Expense).filter(Expense.car_code.in_(codes)).all() if codes else []
+        payouts = session.query(InvestorPayout).all()
+        def entry(row, kind, category):
+            return {"date_iso": row.date.strftime("%Y-%m-%d") if row.date else "",
+                    "date": row.date.strftime("%d.%m.%Y") if row.date else "",
+                    "car_code": str(row.car_code or "").strip(),
+                    "kind": kind, "category": category,
+                    "amount": int(row.amount or 0)}
+        entries = (
+            [entry(row, "income", row.income_type or "") for row in income]
+            + [entry(row, "expense", row.category or "") for row in expenses]
+            + [dict(entry(row, "payout", "Выплата инвестору"),
+                    investor_name=row.investor_name or "") for row in payouts]
+        )
+        entries.sort(key=lambda row: row["date_iso"], reverse=True)
+        return jsonify({"ok": True, "read_only": True,
+                        "cars": [{"code": str(car.code).strip(),
+                                  "name": " ".join(filter(None, [car.brand, car.model])),
+                                  "investor": car.investor_name or "Не указан",
+                                  "percent": int(car.investor_percent or 0)} for car in cars],
+                        "entries": entries,
+                        "note": "Поступления и расходы — по машинам с текущим статусом инвестора; выплаты — из журнала выплат. Это не расчёт суммы к выплате."})
+    except Exception:
+        session.rollback()
+        return jsonify({"ok": False, "message": "Не удалось загрузить данные инвесторов"}), 500
+    finally:
+        session.close()
+
+
 @bp.route("/api/finance-ledger-readonly", methods=["GET"])
 def api_finance_ledger_readonly():
     """Read-only raw income and expense records across all cars."""
