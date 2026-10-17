@@ -101,6 +101,15 @@ def create_app():
             action = data.get("action", "") if isinstance(data, dict) else ""
             if isinstance(action, str) and action.strip().lower() == "block":
                 return jsonify({"ok": False, "message": "Удалённая блокировка отключена до аппаратной проверки безопасности"}), 403
+        # Isolated staging is owner-only and read-only.
+        if os.getenv("FLEETAI_STAGING_LOCKDOWN") == "1":
+            if rule not in ("/admin/login", "/admin/logout", "/static/<path:filename>"):
+                if not is_admin():
+                    if rule.startswith("/api/"):
+                        return jsonify({"ok": False, "message": "Требуется вход администратора"}), 401
+                    return redirect(url_for("admin_login"))
+                if request.method not in ("GET", "HEAD", "OPTIONS"):
+                    return jsonify({"ok": False, "message": "Тестовый стенд доступен только для чтения"}), 403
         if not requires_owner(rule, request.method):
             return None
         if not is_admin():
