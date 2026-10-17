@@ -4493,7 +4493,7 @@ def api_investor_ledger_readonly():
                                   "investor": car.investor_name or "Не указан",
                                   "percent": int(car.investor_percent or 0)} for car in cars],
                         "entries": entries,
-                        "calculations": {code: {period: {"available_to_pay": int(calc.get("available_to_pay") or 0), "investor_debt_to_park": int(calc.get("investor_debt_to_park") or 0), "accrued": int(calc.get("accrued_to_investor") or 0), "paid": int(calc.get("payouts_in_period") or 0)} for period, calc in periods.items()} for code, periods in calculated.items()},
+                        "calculations": {code: {period: {"available_to_pay": int(calc.get("available_to_pay") or 0), "investor_debt_to_park": int(calc.get("investor_debt_to_park") or 0), "accrued": int(calc.get("accrued_to_investor") or 0), "paid": int(calc.get("payouts_in_period") or 0), "income": int(calc.get("income") or 0), "shared_expenses": int(calc.get("shared_expenses") or 0), "investor_only_expenses": int(calc.get("investor_only_expenses") or 0), "park_only_expenses": int(calc.get("park_only_expenses") or 0), "investor_paid": int(calc.get("investor_paid_in_period") or 0), "withheld": int(calc.get("debt_repaid_by_profit") or 0), "park_debt": int(calc.get("park_debt_to_investor") or 0)} for period, calc in periods.items()} for code, periods in calculated.items()},
                         "note": "Поступления и расходы — по машинам с текущим статусом инвестора; выплаты — из журнала выплат. Это не расчёт суммы к выплате."})
     except Exception:
         session.rollback()
