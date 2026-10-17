@@ -4459,7 +4459,20 @@ def api_overview_readonly():
             "status": car.status or "",
             "owner_type": car.owner_type or "own",
         } for car in cars]
+        wallet_balances = dict(
+            (str(car_code).strip(), int(balance or 0))
+            for car_code, balance in session.query(
+                DriverWalletTransaction.car_code,
+                func.coalesce(func.sum(DriverWalletTransaction.amount), 0)
+            ).group_by(DriverWalletTransaction.car_code).all()
+        )
+        for item in items:
+            item["wallet_balance"] = wallet_balances.get(str(item["code"]).strip(), 0)
+        negative_items = [item for item in items if item["wallet_balance"] < 0]
         return jsonify({
+            "negative_wallet_count": len(negative_items),
+            "negative_wallet_total": sum(-item["wallet_balance"] for item in negative_items),
+            "negative_wallets": negative_items,
             "ok": True,
             "cars": len(items),
             "own_cars": sum(1 for item in items if item["owner_type"] != "investor"),
