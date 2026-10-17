@@ -4618,6 +4618,9 @@ def api_cars():
 
         for car in cars_query:
             code = normalize_code(getattr(car, "code", ""))
+            period_start = None
+            period_end = None
+            finance_calculation_error = ""
 
             income = 0
             expenses = 0
@@ -4648,6 +4651,7 @@ def api_cars():
                     f"машины {code}: "
                     f"{type(error).__name__}: {error}"
                 )
+                finance_calculation_error = f"{type(error).__name__}: {error}"
 
             try:
                 active_downtime = current_downtime_for_car(
@@ -4734,14 +4738,16 @@ def api_cars():
                 "income": int(income or 0),
                 "expenses": int(expenses or 0),
                 "profit": int((income or 0) - (expenses or 0)),
+                "finance_calculation_error": finance_calculation_error,
+                "finance_calculation_ok": not bool(finance_calculation_error),
                 "period_start": (
                     period_start.strftime("%d.%m.%Y")
-                    if 'period_start' in locals()
+                    if period_start is not None
                     else ""
                 ),
                 "period_end": (
                     period_display_end(period_end).strftime("%d.%m.%Y")
-                    if 'period_end' in locals()
+                    if period_end is not None
                     else ""
                 ),
 
