@@ -52,6 +52,7 @@ ADMIN_WRITE_RULES = frozenset({
 })
 ADMIN_READ_RULES = frozenset({
     "/api/overview-readonly",
+    "/api/finance-ledger-readonly",
     "/api/car-profile-readonly/<code>",
     "/api/repair-history-readonly",
     "/api/repair-details-readonly/<int:operation_id>",
