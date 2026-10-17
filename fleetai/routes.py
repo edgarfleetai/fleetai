@@ -4336,6 +4336,52 @@ def api_repair_details_readonly(operation_id):
         session.close()
 
 
+@bp.route("/api/car-profile-readonly/<code>", methods=["GET"])
+def api_car_profile_readonly(code):
+    """Raw car ledger snapshot without settlement/reconciliation side effects."""
+    session = Session()
+    try:
+        car = session.query(Car).filter(Car.code == code).first()
+        if not car:
+            return jsonify({"ok": False, "message": "Автомобиль не найден"}), 404
+        income_rows = session.query(Income).filter(Income.car_code == code).all()
+        expense_rows = session.query(Expense).filter(Expense.car_code == code).all()
+        repairs = session.query(Operation).filter(
+            Operation.car_code == code,
+            Operation.type.in_(["repair", "service"]),
+        ).order_by(Operation.id.desc()).limit(100).all()
+        return jsonify({
+            "ok": True, "read_only": True,
+            "car": {
+                "code": car.code, "brand": car.brand or "", "model": car.model or "",
+                "plate": car.plate or "", "year": car.year,
+                "driver": car.driver or "", "status": car.status or "",
+                "owner_type": car.owner_type or "own",
+                "investor_name": car.investor_name or "",
+                "weekly_payment": car.weekly_payment,
+                "daily_rent": car.daily_rent,
+            },
+            "ledger": {
+                "income": sum(int(x.amount or 0) for x in income_rows),
+                "expenses": sum(int(x.amount or 0) for x in expense_rows),
+                "income_count": len(income_rows),
+                "expense_count": len(expense_rows),
+                "scope": "За всё время по записям income и expenses; без расчёта кредитов, выплат инвесторам и задолженностей.",
+            },
+            "repairs": [{
+                "id": x.id, "date": x.date.strftime("%d.%m.%Y") if x.date else "",
+                "category": x.category or "", "description": x.description or "",
+                "amount": x.amount,
+            } for x in repairs],
+            "repairs_limited": len(repairs) == 100,
+        })
+    except Exception:
+        session.rollback()
+        return jsonify({"ok": False, "message": "Не удалось получить карточку автомобиля"}), 500
+    finally:
+        session.close()
+
+
 @bp.route("/api/overview-readonly", methods=["GET"])
 def api_overview_readonly():
     """Read-only inventory snapshot; never archive periods or reconcile downtime."""
