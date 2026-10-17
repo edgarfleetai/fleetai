@@ -4346,6 +4346,11 @@ def api_car_profile_readonly(code):
             return jsonify({"ok": False, "message": "Автомобиль не найден"}), 404
         income_rows = session.query(Income).filter(Income.car_code == code).all()
         expense_rows = session.query(Expense).filter(Expense.car_code == code).all()
+        wallet_balance = int(session.query(
+            func.coalesce(func.sum(DriverWalletTransaction.amount), 0)
+        ).filter(
+            func.trim(DriverWalletTransaction.car_code) == code
+        ).scalar() or 0)
         wallet_rows = session.query(DriverWalletTransaction).filter(
             DriverWalletTransaction.car_code == code
         ).order_by(DriverWalletTransaction.id.desc()).limit(100).all()
@@ -4386,6 +4391,8 @@ def api_car_profile_readonly(code):
             "ledger_entries": ledger_rows[:100],
             "ledger_entries_limited": len(ledger_rows) > 100,
             "wallet": {
+                "balance": wallet_balance,
+                "balance_note": "Текущий баланс по сумме всех операций кошелька автомобиля, включая пополнения и списания.",
                 "entries": [{
                     "date": x.date.strftime("%d.%m.%Y") if x.date else "",
                     "type": x.transaction_type or "",
