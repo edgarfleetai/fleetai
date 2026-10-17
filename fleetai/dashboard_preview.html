@@ -56,18 +56,6 @@
   const plateValue=document.createElement('strong');plateValue.textContent=c.plate||'Не указан';
   bottom.append(plateLabel,plateValue);
   hero.append(top,title,driver,bottom);panel.append(hero);
-  const rental=data.rental_summary;
-  if(rental){
-   const rentSection=document.createElement('section');rentSection.className='profile-rent-summary';
-   const rentTitle=document.createElement('h3');rentTitle.textContent='Аренда и расчёты';rentSection.append(rentTitle);
-   const rentGrid=document.createElement('div');rentGrid.className='profile-rent-grid';
-   for(const [label,value] of [['Аренда в сутки',money(rental.daily_rate)],['Начислено по кошельку',money(rental.charged_from_wallet)],['Пополнения кошелька',money(rental.wallet_credits)],['Текущий баланс',money(rental.wallet_balance)]]){
-    const tile=document.createElement('div');tile.className='profile-rent-tile';const labelEl=document.createElement('span');labelEl.textContent=label;const valueEl=document.createElement('strong');valueEl.textContent=value;tile.append(labelEl,valueEl);rentGrid.append(tile)
-   }
-   rentSection.append(rentGrid);
-   const note=document.createElement('p');note.className='profile-rent-note';note.textContent=rental.note;rentSection.append(note);
-   panel.append(rentSection);
-  }
   const tabs=document.createElement('div');tabs.className='profile-tabs';tabs.setAttribute('role','tablist');
   const content=document.createElement('div');content.className='profile-content';panel.append(tabs,content);
   const finance=document.createElement('section');finance.className='profile-pane';
