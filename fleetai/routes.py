@@ -4346,6 +4346,21 @@ def api_car_profile_readonly(code):
             return jsonify({"ok": False, "message": "Автомобиль не найден"}), 404
         income_rows = session.query(Income).filter(Income.car_code == code).all()
         expense_rows = session.query(Expense).filter(Expense.car_code == code).all()
+        wallet_rows = session.query(DriverWalletTransaction).filter(
+            DriverWalletTransaction.car_code == code
+        ).order_by(DriverWalletTransaction.id.desc()).limit(100).all()
+        debt_rows = session.query(DriverDebt).filter(
+            DriverDebt.car_code == code
+        ).order_by(DriverDebt.id.desc()).all()
+        ledger_rows = (
+            [{"date": x.date.strftime("%d.%m.%Y") if x.date else "",
+              "kind": "Поступление", "category": x.income_type or "",
+              "amount": int(x.amount or 0), "source": "income"} for x in income_rows]
+            + [{"date": x.date.strftime("%d.%m.%Y") if x.date else "",
+                "kind": "Расход", "category": x.category or "",
+                "amount": int(x.amount or 0), "source": "expenses"} for x in expense_rows]
+        )
+        ledger_rows.sort(key=lambda x: x["date"][6:10]+x["date"][3:5]+x["date"][0:2], reverse=True)
         repairs = session.query(Operation).filter(
             Operation.car_code == code,
             Operation.type.in_(["repair", "service"]),
@@ -4368,6 +4383,26 @@ def api_car_profile_readonly(code):
                 "expense_count": len(expense_rows),
                 "scope": "За всё время по записям income и expenses; без расчёта кредитов, выплат инвесторам и задолженностей.",
             },
+            "ledger_entries": ledger_rows[:100],
+            "ledger_entries_limited": len(ledger_rows) > 100,
+            "wallet": {
+                "entries": [{
+                    "date": x.date.strftime("%d.%m.%Y") if x.date else "",
+                    "type": x.transaction_type or "",
+                    "amount": int(x.amount or 0),
+                    "comment": x.comment or "",
+                } for x in wallet_rows],
+                "limited": len(wallet_rows) == 100,
+                "note": "Операции кошелька показываются отдельно; могут отражать те же поступления, поэтому не суммируются с доходами."
+            },
+            "debts": [{
+                "driver": x.driver_name or "", "reason": x.reason or "",
+                "original": int(x.original_amount or 0),
+                "paid": int(x.paid_amount or 0),
+                "balance": int(x.balance or 0),
+                "status": x.status or "",
+            } for x in debt_rows],
+            "debt_note": "Задолженности по отдельному реестру долгов. Не равны автоматически долгу по аренде.",
             "repairs": [{
                 "id": x.id, "date": x.date.strftime("%d.%m.%Y") if x.date else "",
                 "category": x.category or "", "description": x.description or "",
