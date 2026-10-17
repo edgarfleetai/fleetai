@@ -4351,6 +4351,16 @@ def api_car_profile_readonly(code):
         ).filter(
             func.trim(DriverWalletTransaction.car_code) == code
         ).scalar() or 0)
+        wallet_aggregates = session.query(
+            DriverWalletTransaction.transaction_type,
+            func.coalesce(func.sum(DriverWalletTransaction.amount), 0),
+            func.count(DriverWalletTransaction.id),
+        ).filter(
+            func.trim(DriverWalletTransaction.car_code) == code
+        ).group_by(DriverWalletTransaction.transaction_type).all()
+        rental_charged = sum(-int(total or 0) for kind, total, count in wallet_aggregates if kind == "daily_rent" and int(total or 0) < 0)
+        wallet_credits = sum(int(total or 0) for kind, total, count in wallet_aggregates if int(total or 0) > 0)
+        wallet_debits_other = sum(-int(total or 0) for kind, total, count in wallet_aggregates if kind != "daily_rent" and int(total or 0) < 0)
         wallet_rows = session.query(DriverWalletTransaction).filter(
             DriverWalletTransaction.car_code == code
         ).order_by(DriverWalletTransaction.id.desc()).limit(100).all()
@@ -4390,6 +4400,17 @@ def api_car_profile_readonly(code):
             },
             "ledger_entries": ledger_rows,
             "ledger_entries_limited": False,
+            "rental_summary": {
+                "daily_rate": int(effective_daily_rent(car) or 0),
+                "weekly_rate": int(car.weekly_payment or 0),
+                "charged_from_wallet": rental_charged,
+                "wallet_credits": wallet_credits,
+                "other_wallet_debits": wallet_debits_other,
+                "wallet_balance": wallet_balance,
+                "next_payment_date": car.next_payment_date or "",
+                "last_payment_date": car.last_payment_date or "",
+                "note": "Начислено — сумма записанных списаний daily_rent. Пополнения и баланс взяты из кошелька. Не включает ещё не записанные начисления; отрицательный баланс не всегда равен долгу по аренде."
+            },
             "wallet": {
                 "balance": wallet_balance,
                 "balance_note": "Текущий баланс по сумме всех операций кошелька автомобиля, включая пополнения и списания.",
