@@ -663,7 +663,7 @@ def _previous_investor_portfolio_carry(
     }
 
 
-def calculate_period_for_car(session, car, start, end):
+def calculate_period_for_car(session, car, start, end, include_previous_carry=True):
     """
     Прозрачный расчёт строго за выбранный период.
 
@@ -719,11 +719,8 @@ def calculate_period_for_car(session, car, start, end):
     accrued_to_investor = max(investor_share_raw, 0)
     investor_shared_loss = max(-investor_share_raw, 0)
 
-    previous_carry = _previous_investor_portfolio_carry(
-        session,
-        car,
-        start,
-    )
+    previous_carry = (_previous_investor_portfolio_carry(session, car, start)
+                      if include_previous_carry else {"investor_debt_to_park": 0, "park_debt_to_investor": 0})
 
     previous_debt = previous_carry[
         "investor_debt_to_park"
