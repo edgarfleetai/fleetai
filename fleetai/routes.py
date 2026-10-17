@@ -4299,6 +4299,43 @@ def api_repair_history_readonly():
         session.close()
 
 
+@bp.route("/api/repair-details-readonly/<int:operation_id>", methods=["GET"])
+def api_repair_details_readonly(operation_id):
+    """Read-only breakdown for one repair; no financial reconciliation."""
+    session = Session()
+    try:
+        op = session.query(Operation).filter(
+            Operation.id == operation_id,
+            Operation.type.in_(["repair", "service"]),
+        ).first()
+        if not op:
+            return jsonify({"ok": False, "message": "Ремонт не найден"}), 404
+        parts = session.query(Part).filter(Part.operation_id == op.id).order_by(Part.id.asc()).all()
+        expenses = session.query(Expense).filter(Expense.operation_id == op.id).order_by(Expense.id.asc()).all()
+        return jsonify({
+            "ok": True, "read_only": True,
+            "operation": {
+                "id": op.id, "car_code": op.car_code or "",
+                "date": op.date.strftime("%d.%m.%Y %H:%M") if op.date else "",
+                "category": op.category or "", "description": op.description or "",
+                "amount": op.amount, "mileage": op.mileage,
+            },
+            "parts": [{
+                "name": p.part_name or "", "brand": p.brand or "",
+                "price": p.price, "labor": p.labor,
+            } for p in parts],
+            "expenses": [{
+                "category": e.category or "", "amount": e.amount,
+            } for e in expenses],
+            "note": "Связанные позиции показаны отдельно и могут уже входить в сумму операции; повторно не суммируются.",
+        })
+    except Exception:
+        session.rollback()
+        return jsonify({"ok": False, "message": "Не удалось загрузить детали ремонта"}), 500
+    finally:
+        session.close()
+
+
 @bp.route("/api/overview-readonly", methods=["GET"])
 def api_overview_readonly():
     """Read-only inventory snapshot; never archive periods or reconcile downtime."""
