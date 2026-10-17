@@ -4445,6 +4445,35 @@ def api_car_profile_readonly(code):
         session.close()
 
 
+@bp.route("/api/finance-ledger-readonly", methods=["GET"])
+def api_finance_ledger_readonly():
+    """Read-only raw income and expense records across all cars."""
+    session = Session()
+    try:
+        income_rows = session.query(Income).all()
+        expense_rows = session.query(Expense).all()
+        entries = (
+            [{"date_iso": row.date.strftime("%Y-%m-%d") if row.date else "",
+              "date": row.date.strftime("%d.%m.%Y") if row.date else "",
+              "car_code": str(row.car_code or "").strip(),
+              "kind": "income", "category": row.income_type or "",
+              "amount": int(row.amount or 0)} for row in income_rows]
+            + [{"date_iso": row.date.strftime("%Y-%m-%d") if row.date else "",
+                "date": row.date.strftime("%d.%m.%Y") if row.date else "",
+                "car_code": str(row.car_code or "").strip(),
+                "kind": "expense", "category": row.category or "",
+                "amount": int(row.amount or 0)} for row in expense_rows]
+        )
+        entries.sort(key=lambda row: row["date_iso"], reverse=True)
+        return jsonify({"ok": True, "read_only": True, "entries": entries,
+                        "scope": "Только записи Income и Expense. Без кошельков, долгов, кредитов и выплат инвесторам."})
+    except Exception:
+        session.rollback()
+        return jsonify({"ok": False, "message": "Не удалось загрузить финансовый журнал"}), 500
+    finally:
+        session.close()
+
+
 @bp.route("/api/overview-readonly", methods=["GET"])
 def api_overview_readonly():
     """Read-only inventory snapshot; never archive periods or reconcile downtime."""
