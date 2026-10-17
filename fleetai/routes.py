@@ -4470,8 +4470,8 @@ def api_investor_ledger_readonly():
             current_end = datetime(next_month.year, next_month.month, 16)
             previous_end = current_start
             calculated[str(car.code).strip()] = {
-                "cycle": calculate_period_for_car(session, car, current_start, current_end),
-                "previous": calculate_period_for_car(session, car, previous_start, previous_end),
+                "cycle": calculate_period_for_car(session, car, current_start, current_end, include_previous_carry=False),
+                "previous": calculate_period_for_car(session, car, previous_start, previous_end, include_previous_carry=False),
             }
         payouts = session.query(InvestorPayout).all()
         def entry(row, kind, category):
