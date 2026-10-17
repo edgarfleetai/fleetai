@@ -51,6 +51,7 @@ ADMIN_WRITE_RULES = frozenset({
     "/api/wialon/665/command",
 })
 ADMIN_READ_RULES = frozenset({
+    "/api/overview-readonly",
     "/api/warehouse",
     "/api/driver-debts",
     "/api/driver-debt-payments/<int:debt_id>",
