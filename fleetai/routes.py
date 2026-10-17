@@ -4360,12 +4360,12 @@ def api_car_profile_readonly(code):
         ledger_rows = (
             [{"date": x.date.strftime("%d.%m.%Y") if x.date else "",
               "kind": "Поступление", "category": x.income_type or "",
-              "amount": int(x.amount or 0), "source": "income"} for x in income_rows]
+              "amount": int(x.amount or 0), "source": "income", "date_iso": x.date.strftime("%Y-%m-%d") if x.date else ""} for x in income_rows]
             + [{"date": x.date.strftime("%d.%m.%Y") if x.date else "",
                 "kind": "Расход", "category": x.category or "",
-                "amount": int(x.amount or 0), "source": "expenses"} for x in expense_rows]
+                "amount": int(x.amount or 0), "source": "expenses", "date_iso": x.date.strftime("%Y-%m-%d") if x.date else ""} for x in expense_rows]
         )
-        ledger_rows.sort(key=lambda x: x["date"][6:10]+x["date"][3:5]+x["date"][0:2], reverse=True)
+        ledger_rows.sort(key=lambda x: x["date_iso"], reverse=True)
         repairs = session.query(Operation).filter(
             Operation.car_code == code,
             Operation.type.in_(["repair", "service"]),
@@ -4388,8 +4388,8 @@ def api_car_profile_readonly(code):
                 "expense_count": len(expense_rows),
                 "scope": "За всё время по записям income и expenses; без расчёта кредитов, выплат инвесторам и задолженностей.",
             },
-            "ledger_entries": ledger_rows[:100],
-            "ledger_entries_limited": len(ledger_rows) > 100,
+            "ledger_entries": ledger_rows,
+            "ledger_entries_limited": False,
             "wallet": {
                 "balance": wallet_balance,
                 "balance_note": "Текущий баланс по сумме всех операций кошелька автомобиля, включая пополнения и списания.",
