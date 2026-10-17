@@ -4458,12 +4458,16 @@ def api_investor_ledger_readonly():
         # expense allocation, investor contributions and recorded payouts.
         from .finance import calculate_period_for_car
         today = moscow_now()
-        cycle_month = today.month if today.day >= 16 else today.month - 1
-        current_start = datetime(today.year, cycle_month, 16)
-        previous_start = datetime(current_start.year, current_start.month - 1, 16)
+        current_start = datetime(today.year, today.month, 16)
+        if today.day < 16:
+            last_month = current_start - timedelta(days=1)
+            current_start = datetime(last_month.year, last_month.month, 16)
+        previous_month = current_start - timedelta(days=1)
+        previous_start = datetime(previous_month.year, previous_month.month, 16)
         calculated = {}
         for car in cars:
-            current_end = datetime(current_start.year, current_start.month + 1, 16)
+            next_month = current_start + timedelta(days=32)
+            current_end = datetime(next_month.year, next_month.month, 16)
             previous_end = current_start
             calculated[str(car.code).strip()] = {
                 "cycle": calculate_period_for_car(session, car, current_start, current_end),
