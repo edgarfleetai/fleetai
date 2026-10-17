@@ -4271,6 +4271,34 @@ def ensure_all_previous_periods_saved(session):
     }
 
 
+@bp.route("/api/repair-history-readonly", methods=["GET"])
+def api_repair_history_readonly():
+    """Read-only repair/service operation history; no financial reconciliation."""
+    session = Session()
+    try:
+        rows = session.query(Operation).filter(
+            Operation.type.in_(["repair", "service"])
+        ).order_by(Operation.id.desc()).limit(100).all()
+        return jsonify({
+            "ok": True,
+            "read_only": True,
+            "items": [{
+                "id": op.id,
+                "date": op.date.strftime("%d.%m.%Y %H:%M") if op.date else "",
+                "car_code": op.car_code or "",
+                "type": op.type,
+                "description": op.description or "",
+                "category": op.category or "",
+                "amount": op.amount,
+            } for op in rows],
+        })
+    except Exception:
+        session.rollback()
+        return jsonify({"ok": False, "message": "Не удалось загрузить историю ремонтов"}), 500
+    finally:
+        session.close()
+
+
 @bp.route("/api/overview-readonly", methods=["GET"])
 def api_overview_readonly():
     """Read-only inventory snapshot; never archive periods or reconcile downtime."""
