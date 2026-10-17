@@ -1,6 +1,7 @@
 import os
 import secrets
 from datetime import timedelta
+from pathlib import Path
 from urllib.parse import urlsplit
 from werkzeug.middleware.proxy_fix import ProxyFix
 
@@ -39,6 +40,12 @@ def create_app():
         PERMANENT_SESSION_LIFETIME=timedelta(hours=8),
     )
     init_db()
+
+    @app.route("/dashboard-preview", methods=["GET"])
+    def dashboard_preview():
+        # Read-only UI prototype: uses hardcoded demo data, no database access.
+        html = Path(__file__).with_name("dashboard_preview.html").read_text(encoding="utf-8")
+        return app.response_class(html, mimetype="text/html", headers={"Cache-Control": "no-store", "X-Frame-Options": "DENY"})
 
     @app.route("/api/admin/csrf-token", methods=["GET"])
     def admin_csrf_token():
