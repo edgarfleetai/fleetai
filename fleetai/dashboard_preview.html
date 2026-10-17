@@ -78,7 +78,7 @@
    const selected=(data.ledger_entries||[]).filter(x=>!days||(x.date_iso&&x.date_iso>=cutoffISO&&x.date_iso<=todayISO));
    const income=selected.filter(x=>x.kind==='Поступление').reduce((a,x)=>a+Number(x.amount||0),0);
    const expenses=selected.filter(x=>x.kind==='Расход').reduce((a,x)=>a+Number(x.amount||0),0);
-   const repairRows=(data.repairs||[]).filter(x=>{if(!days)return true;const m=/^(\\d{2})\\.(\\d{2})\\.(\\d{4})/.exec(x.date||'');return m&&m[3]+'-'+m[2]+'-'+m[1]>=cutoffISO&&m[3]+'-'+m[2]+'-'+m[1]<=todayISO});
+   const repairRows=(data.repairs||[]).filter(x=>{if(!days)return true;const m=/^(\d{2})\.(\d{2})\.(\d{4})/.exec(x.date||'');return m&&m[3]+'-'+m[2]+'-'+m[1]>=cutoffISO&&m[3]+'-'+m[2]+'-'+m[1]<=todayISO});
    const repairTotal=repairRows.reduce((a,x)=>a+Number(x.amount||0),0);
    cards.replaceChildren();
    for(const [label,val] of [['Поступления',money(income)],['Расходы',money(expenses)],['Разница',money(income-expenses)],['Ремонты (справочно)',money(repairTotal)]]){
