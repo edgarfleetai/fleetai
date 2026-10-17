@@ -2896,6 +2896,9 @@ def save_operation(data):
 
 @bp.route("/")
 def index():
+    # Staging-only opt-in; production retains the existing dispatcher UI.
+    if os.getenv("FLEETAI_NEW_DASHBOARD_HOME") == "1":
+        return redirect("/dashboard-preview", code=302)
     debt_button = r"""<a href="/driver-debts-admin" title="Долги водителей" style="position:fixed;right:18px;bottom:18px;z-index:99999;background:#17211d;color:#fff;text-decoration:none;border-radius:14px;padding:12px 16px;font:700 14px -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;box-shadow:0 6px 22px rgba(0,0,0,.18)">💳 Долги водителей</a>"""
     page = HTML.replace("</body>", debt_button + "</body>") if "</body>" in HTML else HTML + debt_button
     return render_template_string(page)
