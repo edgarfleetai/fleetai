@@ -69,7 +69,7 @@
    const name=document.createElement('div');name.className='profile-repair-name';name.textContent=x.category||'Ремонт';
    const desc=document.createElement('p');desc.className='profile-repair-desc';desc.textContent=x.description||'Описание не указано';
    const more=document.createElement('span');more.className='profile-repair-more';more.textContent='Посмотреть состав работ →';
-   row.append(head,name,desc,more);row.addEventListener('click',()=>openRepairDetail(x.id));repairs.append(row);
+   row.append(head,name,desc,more);row.addEventListener('click',()=>openDetail(x.id));repairs.append(row);
   }
   const panes=[['Финансы',finance],['Ремонты · '+data.repairs.length,repairs]];
   panes.forEach(([label,pane],i)=>{const tab=document.createElement('button');tab.type='button';tab.className='profile-tab';tab.textContent=label;tab.setAttribute('role','tab');tab.addEventListener('click',()=>{tabs.querySelectorAll('button').forEach(t=>{t.classList.remove('active');t.setAttribute('aria-selected','false')});tab.classList.add('active');tab.setAttribute('aria-selected','true');content.replaceChildren(pane)});tabs.append(tab);if(i===0)tab.click()});
