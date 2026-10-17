@@ -26,4 +26,25 @@
   const p=carPanel.querySelector('p');
   if(p) p.textContent=error.message+'; демонстрационный список ниже не является данными базы.';
  }
+})();;(async function loadRepairs(){
+ const panel=document.querySelector('#repairs .panel');
+ if(!panel)return;
+ try{
+  const response=await fetch('/api/repair-history-readonly',{credentials:'same-origin',cache:'no-store'});
+  if(!response.ok)throw new Error(response.status===401?'Нужен вход администратора':'Ошибка сервера');
+  const data=await response.json();
+  if(!data.ok||!Array.isArray(data.items))throw new Error('Ошибка ответа');
+  panel.querySelectorAll('.item').forEach(e=>e.remove());
+  const p=panel.querySelector('p');
+  if(p)p.textContent='Последние '+data.items.length+' записей о ремонтах и обслуживании из тестовой базы (только просмотр).';
+  if(!data.items.length){const empty=document.createElement('p');empty.className='muted';empty.textContent='Записей пока нет.';panel.append(empty);}
+  for(const op of data.items){
+   const row=document.createElement('div');row.className='item';
+   const left=document.createElement('div');const title=document.createElement('b');title.textContent=(op.car_code||'Без машины')+' · '+(op.date||'Дата не указана');
+   const desc=document.createElement('div');desc.className='muted';desc.textContent=op.description||op.category||op.type;
+   left.append(title,desc);
+   const sum=document.createElement('span');sum.className='tag';sum.textContent=op.amount==null?'Сумма не указана':new Intl.NumberFormat('ru-RU').format(op.amount)+' ₽';
+   row.append(left,sum);panel.append(row);
+  }
+ }catch(error){const p=panel.querySelector('p');if(p)p.textContent='История недоступна: '+error.message;panel.querySelectorAll('.item').forEach(e=>e.remove());}
 })();</script></body></html>
