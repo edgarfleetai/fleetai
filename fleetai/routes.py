@@ -4454,6 +4454,21 @@ def api_investor_ledger_readonly():
         codes = [str(car.code).strip() for car in cars]
         income = session.query(Income).filter(Income.car_code.in_(codes)).all() if codes else []
         expenses = session.query(Expense).filter(Expense.car_code.in_(codes)).all() if codes else []
+        # Reuse the existing settlement formula, including carried balances,
+        # expense allocation, investor contributions and recorded payouts.
+        from .finance import calculate_period_for_car
+        today = moscow_now()
+        cycle_month = today.month if today.day >= 16 else today.month - 1
+        current_start = datetime(today.year, cycle_month, 16)
+        previous_start = datetime(current_start.year, current_start.month - 1, 16)
+        calculated = {}
+        for car in cars:
+            current_end = datetime(current_start.year, current_start.month + 1, 16)
+            previous_end = current_start
+            calculated[str(car.code).strip()] = {
+                "cycle": calculate_period_for_car(session, car, current_start, current_end),
+                "previous": calculate_period_for_car(session, car, previous_start, previous_end),
+            }
         payouts = session.query(InvestorPayout).all()
         def entry(row, kind, category):
             return {"date_iso": row.date.strftime("%Y-%m-%d") if row.date else "",
@@ -4474,6 +4489,7 @@ def api_investor_ledger_readonly():
                                   "investor": car.investor_name or "Не указан",
                                   "percent": int(car.investor_percent or 0)} for car in cars],
                         "entries": entries,
+                        "calculations": {code: {period: {"available_to_pay": int(calc.get("available_to_pay") or 0), "investor_debt_to_park": int(calc.get("investor_debt_to_park") or 0), "accrued": int(calc.get("accrued_to_investor") or 0), "paid": int(calc.get("payouts_in_period") or 0)} for period, calc in periods.items()} for code, periods in calculated.items()},
                         "note": "Поступления и расходы — по машинам с текущим статусом инвестора; выплаты — из журнала выплат. Это не расчёт суммы к выплате."})
     except Exception:
         session.rollback()
