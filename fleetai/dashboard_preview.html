@@ -16,7 +16,7 @@
    const selectedNames=new Set(cars.map(c=>c.investor));
    const entries=data.entries.filter(e=>{
     if(periodSelect.value!=='all'&&!(e.date_iso>=startIso&&e.date_iso<endIso))return false;
-    if(e.kind==='payout')return selectedNames.has(e.investor_name)&&(!nameSelect.value||e.investor_name===nameSelect.value);
+    if(e.kind==='payout')return (codes.has(e.car_code)&&(!e.investor_name||selectedNames.has(e.investor_name)))||(!e.car_code&&selectedNames.has(e.investor_name));
     return codes.has(e.car_code);
    });
    const sum=kind=>entries.filter(e=>e.kind===kind).reduce((total,e)=>total+Number(e.amount||0),0);
@@ -24,7 +24,7 @@
    document.getElementById('investor-cars').textContent=String(cars.length);
    document.getElementById('investor-income').textContent=rub(sum('income'));
    document.getElementById('investor-expenses').textContent=rub(sum('expense'));
-   document.getElementById('investor-paid').textContent=rub(sum('payout'));
+   document.getElementById('investor-paid').textContent=rub(periodSelect.value==='all'?sum('payout'):cars.reduce((total,c)=>total+Number((data.calculations||{})[c.code]?.[periodSelect.value]?.paid||0),0));
    const dueCards=document.getElementById('investor-due-cards');dueCards.replaceChildren();
    for(const investor of names.filter(n=>!nameSelect.value||n===nameSelect.value)){
     const owned=cars.filter(c=>c.investor===investor);
