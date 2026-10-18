@@ -34,20 +34,20 @@
     const card=document.createElement('article');card.className='panel investor-due-panel';
     const title=document.createElement('strong');title.className='investor-due-title';title.textContent=investor;
     const label=document.createElement('span');label.className='muted';label.textContent='К выплате за период';
-    const value=document.createElement('div');value.className='value';value.textContent=periodSelect.value==='all'?'—':rub(Math.max(payable-debt,0));
-    const note=document.createElement('small');note.className='muted';note.textContent=periodSelect.value==='all'?'Выберите расчётный период':owned.length+' авто · после взаимозачёта';
+    const value=document.createElement('div');value.className='value';value.textContent=rub(Math.max(payable-debt,0));
+    const note=document.createElement('small');note.className='muted';note.textContent=owned.length+' авто · после взаимозачёта';
     const netDebt=Math.max(debt-payable,0);
     const netDebtLine=document.createElement('small');netDebtLine.className='muted';
-    if(periodSelect.value!=='all'&&netDebt>0)netDebtLine.textContent='Остаток долга инвестора перед парком: '+rub(netDebt);
+    if(netDebt>0)netDebtLine.textContent='Остаток долга инвестора перед парком: '+rub(netDebt);
 
     const payoutExcess=balances.reduce((sum,calc)=>sum+Number(calc?.payout_excess||0),0);
     const excessWarning=document.createElement('small');excessWarning.className='investor-audit-warning';
-    if(periodSelect.value!=='all'&&payoutExcess>0)excessWarning.textContent='Внимание: выплаты по отдельным авто превышают начисленную к выплате сумму на '+rub(payoutExcess)+'; требуется сверка';
+    if(payoutExcess>0)excessWarning.textContent='Внимание: выплаты по отдельным авто превышают начисленную к выплате сумму на '+rub(payoutExcess)+'; требуется сверка';
     const investorPayouts=entries.filter(e=>e.kind==='payout'&&e.investor_name===investor);
     const auditTotal=balances.reduce((sum,calc)=>sum+Number(calc?.paid||0),0);
     const journalTotal=entries.filter(e=>e.kind==='payout'&&((owned.some(c=>c.code===e.car_code))||(!e.car_code&&e.investor_name===investor))).reduce((sum,e)=>sum+Number(e.amount||0),0);
     const warning=document.createElement('small');warning.className='investor-audit-warning';
-    if(periodSelect.value!=='all'&&journalTotal!==auditTotal){
+    if(journalTotal!==auditTotal){
       const unassigned=investorPayouts.filter(e=>!e.car_code);const unassignedSum=unassigned.reduce((sum,e)=>sum+Number(e.amount||0),0);warning.textContent='Расхождение выплат: журнал '+rub(journalTotal)+', по машинам '+rub(auditTotal)+(unassigned.length?' · без автомобиля: '+unassigned.length+' операций на '+rub(unassignedSum):' · проверь привязку к машинам');
     }
 
@@ -55,7 +55,7 @@
     const summary=document.createElement('summary');summary.textContent='Расшифровка расчёта';
     details.append(summary);
     const fields=[['Поступления','income'],['Общие расходы','shared_expenses'],['Расходы инвестора','investor_only_expenses'],['Расходы парка','park_only_expenses'],['Начислено инвестору','accrued'],['Внесено инвестором','investor_paid'],['Удержано в погашение долга','withheld'],['Выплачено инвестору','paid'],['Взаиморасчёты в пользу инвестора','park_debt']];
-    if(periodSelect.value!=='all')for(const [caption,key] of fields){
+    for(const [caption,key] of fields){
       const line=document.createElement('div');line.className='investor-audit-row';
       const name=document.createElement('span');name.textContent=caption;
       const amount=document.createElement('strong');amount.textContent=rub(balances.reduce((sum,calc)=>sum+Number(calc?.[key]||0),0));
