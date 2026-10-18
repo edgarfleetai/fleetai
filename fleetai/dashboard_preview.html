@@ -79,6 +79,18 @@
       }
       card.append(mismatch);
     }
+    const missingCars=entries.filter(e=>e.kind==='payout'&&e.investor_name===investor&&e.car_code&&!ownerByCode.has(e.car_code));
+    if(missingCars.length){
+      const unknown=document.createElement('details');unknown.className='investor-audit';
+      const heading=document.createElement('summary');heading.textContent='Выплаты по отсутствующим в списке авто ('+missingCars.length+')';unknown.append(heading);
+      for(const payment of missingCars){
+        const line=document.createElement('div');line.className='investor-audit-row';
+        const label=document.createElement('span');label.textContent=(payment.date||'Без даты')+' · авто '+payment.car_code;
+        const amount=document.createElement('strong');amount.textContent=rub(payment.amount);
+        line.append(label,amount);unknown.append(line);
+      }
+      card.append(unknown);
+    }
     card.append(details);dueCards.append(card)
    }
    carList.replaceChildren();entryList.replaceChildren();
