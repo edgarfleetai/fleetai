@@ -38,7 +38,7 @@
     const note=document.createElement('small');note.className='muted';note.textContent=periodSelect.value==='all'?'Выберите расчётный период':owned.length+' авто · после взаимозачёта';
     const investorPayouts=entries.filter(e=>e.kind==='payout'&&e.investor_name===investor);
     const auditTotal=balances.reduce((sum,calc)=>sum+Number(calc?.paid||0),0);
-    const journalTotal=entries.filter(e=>e.kind==='payout'&&e.investor_name===investor).reduce((sum,e)=>sum+Number(e.amount||0),0);
+    const journalTotal=entries.filter(e=>e.kind==='payout'&&((codes.has(e.car_code)&&(!e.investor_name||e.investor_name===investor))||(!e.car_code&&e.investor_name===investor))).reduce((sum,e)=>sum+Number(e.amount||0),0);
     const warning=document.createElement('small');warning.className='investor-audit-warning';
     if(periodSelect.value!=='all'&&journalTotal!==auditTotal){
       const unassigned=investorPayouts.filter(e=>!e.car_code);const unassignedSum=unassigned.reduce((sum,e)=>sum+Number(e.amount||0),0);warning.textContent='Расхождение выплат: журнал '+rub(journalTotal)+', по машинам '+rub(auditTotal)+(unassigned.length?' · без автомобиля: '+unassigned.length+' операций на '+rub(unassignedSum):' · проверь привязку к машинам');
