@@ -67,7 +67,7 @@ def mcp_post():
         return "", 202
     if method == "ping":
         result = {}
-    if method == "initialize":
+    elif method == "initialize":
         result = {"protocolVersion": "2025-03-26", "capabilities": {"tools": {}}, "serverInfo": {"name": "fleetai-staging", "version": "0.1.0"}}
     elif method == "tools/list":
         result = {"tools": TOOLS}
