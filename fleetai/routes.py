@@ -4488,8 +4488,11 @@ def api_investor_ledger_readonly():
                     investor_name=row.investor_name or "") for row in payouts]
         )
         entries.sort(key=lambda row: row["date_iso"], reverse=True)
+        dated_entries = [row["date_iso"] for row in entries if row["date_iso"]]
+        previous_entries = [row for row in entries if previous_start.strftime("%Y-%m-%d") <= row["date_iso"] < current_start.strftime("%Y-%m-%d")]
+        diagnostics = {"previous_entries": len(previous_entries), "total_entries": len(entries), "earliest_entry": min(dated_entries) if dated_entries else None, "latest_entry": max(dated_entries) if dated_entries else None}
         return jsonify({"ok": True, "read_only": True,
-                        "periods": {"cycle": {"start": current_start.strftime("%Y-%m-%d"), "end_exclusive": current_end.strftime("%Y-%m-%d")}, "previous": {"start": previous_start.strftime("%Y-%m-%d"), "end_exclusive": previous_end.strftime("%Y-%m-%d")}},
+                        "diagnostics": diagnostics, "periods": {"cycle": {"start": current_start.strftime("%Y-%m-%d"), "end_exclusive": current_end.strftime("%Y-%m-%d")}, "previous": {"start": previous_start.strftime("%Y-%m-%d"), "end_exclusive": previous_end.strftime("%Y-%m-%d")}},
                         "cars": [{"code": str(car.code).strip(),
                                   "name": " ".join(filter(None, [car.brand, car.model])),
                                   "investor": car.investor_name or "Не указан",
