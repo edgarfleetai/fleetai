@@ -10,6 +10,7 @@ from flask import Blueprint, jsonify, request
 from sqlalchemy import func
 from .db import Session
 from .models import Car, Operation, Income, Expense
+from .mcp_oauth import oauth_enabled, validate_access_token
 
 bp_mcp = Blueprint("fleetai_mcp", __name__)
 TOOLS = [
@@ -65,7 +66,13 @@ def mcp_post():
         return jsonify({"error": "mcp_disabled"}), 404
     token = os.getenv("FLEETAI_MCP_BEARER_TOKEN", "")
     auth = request.headers.get("Authorization", "")
-    if len(token) < 32 or not auth.startswith("Bearer ") or not secrets.compare_digest(auth[7:], token):
+    authorized = False
+    if auth.startswith("Bearer "):
+        if oauth_enabled():
+            authorized = validate_access_token(auth[7:])
+        else:
+            authorized = len(token) >= 32 and secrets.compare_digest(auth[7:], token)
+    if not authorized:
         response = jsonify({"error": "unauthorized"})
         response.headers["WWW-Authenticate"] = 'Bearer realm="fleetai-staging"'
         response.headers["Cache-Control"] = "no-store"
