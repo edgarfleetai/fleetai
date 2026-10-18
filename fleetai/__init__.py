@@ -122,7 +122,10 @@ def create_app():
             action = data.get("action", "") if isinstance(data, dict) else ""
             if isinstance(action, str) and action.strip().lower() == "block":
                 return jsonify({"ok": False, "message": "Удалённая блокировка отключена до аппаратной проверки безопасности"}), 403
-        # MCP performs its own constant-time bearer authentication and never writes.\n        if rule == "/mcp" and request.method == "POST":\n            return None\n        # Isolated staging is owner-only and read-only.
+        # MCP performs its own constant-time bearer authentication and never writes.
+        if rule == "/mcp" and request.method == "POST":
+            return None
+        # Isolated staging is owner-only and read-only.
         if os.getenv("FLEETAI_STAGING_LOCKDOWN") == "1":
             if rule not in ("/admin/login", "/admin/logout", "/static/<path:filename>"):
                 if not is_admin():
@@ -166,5 +169,6 @@ def create_app():
             response.headers["Referrer-Policy"] = "same-origin"
         return response
 
-    app.register_blueprint(bp)\n    app.register_blueprint(bp_mcp)
+    app.register_blueprint(bp)
+    app.register_blueprint(bp_mcp)
     return app
