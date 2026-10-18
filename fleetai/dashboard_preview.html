@@ -66,6 +66,19 @@
       }
       card.append(unassigned);
     }
+    const ownerByCode=new Map(data.cars.map(c=>[c.code,c.investor]));
+    const conflicts=entries.filter(e=>e.kind==='payout'&&e.investor_name===investor&&e.car_code&&ownerByCode.has(e.car_code)&&ownerByCode.get(e.car_code)!==investor);
+    if(conflicts.length){
+      const mismatch=document.createElement('details');mismatch.className='investor-audit';
+      const heading=document.createElement('summary');heading.textContent='Проверь инвестора в выплатах ('+conflicts.length+')';mismatch.append(heading);
+      for(const payment of conflicts){
+        const line=document.createElement('div');line.className='investor-audit-row';
+        const label=document.createElement('span');label.textContent=(payment.date||'Без даты')+' · авто '+payment.car_code+' · закреплён за '+ownerByCode.get(payment.car_code);
+        const amount=document.createElement('strong');amount.textContent=rub(payment.amount);
+        line.append(label,amount);mismatch.append(line);
+      }
+      card.append(mismatch);
+    }
     card.append(details);dueCards.append(card)
    }
    carList.replaceChildren();entryList.replaceChildren();
