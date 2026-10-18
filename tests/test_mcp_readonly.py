@@ -90,6 +90,27 @@ class MCPTransportSecurityTests(unittest.TestCase):
             self.assertEqual(response.json["error"]["code"], -32602)
             reader.assert_not_called()
 
+    def test_oauth_mode_disables_static_token(self):
+        with patch.dict(os.environ, {
+            "FLEETAI_MCP_OAUTH_ISSUER": "https://issuer.example",
+            "FLEETAI_MCP_OAUTH_JWKS_URI": "https://issuer.example/keys",
+            "FLEETAI_MCP_OAUTH_AUDIENCE": "https://fleetai-security-staging.onrender.com/mcp",
+        }):
+            with patch("fleetai.mcp_readonly.validate_access_token", return_value=False) as verifier:
+                response = self.call("tools/list", self.headers)
+                self.assertEqual(response.status_code, 401)
+                verifier.assert_called_once_with("x" * 48)
+
+    def test_oauth_mode_accepts_verified_token(self):
+        with patch.dict(os.environ, {
+            "FLEETAI_MCP_OAUTH_ISSUER": "https://issuer.example",
+            "FLEETAI_MCP_OAUTH_JWKS_URI": "https://issuer.example/keys",
+            "FLEETAI_MCP_OAUTH_AUDIENCE": "https://fleetai-security-staging.onrender.com/mcp",
+        }):
+            with patch("fleetai.mcp_readonly.validate_access_token", return_value=True):
+                response = self.call("tools/list", self.headers)
+                self.assertEqual(response.status_code, 200)
+
     def test_tools_are_read_only(self):
         with patch("fleetai.mcp_readonly._read", return_value=[{"code": "404"}]) as reader:
             response = self.call("tools/call", self.headers, {"name": "fleet_cars", "arguments": {}})
