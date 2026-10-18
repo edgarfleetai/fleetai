@@ -47,6 +47,21 @@ def create_app():
         html = Path(__file__).with_name("dashboard_preview.html").read_text(encoding="utf-8")
         return app.response_class(html, mimetype="text/html", headers={"Cache-Control": "no-store", "X-Frame-Options": "DENY"})
 
+    @app.route("/mcp", methods=["GET", "POST"])
+    def mcp_endpoint():
+        """Fail-closed MCP transport placeholder, not a public data endpoint.
+
+        An OAuth resource server and scoped credentials must be implemented
+        and tested before exposing any MCP tools or FleetAI data.
+        """
+        response = jsonify({
+            "error": "mcp_not_configured",
+            "message": "FleetAI MCP requires OAuth configuration before activation.",
+        })
+        response.status_code = 503
+        response.headers["Cache-Control"] = "no-store"
+        return response
+
     @app.route("/api/assistant/capabilities", methods=["GET"])
     def assistant_capabilities():
         """Owner-only read-only integration discovery; no model calls or mutations."""
