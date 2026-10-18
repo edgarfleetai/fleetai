@@ -40,7 +40,7 @@
     const journalTotal=entries.filter(e=>e.kind==='payout'&&e.investor_name===investor).reduce((sum,e)=>sum+Number(e.amount||0),0);
     const warning=document.createElement('small');warning.className='investor-audit-warning';
     if(periodSelect.value!=='all'&&journalTotal!==auditTotal){
-      warning.textContent='Проверь привязку выплат: журнал '+rub(journalTotal)+', расчёт по машинам '+rub(auditTotal);
+      const unassigned=entries.filter(e=>e.kind==='payout'&&e.investor_name===investor&&!e.car_code);const unassignedSum=unassigned.reduce((sum,e)=>sum+Number(e.amount||0),0);warning.textContent='Расхождение выплат: журнал '+rub(journalTotal)+', по машинам '+rub(auditTotal)+(unassigned.length?' · без автомобиля: '+unassigned.length+' операций на '+rub(unassignedSum):' · проверь привязку к машинам');
     }
 
     const details=document.createElement('details');details.className='investor-audit';
