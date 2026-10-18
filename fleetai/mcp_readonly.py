@@ -39,6 +39,26 @@ def _read(name, args):
     finally:
         db.close()
 
+@bp_mcp.route("/.well-known/oauth-protected-resource", methods=["GET"])
+@bp_mcp.route("/.well-known/oauth-protected-resource/mcp", methods=["GET"])
+def oauth_resource_metadata():
+    """Advertise OAuth only when an authorization server is configured.
+
+    A static MCP bearer token is NOT an OAuth authorization server.
+    """
+    issuer = os.getenv("FLEETAI_MCP_OAUTH_ISSUER", "").strip().rstrip("/")
+    if os.getenv("FLEETAI_STAGING_LOCKDOWN") != "1" or not issuer.startswith("https://"):
+        return jsonify({"error": "oauth_not_configured"}), 503
+    result = jsonify({
+        "resource": request.host_url.rstrip("/") + "/mcp",
+        "authorization_servers": [issuer],
+        "scopes_supported": ["fleetai:read"],
+        "bearer_methods_supported": ["header"],
+    })
+    result.headers["Cache-Control"] = "no-store"
+    return result
+
+
 @bp_mcp.route("/mcp", methods=["POST"])
 def mcp_post():
     if os.getenv("FLEETAI_STAGING_LOCKDOWN") != "1":
