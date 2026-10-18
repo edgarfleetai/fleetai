@@ -37,7 +37,11 @@ class MCPTransportSecurityTests(unittest.TestCase):
             self.assertEqual(response.status_code, 503)
 
     def test_oauth_discovery_advertises_configured_issuer(self):
-        with patch.dict(os.environ, {"FLEETAI_MCP_OAUTH_ISSUER": "https://auth.example.test"}):
+        with patch.dict(os.environ, {
+            "FLEETAI_MCP_OAUTH_ISSUER": "https://auth.example.test",
+            "FLEETAI_MCP_OAUTH_JWKS_URI": "https://auth.example.test/keys",
+            "FLEETAI_MCP_OAUTH_AUDIENCE": "https://fleetai-security-staging.onrender.com/mcp",
+        }):
             response = self.client.get("/.well-known/oauth-protected-resource/mcp")
             self.assertEqual(response.status_code, 200)
             self.assertEqual(response.json["authorization_servers"], ["https://auth.example.test"])
