@@ -8,15 +8,14 @@
   const names=[...new Set(data.cars.map(c=>c.investor).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'ru'));
   for(const name of names){const option=document.createElement('option');option.value=name;option.textContent=name;nameSelect.append(option)}
   function render(){
-   const today=new Date(),month=today.getDate()>=16?today.getMonth():today.getMonth()-1;
-   const start=new Date(today.getFullYear(),month-(periodSelect.value==='previous'?1:0),16);
-   const end=new Date(start.getFullYear(),start.getMonth()+1,15);
-   const iso=d=>String(d.getFullYear())+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+   const bounds=(data.periods||{})[periodSelect.value];
+   const startIso=bounds?.start||'0000-00-00';
+   const endIso=bounds?.end_exclusive||'9999-99-99';
    const cars=data.cars.filter(c=>!nameSelect.value||c.investor===nameSelect.value);
    const codes=new Set(cars.map(c=>c.code));
    const selectedNames=new Set(cars.map(c=>c.investor));
    const entries=data.entries.filter(e=>{
-    if(periodSelect.value!=='all'&&!(e.date_iso>=iso(start)&&e.date_iso<=iso(end)))return false;
+    if(periodSelect.value!=='all'&&!(e.date_iso>=startIso&&e.date_iso<endIso))return false;
     if(e.kind==='payout')return selectedNames.has(e.investor_name)&&(!nameSelect.value||e.investor_name===nameSelect.value);
     return codes.has(e.car_code);
    });
