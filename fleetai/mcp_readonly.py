@@ -48,7 +48,9 @@ def oauth_resource_metadata():
     A static MCP bearer token is NOT an OAuth authorization server.
     """
     issuer = os.getenv("FLEETAI_MCP_OAUTH_ISSUER", "").strip().rstrip("/")
-    if os.getenv("FLEETAI_STAGING_LOCKDOWN") != "1" or not issuer.startswith("https://"):
+    if (os.getenv("FLEETAI_STAGING_LOCKDOWN") != "1" or not issuer.startswith("https://")
+            or not os.getenv("FLEETAI_MCP_OAUTH_JWKS_URI")
+            or not os.getenv("FLEETAI_MCP_OAUTH_AUDIENCE")):
         return jsonify({"error": "oauth_not_configured"}), 503
     result = jsonify({
         "resource": request.host_url.rstrip("/") + "/mcp",
