@@ -36,11 +36,12 @@
     const label=document.createElement('span');label.className='muted';label.textContent='К выплате за период';
     const value=document.createElement('div');value.className='value';value.textContent=periodSelect.value==='all'?'—':rub(Math.max(payable-debt,0));
     const note=document.createElement('small');note.className='muted';note.textContent=periodSelect.value==='all'?'Выберите расчётный период':owned.length+' авто · после взаимозачёта';
+    const investorPayouts=entries.filter(e=>e.kind==='payout'&&e.investor_name===investor);
     const auditTotal=balances.reduce((sum,calc)=>sum+Number(calc?.paid||0),0);
     const journalTotal=entries.filter(e=>e.kind==='payout'&&e.investor_name===investor).reduce((sum,e)=>sum+Number(e.amount||0),0);
     const warning=document.createElement('small');warning.className='investor-audit-warning';
     if(periodSelect.value!=='all'&&journalTotal!==auditTotal){
-      const unassigned=entries.filter(e=>e.kind==='payout'&&e.investor_name===investor&&!e.car_code);const unassignedSum=unassigned.reduce((sum,e)=>sum+Number(e.amount||0),0);warning.textContent='Расхождение выплат: журнал '+rub(journalTotal)+', по машинам '+rub(auditTotal)+(unassigned.length?' · без автомобиля: '+unassigned.length+' операций на '+rub(unassignedSum):' · проверь привязку к машинам');
+      const unassigned=investorPayouts.filter(e=>!e.car_code);const unassignedSum=unassigned.reduce((sum,e)=>sum+Number(e.amount||0),0);warning.textContent='Расхождение выплат: журнал '+rub(journalTotal)+', по машинам '+rub(auditTotal)+(unassigned.length?' · без автомобиля: '+unassigned.length+' операций на '+rub(unassignedSum):' · проверь привязку к машинам');
     }
 
     const details=document.createElement('details');details.className='investor-audit';
@@ -54,7 +55,7 @@
       line.append(name,amount);details.append(line);
     }
     card.append(title,label,value,note);if(warning.textContent)card.append(warning);
-    const missing=entries.filter(e=>e.kind==='payout'&&e.investor_name===investor&&!e.car_code);
+    const missing=investorPayouts.filter(e=>!e.car_code);
     if(missing.length){
       const unassigned=document.createElement('details');unassigned.className='investor-audit';
       const heading=document.createElement('summary');heading.textContent='Выплаты без автомобиля ('+missing.length+')';unassigned.append(heading);
@@ -67,7 +68,7 @@
       card.append(unassigned);
     }
     const ownerByCode=new Map(data.cars.map(c=>[c.code,c.investor]));
-    const conflicts=entries.filter(e=>e.kind==='payout'&&e.investor_name===investor&&e.car_code&&ownerByCode.has(e.car_code)&&ownerByCode.get(e.car_code)!==investor);
+    const conflicts=investorPayouts.filter(e=>e.car_code&&ownerByCode.has(e.car_code)&&ownerByCode.get(e.car_code)!==investor);
     if(conflicts.length){
       const mismatch=document.createElement('details');mismatch.className='investor-audit';
       const heading=document.createElement('summary');heading.textContent='Проверь инвестора в выплатах ('+conflicts.length+')';mismatch.append(heading);
@@ -79,7 +80,7 @@
       }
       card.append(mismatch);
     }
-    const missingCars=entries.filter(e=>e.kind==='payout'&&e.investor_name===investor&&e.car_code&&!ownerByCode.has(e.car_code));
+    const missingCars=investorPayouts.filter(e=>e.car_code&&!ownerByCode.has(e.car_code));
     if(missingCars.length){
       const unknown=document.createElement('details');unknown.className='investor-audit';
       const heading=document.createElement('summary');heading.textContent='Выплаты по отсутствующим в списке авто ('+missingCars.length+')';unknown.append(heading);
