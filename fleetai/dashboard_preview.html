@@ -36,6 +36,12 @@
     const label=document.createElement('span');label.className='muted';label.textContent='К выплате за период';
     const value=document.createElement('div');value.className='value';value.textContent=rub(Math.max(payable-debt,0));
     const note=document.createElement('small');note.className='muted';note.textContent=owned.length+' авто · после взаимозачёта';
+    const periodTotals=document.createElement('small');periodTotals.className='muted';
+    if(periodSelect.value==='previous'){
+      const accrued=balances.reduce((sum,calc)=>sum+Number(calc?.accrued||0),0);
+      const paid=balances.reduce((sum,calc)=>sum+Number(calc?.paid||0),0);
+      periodTotals.textContent='Начислено: '+rub(accrued)+' · Выплачено: '+rub(paid)+' · Остаток: '+rub(Math.max(payable-debt,0));
+    }
     const netDebt=Math.max(debt-payable,0);
     const netDebtLine=document.createElement('small');netDebtLine.className='muted';
     if(netDebt>0)netDebtLine.textContent='Остаток долга инвестора перед парком: '+rub(netDebt);
@@ -61,7 +67,7 @@
       const amount=document.createElement('strong');amount.textContent=rub(balances.reduce((sum,calc)=>sum+Number(calc?.[key]||0),0));
       line.append(name,amount);details.append(line);
     }
-    card.append(title,label,value,note);if(netDebtLine.textContent)card.append(netDebtLine);if(warning.textContent)card.append(warning);if(excessWarning.textContent)card.append(excessWarning);
+    card.append(title,label,value,note);if(periodTotals.textContent)card.append(periodTotals);if(netDebtLine.textContent)card.append(netDebtLine);if(warning.textContent)card.append(warning);if(excessWarning.textContent)card.append(excessWarning);
     const missing=investorPayouts.filter(e=>!e.car_code);
     if(missing.length){
       const unassigned=document.createElement('details');unassigned.className='investor-audit';
