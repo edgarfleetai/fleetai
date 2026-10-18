@@ -47,6 +47,26 @@ def create_app():
         html = Path(__file__).with_name("dashboard_preview.html").read_text(encoding="utf-8")
         return app.response_class(html, mimetype="text/html", headers={"Cache-Control": "no-store", "X-Frame-Options": "DENY"})
 
+    @app.route("/api/assistant/capabilities", methods=["GET"])
+    def assistant_capabilities():
+        """Owner-only read-only integration discovery; no model calls or mutations."""
+        if not is_admin():
+            return jsonify({"ok": False, "message": "Требуется вход администратора"}), 401
+        return jsonify({
+            "ok": True,
+            "enabled": False,
+            "mode": "read_only",
+            "model_connected": False,
+            "data_sources": {
+                "cars": "/api/overview-readonly",
+                "finances": "/api/finance-ledger-readonly",
+                "investors": "/api/investor-ledger-readonly",
+                "repairs": "/api/repair-history-readonly",
+            },
+            "actions_enabled": [],
+            "message": "Интерфейс подключения готов. ИИ-модель ещё не подключена.",
+        })
+
     @app.route("/api/admin/csrf-token", methods=["GET"])
     def admin_csrf_token():
         if not is_admin():
