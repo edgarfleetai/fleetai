@@ -8,6 +8,7 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 from flask import Flask, request, jsonify, session, redirect, render_template_string, url_for
 from .db import init_db
 from .routes import bp
+from .mcp_readonly import bp_mcp
 from .admin_auth import verify_admin_password, is_admin
 from .login_limiter import login_blocked, record_login_failure, clear_login_failures
 from .admin_policy import requires_owner, DANGEROUS_WIALON_COMMAND
@@ -46,21 +47,6 @@ def create_app():
         # Read-only UI prototype: uses hardcoded demo data, no database access.
         html = Path(__file__).with_name("dashboard_preview.html").read_text(encoding="utf-8")
         return app.response_class(html, mimetype="text/html", headers={"Cache-Control": "no-store", "X-Frame-Options": "DENY"})
-
-    @app.route("/mcp", methods=["GET", "POST"])
-    def mcp_endpoint():
-        """Fail-closed MCP transport placeholder, not a public data endpoint.
-
-        An OAuth resource server and scoped credentials must be implemented
-        and tested before exposing any MCP tools or FleetAI data.
-        """
-        response = jsonify({
-            "error": "mcp_not_configured",
-            "message": "FleetAI MCP requires OAuth configuration before activation.",
-        })
-        response.status_code = 503
-        response.headers["Cache-Control"] = "no-store"
-        return response
 
     @app.route("/api/assistant/capabilities", methods=["GET"])
     def assistant_capabilities():
@@ -136,7 +122,7 @@ def create_app():
             action = data.get("action", "") if isinstance(data, dict) else ""
             if isinstance(action, str) and action.strip().lower() == "block":
                 return jsonify({"ok": False, "message": "Удалённая блокировка отключена до аппаратной проверки безопасности"}), 403
-        # Isolated staging is owner-only and read-only.
+        # MCP performs its own constant-time bearer authentication and never writes.\n        if rule == "/mcp" and request.method == "POST":\n            return None\n        # Isolated staging is owner-only and read-only.
         if os.getenv("FLEETAI_STAGING_LOCKDOWN") == "1":
             if rule not in ("/admin/login", "/admin/logout", "/static/<path:filename>"):
                 if not is_admin():
@@ -180,5 +166,5 @@ def create_app():
             response.headers["Referrer-Policy"] = "same-origin"
         return response
 
-    app.register_blueprint(bp)
+    app.register_blueprint(bp)\n    app.register_blueprint(bp_mcp)
     return app
