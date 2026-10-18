@@ -125,6 +125,8 @@ def create_app():
         # MCP performs its own constant-time bearer authentication and never writes.
         if rule == "/mcp" and request.method == "POST":
             return None
+        if rule in ("/.well-known/oauth-protected-resource", "/.well-known/oauth-protected-resource/mcp") and request.method == "GET":
+            return None
         # Isolated staging is owner-only and read-only.
         if os.getenv("FLEETAI_STAGING_LOCKDOWN") == "1":
             if rule not in ("/admin/login", "/admin/logout", "/static/<path:filename>"):
