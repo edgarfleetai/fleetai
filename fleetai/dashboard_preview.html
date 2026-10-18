@@ -53,7 +53,20 @@
       const amount=document.createElement('strong');amount.textContent=rub(balances.reduce((sum,calc)=>sum+Number(calc?.[key]||0),0));
       line.append(name,amount);details.append(line);
     }
-    card.append(title,label,value,note);if(warning.textContent)card.append(warning);card.append(details);dueCards.append(card)
+    card.append(title,label,value,note);if(warning.textContent)card.append(warning);
+    const missing=entries.filter(e=>e.kind==='payout'&&e.investor_name===investor&&!e.car_code);
+    if(missing.length){
+      const unassigned=document.createElement('details');unassigned.className='investor-audit';
+      const heading=document.createElement('summary');heading.textContent='Выплаты без автомобиля ('+missing.length+')';unassigned.append(heading);
+      for(const payment of missing){
+        const line=document.createElement('div');line.className='investor-audit-row';
+        const date=document.createElement('span');date.textContent=payment.date||'Дата не указана';
+        const amount=document.createElement('strong');amount.textContent=rub(payment.amount);
+        line.append(date,amount);unassigned.append(line);
+      }
+      card.append(unassigned);
+    }
+    card.append(details);dueCards.append(card)
    }
    carList.replaceChildren();entryList.replaceChildren();
    if(!cars.length)carList.textContent='Машины инвесторов не найдены';
