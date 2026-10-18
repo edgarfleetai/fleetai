@@ -1,0 +1,70 @@
+"""Security regression tests for staging MCP; no database or production writes."""
+import os
+import unittest
+from unittest.mock import patch
+from flask import Flask
+from fleetai.mcp_readonly import bp_mcp
+
+class MCPTransportSecurityTests(unittest.TestCase):
+    def setUp(self):
+        app = Flask(__name__)
+        app.register_blueprint(bp_mcp)
+        self.client = app.test_client()
+        self.headers = {"Authorization": "Bearer " + "x" * 48}
+        self.env = patch.dict(os.environ, {
+            "FLEETAI_STAGING_LOCKDOWN": "1",
+            "FLEETAI_MCP_BEARER_TOKEN": "x" * 48,
+        })
+        self.env.start()
+
+    def tearDown(self):
+        self.env.stop()
+
+    def call(self, method, headers=None, params=None):
+        return self.client.post("/mcp", json={
+            "jsonrpc": "2.0", "id": 1, "method": method,
+            "params": params if params is not None else {},
+        }, headers=headers or {})
+
+    def test_anonymous_cannot_list_tools(self):
+        response = self.call("tools/list")
+        self.assertEqual(response.status_code, 401)
+        self.assertIn("Bearer", response.headers["WWW-Authenticate"])
+
+    def test_wrong_token_cannot_call_tools(self):
+        response = self.call("tools/call", {"Authorization": "Bearer invalid"},
+                             {"name": "fleet_cars"})
+        self.assertEqual(response.status_code, 401)
+
+    def test_no_secret_configured_fails_closed(self):
+        with patch.dict(os.environ, {"FLEETAI_MCP_BEARER_TOKEN": ""}):
+            self.assertEqual(self.call("tools/list", self.headers).status_code, 401)
+
+    def test_production_mode_disabled_even_with_token(self):
+        with patch.dict(os.environ, {"FLEETAI_STAGING_LOCKDOWN": "0"}):
+            self.assertEqual(self.call("tools/list", self.headers).status_code, 404)
+
+    def test_authenticated_tool_discovery(self):
+        response = self.call("tools/list", self.headers)
+        self.assertEqual(response.status_code, 200)
+        names = {x["name"] for x in response.json["result"]["tools"]}
+        self.assertEqual(names, {"fleet_cars", "fleet_repairs", "fleet_finance_summary"})
+
+    def test_unknown_tool_never_queries_database(self):
+        with patch("fleetai.mcp_readonly._read") as reader:
+            response = self.call("tools/call", self.headers, {"name": "fleet_delete_all"})
+            self.assertEqual(response.json["error"]["code"], -32602)
+            reader.assert_not_called()
+
+    def test_rejects_cross_origin(self):
+        headers = dict(self.headers, Origin="https://untrusted.example")
+        self.assertEqual(self.call("tools/list", headers).status_code, 403)
+
+    def test_tools_are_read_only(self):
+        with patch("fleetai.mcp_readonly._read", return_value=[{"code": "404"}]) as reader:
+            response = self.call("tools/call", self.headers, {"name": "fleet_cars", "arguments": {}})
+            self.assertFalse(response.json["result"]["isError"])
+            reader.assert_called_once_with("fleet_cars", {})
+
+if __name__ == "__main__":
+    unittest.main()
