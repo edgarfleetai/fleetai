@@ -4472,6 +4472,7 @@ def api_investor_ledger_readonly():
             calculated[str(car.code).strip()] = {
                 "cycle": calculate_period_for_car(session, car, current_start, current_end, include_previous_carry=False),
                 "previous": calculate_period_for_car(session, car, previous_start, previous_end, include_previous_carry=False),
+                "all": calculate_period_for_car(session, car, datetime(2000, 1, 1), current_end, include_previous_carry=False),
             }
         payouts = session.query(InvestorPayout).all()
         def entry(row, kind, category):
