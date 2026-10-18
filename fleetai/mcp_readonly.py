@@ -65,13 +65,15 @@ def mcp_post():
         return jsonify({"jsonrpc": "2.0", "id": req_id, "error": {"code": -32602, "message": "Invalid params"}})
     if method == "notifications/initialized":
         return "", 202
+    if method == "ping":
+        result = {}
     if method == "initialize":
         result = {"protocolVersion": "2025-03-26", "capabilities": {"tools": {}}, "serverInfo": {"name": "fleetai-staging", "version": "0.1.0"}}
     elif method == "tools/list":
         result = {"tools": TOOLS}
     elif method == "tools/call":
         name, args = params.get("name"), params.get("arguments") or {}
-        if name not in {t["name"] for t in TOOLS} or not isinstance(args, dict) or set(args) - set(next(t["inputSchema"]["properties"] for t in TOOLS if t["name"] == name)):
+        if name not in {t["name"] for t in TOOLS} or not isinstance(args, dict) or set(args) - set(next(t["inputSchema"]["properties"] for t in TOOLS if t["name"] == name)) or (name == "fleet_repairs" and "car_code" in args and (not isinstance(args["car_code"], str) or len(args["car_code"]) > 32)):
             return jsonify({"jsonrpc": "2.0", "id": req_id, "error": {"code": -32602, "message": "Invalid tool arguments"}})
         try:
             import json
