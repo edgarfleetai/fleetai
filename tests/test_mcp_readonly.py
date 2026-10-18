@@ -60,6 +60,19 @@ class MCPTransportSecurityTests(unittest.TestCase):
         headers = dict(self.headers, Origin="https://untrusted.example")
         self.assertEqual(self.call("tools/list", headers).status_code, 403)
 
+    def test_ping(self):
+        response = self.call("ping", self.headers)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json["result"], {})
+
+    def test_repair_code_must_be_short_string(self):
+        with patch("fleetai.mcp_readonly._read") as reader:
+            response = self.call("tools/call", self.headers, {
+                "name": "fleet_repairs", "arguments": {"car_code": ["404"]}
+            })
+            self.assertEqual(response.json["error"]["code"], -32602)
+            reader.assert_not_called()
+
     def test_tools_are_read_only(self):
         with patch("fleetai.mcp_readonly._read", return_value=[{"code": "404"}]) as reader:
             response = self.call("tools/call", self.headers, {"name": "fleet_cars", "arguments": {}})
