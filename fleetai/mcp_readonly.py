@@ -41,7 +41,9 @@ def _read(name, args):
 
 @bp_mcp.route("/mcp", methods=["POST"])
 def mcp_post():
-    if os.getenv("FLEETAI_STAGING_LOCKDOWN") != "1":\n        return jsonify({"error": "mcp_disabled"}), 404\n    token = os.getenv("FLEETAI_MCP_BEARER_TOKEN", "")
+    if os.getenv("FLEETAI_STAGING_LOCKDOWN") != "1":
+        return jsonify({"error": "mcp_disabled"}), 404
+    token = os.getenv("FLEETAI_MCP_BEARER_TOKEN", "")
     auth = request.headers.get("Authorization", "")
     if len(token) < 32 or not auth.startswith("Bearer ") or not secrets.compare_digest(auth[7:], token):
         return jsonify({"error": "unauthorized"}), 401
