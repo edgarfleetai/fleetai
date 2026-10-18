@@ -46,9 +46,17 @@ def mcp_post():
     token = os.getenv("FLEETAI_MCP_BEARER_TOKEN", "")
     auth = request.headers.get("Authorization", "")
     if len(token) < 32 or not auth.startswith("Bearer ") or not secrets.compare_digest(auth[7:], token):
-        return jsonify({"error": "unauthorized"}), 401
+        response = jsonify({"error": "unauthorized"})
+        response.headers["WWW-Authenticate"] = 'Bearer realm="fleetai-staging"'
+        response.headers["Cache-Control"] = "no-store"
+        return response, 401
+    origin = request.headers.get("Origin")
+    if origin and origin.rstrip("/") != request.host_url.rstrip("/"):
+        return jsonify({"error": "origin_not_allowed"}), 403
     if request.content_length is None or request.content_length > 16384:
         return jsonify({"error": "invalid_request_size"}), 413
+    if not request.is_json:
+        return jsonify({"error": "unsupported_media_type"}), 415
     payload = request.get_json(silent=True)
     if not isinstance(payload, dict) or payload.get("jsonrpc") != "2.0":
         return jsonify({"jsonrpc": "2.0", "id": None, "error": {"code": -32600, "message": "Invalid request"}}), 400
