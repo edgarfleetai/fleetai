@@ -4462,7 +4462,7 @@ def api_investor_ledger_readonly():
         if today.day < 16:
             last_month = current_start - timedelta(days=1)
             current_start = datetime(last_month.year, last_month.month, 16)
-        previous_month = current_start - timedelta(days=1)
+        previous_month = current_start.replace(day=1) - timedelta(days=1)
         previous_start = datetime(previous_month.year, previous_month.month, 16)
         calculated = {}
         for car in cars:
