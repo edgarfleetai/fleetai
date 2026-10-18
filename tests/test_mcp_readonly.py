@@ -26,6 +26,23 @@ class MCPTransportSecurityTests(unittest.TestCase):
             "params": params if params is not None else {},
         }, headers=headers or {})
 
+    def test_oauth_discovery_fails_closed_without_issuer(self):
+        with patch.dict(os.environ, {"FLEETAI_MCP_OAUTH_ISSUER": ""}):
+            response = self.client.get("/.well-known/oauth-protected-resource/mcp")
+            self.assertEqual(response.status_code, 503)
+
+    def test_oauth_discovery_rejects_insecure_issuer(self):
+        with patch.dict(os.environ, {"FLEETAI_MCP_OAUTH_ISSUER": "http://unsafe.example"}):
+            response = self.client.get("/.well-known/oauth-protected-resource/mcp")
+            self.assertEqual(response.status_code, 503)
+
+    def test_oauth_discovery_advertises_configured_issuer(self):
+        with patch.dict(os.environ, {"FLEETAI_MCP_OAUTH_ISSUER": "https://auth.example.test"}):
+            response = self.client.get("/.well-known/oauth-protected-resource/mcp")
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.json["authorization_servers"], ["https://auth.example.test"])
+            self.assertEqual(response.json["scopes_supported"], ["fleetai:read"])
+
     def test_anonymous_cannot_list_tools(self):
         response = self.call("tools/list")
         self.assertEqual(response.status_code, 401)
