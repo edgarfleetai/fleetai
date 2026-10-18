@@ -4488,6 +4488,7 @@ def api_investor_ledger_readonly():
         )
         entries.sort(key=lambda row: row["date_iso"], reverse=True)
         return jsonify({"ok": True, "read_only": True,
+                        "periods": {"cycle": {"start": current_start.strftime("%Y-%m-%d"), "end_exclusive": current_end.strftime("%Y-%m-%d")}, "previous": {"start": previous_start.strftime("%Y-%m-%d"), "end_exclusive": previous_end.strftime("%Y-%m-%d")}},
                         "cars": [{"code": str(car.code).strip(),
                                   "name": " ".join(filter(None, [car.brand, car.model])),
                                   "investor": car.investor_name or "Не указан",
