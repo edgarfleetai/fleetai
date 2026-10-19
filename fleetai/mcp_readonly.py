@@ -86,6 +86,14 @@ def mcp_post():
     origin = request.headers.get("Origin")
     if origin and origin.rstrip("/") != request.host_url.rstrip("/"):
         return jsonify({"error": "origin_not_allowed"}), 403
+    # Streamable HTTP clients advertise both supported response formats.
+    # This server currently chooses the permitted application/json response.
+    accept = request.headers.get("Accept", "*/*")
+    if not any(part in accept for part in ("application/json", "*/*", "application/*")):
+        return jsonify({"error": "not_acceptable"}), 406
+    protocol_version = request.headers.get("MCP-Protocol-Version")
+    if protocol_version and protocol_version != "2025-03-26":
+        return jsonify({"error": "unsupported_protocol_version"}), 400
     if request.content_length is None or request.content_length > 16384:
         return jsonify({"error": "invalid_request_size"}), 413
     if not request.is_json:
@@ -115,4 +123,7 @@ def mcp_post():
             result = {"content": [{"type": "text", "text": "Data temporarily unavailable"}], "isError": True}
     else:
         return jsonify({"jsonrpc": "2.0", "id": req_id, "error": {"code": -32601, "message": "Method not found"}})
-    return jsonify({"jsonrpc": "2.0", "id": req_id, "result": result})
+    response = jsonify({"jsonrpc": "2.0", "id": req_id, "result": result})
+    response.headers["MCP-Protocol-Version"] = "2025-03-26"
+    response.headers["Cache-Control"] = "no-store"
+    return response
