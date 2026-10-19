@@ -8945,8 +8945,10 @@ def api_telegram_webhook():
                 # a signed one we cannot safely associate with this chat.
                 signed_count=session.execute(sql_text("""
                     SELECT COUNT(*) FROM driver_contracts
-                    WHERE TRIM(car_code)=:code AND status='signed'
-                """),{"code":normalize_code(car.code)}).scalar()
+                    WHERE TRIM(car_code)=:code
+                      AND TRIM(driver_name)=:driver
+                      AND status='signed'
+                """),{"code":normalize_code(car.code),"driver":(car.driver or "").strip()}).scalar()
                 if signed_count:
                     current_app.logger.warning(
                         "Telegram signed contract unmatched: car=%s signed_count=%s",
