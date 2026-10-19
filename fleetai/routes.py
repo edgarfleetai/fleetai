@@ -8893,7 +8893,21 @@ def api_telegram_webhook():
                 ORDER BY signed_at DESC LIMIT 1
             """),{"code":normalize_code(car.code),"driver":(car.driver or "").strip()}).mappings().first()
             if signed_contract:
-                send_driver_welcome(chat_id, car)
+                # Повторная команда /start позволяет восстановить доставку после подписи
+                # без повторного подтверждения звонком или создания нового договора.
+                delivery = _send_signed_contract_and_license(session, signed_contract)
+                if delivery.get("sent"):
+                    send_driver_welcome(chat_id, car)
+                else:
+                    current_app.logger.warning(
+                        "Telegram signed contract resend failed: contract=%s reason=%s",
+                        signed_contract["id"], delivery.get("reason", "send_failed")
+                    )
+                    send_telegram_to_chat(
+                        chat_id,
+                        "Договор уже подписан, но отправить его PDF не удалось. "
+                        "Сообщите диспетчеру — повторно подписывать договор не нужно."
+                    )
             else:
                 _send_driver_contract_step(session, car, chat_id)
             return jsonify({"ok": True})
