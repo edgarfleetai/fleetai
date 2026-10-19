@@ -8908,6 +8908,21 @@ def api_telegram_webhook():
             """),{"code":normalize_code(car.code),"driver":(car.driver or "").strip()}).mappings().first()
             if signed_contract:
                 send_driver_welcome(chat_id, car)
+                # Повторный /start позволяет получить лицензию и ссылку
+                # без повторного подписания уже оформленного договора.
+                if _vehicle_license_row(session, car.code):
+                    if not _send_vehicle_license_to_chat(session, car, chat_id):
+                        send_telegram_to_chat(
+                            chat_id,
+                            "Лицензия загружена, но Telegram не смог отправить файл. "
+                            "Обратитесь к диспетчеру.",
+                        )
+                else:
+                    send_telegram_to_chat(
+                        chat_id,
+                        "Лицензия для этой машины ещё не загружена. "
+                        "Обратитесь к диспетчеру.",
+                    )
             else:
                 _send_driver_contract_step(session, car, chat_id)
             return jsonify({"ok": True})
