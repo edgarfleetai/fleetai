@@ -8623,7 +8623,7 @@ async function loadCars(){
       const card=document.createElement('article');card.className='driver-card';
       const name=document.createElement('h3');name.textContent=c.driver||'Водитель';card.appendChild(name);
       const car=document.createElement('p');car.textContent='Автомобиль: '+c.code+(c.plate?' · '+c.plate:'');card.appendChild(car);
-      const btn=document.createElement('button');btn.textContent='🔗 Создать ссылку Telegram';btn.onclick=()=>{carSelect.value=c.code;document.querySelector('details').open=true;createLink();};card.appendChild(btn);
+      const btn=document.createElement('button');btn.textContent='🔗 Создать ссылку Telegram';btn.onclick=()=>{carSelect.value=c.code;document.querySelector('details').open=true;document.querySelector('details').scrollIntoView({behavior:'smooth',block:'center'});createLink();};card.appendChild(btn);
       const portal=document.createElement('a');portal.href='/driver?code='+encodeURIComponent(c.code);portal.textContent='Открыть кабинет';portal.target='_blank';portal.rel='noopener';card.appendChild(portal);
       driverCards.appendChild(card);
     });
@@ -8669,8 +8669,9 @@ async function createLink(){
       headers:{'Content-Type':'application/json'},
       body:JSON.stringify({car_code:code})
     });
-    const d=await r.json();
-    if(!r.ok || !d.ok) throw new Error(d.message||'Ошибка');
+    const raw=await r.text();
+    let d;try{d=JSON.parse(raw);}catch(e){throw new Error('Сервер вернул ответ '+r.status+' вместо JSON. Проверь авторизацию и настройки тестового сервера.');}
+    if(!r.ok || !d.ok) throw new Error(d.message||'Ошибка создания ссылки (HTTP '+r.status+')');
     const link=d.link;
     resultBox.innerHTML=`
       <div class="ok"><b>Ссылка готова</b><br>Водитель: ${escapeHtml(d.driver_name)} · машина ${escapeHtml(d.car_code)}
