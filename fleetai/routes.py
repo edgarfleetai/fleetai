@@ -8238,14 +8238,7 @@ def _send_signed_contract_and_license(session,row):
 
     base_url=request.url_root.rstrip("/")
     portal_url=f"{base_url}/driver?code={normalize_code(row['car_code'])}"
-    if license_sent:
-        final_text="✅ Оформление завершено.\n\nДоговор подписан, лицензия автомобиля отправлена. Личный кабинет доступен по кнопке ниже."
-    else:
-        final_text="✅ Договор подписан.\n\nЛицензия автомобиля пока не загружена. После загрузки диспетчером её можно будет получить отдельно."
-    send_telegram_to_chat_with_keyboard(
-        chat_id,final_text,[[{"text":"👤 Открыть личный кабинет","url":portal_url}]]
-    )
-    return {"sent":bool(contract_sent),"contract_sent":bool(contract_sent),"license_sent":bool(license_sent)}
+
 
 
 @bp.route("/api/driver-contract/create",methods=["POST"])
@@ -9247,6 +9240,21 @@ def api_telegram_webhook():
             """),{"code":normalize_code(car.code),"driver":(car.driver or "").strip()}).mappings().first()
             if signed_contract:
                 send_driver_welcome(chat_id, car)
+                # Повторный /start позволяет получить лицензию и ссылку
+                # без повторного подписания уже оформленного договора.
+                if _vehicle_license_row(session, car.code):
+                    if not _send_vehicle_license_to_chat(session, car, chat_id):
+                        send_telegram_to_chat(
+                            chat_id,
+                            "Лицензия загружена, но Telegram не смог отправить файл. "
+                            "Обратитесь к диспетчеру.",
+                        )
+                else:
+                    send_telegram_to_chat(
+                        chat_id,
+                        "Лицензия для этой машины ещё не загружена. "
+                        "Обратитесь к диспетчеру.",
+                    )
             else:
                 _send_driver_contract_step(session, car, chat_id)
             return jsonify({"ok": True})
