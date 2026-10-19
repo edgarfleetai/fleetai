@@ -76,7 +76,11 @@ def mcp_post():
             authorized = len(token) >= 32 and secrets.compare_digest(auth[7:], token)
     if not authorized:
         response = jsonify({"error": "unauthorized"})
-        response.headers["WWW-Authenticate"] = (\n            'Bearer realm="fleetai-staging", resource_metadata="'\n            + request.host_url.rstrip("/") + '/.well-known/oauth-protected-resource/mcp"'\n            if oauth_enabled() else 'Bearer realm="fleetai-staging"'\n        )
+        response.headers["WWW-Authenticate"] = (
+            'Bearer realm="fleetai-staging", resource_metadata="'
+            + request.host_url.rstrip("/") + '/.well-known/oauth-protected-resource/mcp"'
+            if oauth_enabled() else 'Bearer realm="fleetai-staging"'
+        )
         response.headers["Cache-Control"] = "no-store"
         return response, 401
     origin = request.headers.get("Origin")
