@@ -1,0 +1,56 @@
+name: FleetAI checks
+
+on:
+  pull_request:
+    branches: [main, development, feature/admin-topup-guard]
+  push:
+    branches: [development]
+
+jobs:
+  python-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Check Python syntax
+        run: python -m compileall -q app.py fleetai db.py models.py finance.py migrations.py parser.py tbank.py utils.py
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Run isolated security tests
+        env:
+          DATABASE_URL: 'sqlite://'
+        run: python -m unittest discover -s tests -p 'test_admin*.py' -v
+      - name: Run all unit tests with isolated SQLite
+        env:
+          DATABASE_URL: 'sqlite://'
+        run: python -m unittest discover -s tests -p 'test_*.py' -v
+
+  postgres-smoke:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: fleetai_test
+          POSTGRES_PASSWORD: fleetai_test_password
+          POSTGRES_DB: fleetai_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U fleetai_test -d fleetai_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql+psycopg://fleetai_test:fleetai_test_password@localhost:5432/fleetai_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Check PostgreSQL connection and transaction rollback
+        run: python -m unittest discover -s tests -p 'test_postgres_smoke.py' -v
