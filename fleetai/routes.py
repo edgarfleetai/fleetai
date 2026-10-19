@@ -7882,14 +7882,31 @@ def _send_signed_contract_and_license(session,row):
 
     base_url=request.url_root.rstrip("/")
     portal_url=f"{base_url}/driver?code={normalize_code(row['car_code'])}"
+    license_uploaded = bool(car and _vehicle_license_row(session, car.code))
     if license_sent:
-        final_text="✅ Оформление завершено.\n\nДоговор подписан, лицензия автомобиля отправлена. Личный кабинет доступен по кнопке ниже."
+        license_note = "Лицензия автомобиля отправлена."
+    elif license_uploaded:
+        license_note = "Лицензия загружена, но Telegram не смог отправить файл. Обратитесь к диспетчеру."
     else:
-        final_text="✅ Договор подписан.\n\nЛицензия автомобиля пока не загружена. После загрузки диспетчером её можно будет получить отдельно."
-    send_telegram_to_chat_with_keyboard(
-        chat_id,final_text,[[{"text":"👤 Открыть личный кабинет","url":portal_url}]]
+        license_note = "Лицензия автомобиля ещё не загружена. Обратитесь к диспетчеру."
+    final_text = (
+        "✅ Договор подписан.\n\n"
+        + license_note
+        + "\n\nЛичный кабинет доступен по кнопке ниже."
     )
-    return {"sent":bool(contract_sent),"contract_sent":bool(contract_sent),"license_sent":bool(license_sent)}
+    portal_sent = send_telegram_to_chat_with_keyboard(
+        chat_id, final_text,
+        [[{"text": "👤 Открыть личный кабинет", "url": portal_url}]]
+    )
+    if not portal_sent:
+        print(f"Telegram: не удалось отправить ссылку на кабинет машины {normalize_code(row['car_code'])}")
+    return {
+        "sent": bool(contract_sent and portal_sent),
+        "contract_sent": bool(contract_sent),
+        "license_sent": bool(license_sent),
+        "license_uploaded": bool(license_uploaded),
+        "portal_sent": bool(portal_sent),
+    }
 
 
 @bp.route("/api/driver-contract/create",methods=["POST"])
