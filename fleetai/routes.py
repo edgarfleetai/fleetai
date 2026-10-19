@@ -7862,7 +7862,21 @@ def _send_signed_contract_and_license(session,row):
     if not binding:
         return {"sent":False,"reason":"telegram_not_linked"}
     if (binding.get("driver_name") or "").strip() != (row.get("driver_name") or "").strip():
-        return {"sent":False,"reason":"driver_changed"}
+        # The signed form may contain a corrected name. Only allow delivery
+        # when the contract was created within the current Telegram binding
+        # and this is the sole signed contract for that binding.
+        matches=session.execute(sql_text("""
+            SELECT dc.id FROM driver_contracts dc
+            JOIN driver_telegram_bindings b
+              ON TRIM(b.car_code)=TRIM(dc.car_code)
+            WHERE b.telegram_chat_id=:chat_id
+              AND TRIM(dc.car_code)=:code
+              AND dc.status='signed'
+              AND dc.created_at >= b.linked_at
+            LIMIT 2
+        """),{"chat_id":str(binding["telegram_chat_id"]),"code":normalize_code(row["car_code"])}).scalars().all()
+        if len(matches)!=1 or matches[0]!=row["id"]:
+            return {"sent":False,"reason":"driver_changed"}
 
     chat_id=str(binding["telegram_chat_id"])
     pdf_bytes=bytes(row.get("pdf_data") or b"")
@@ -8887,11 +8901,29 @@ def api_telegram_webhook():
                     "Привязка устарела. Попросите диспетчера создать новую ссылку.",
                 )
                 return jsonify({"ok": True})
+            # First prefer an exact driver match. The signed form may have
+            # corrected the driver's spelling, so a scoped fallback is needed.
             signed_contract=session.execute(sql_text("""
                 SELECT * FROM driver_contracts
                 WHERE TRIM(car_code)=:code AND TRIM(driver_name)=:driver AND status='signed'
                 ORDER BY signed_at DESC LIMIT 1
             """),{"code":normalize_code(car.code),"driver":(car.driver or "").strip()}).mappings().first()
+            if not signed_contract:
+                # Only consider contracts created during THIS Telegram binding.
+                # Never guess if multiple signed contracts could belong to
+                # different drivers who used the same car.
+                candidates=session.execute(sql_text("""
+                    SELECT dc.* FROM driver_contracts dc
+                    JOIN driver_telegram_bindings b
+                      ON TRIM(b.car_code)=TRIM(dc.car_code)
+                    WHERE b.telegram_chat_id=:chat_id
+                      AND TRIM(dc.car_code)=:code
+                      AND dc.status='signed'
+                      AND dc.created_at >= b.linked_at
+                    ORDER BY dc.signed_at DESC LIMIT 2
+                """),{"chat_id":chat_id,"code":normalize_code(car.code)}).mappings().all()
+                if len(candidates)==1:
+                    signed_contract=candidates[0]
             if signed_contract:
                 # Повторная команда /start позволяет восстановить доставку после подписи
                 # без повторного подтверждения звонком или создания нового договора.
