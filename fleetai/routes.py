@@ -8929,6 +8929,55 @@ def api_telegram_webhook():
     chat = message.get("chat") or {}
     sender = message.get("from") or {}
 
+    # Recovery of a previously signed contract requires proof of possession
+    # of its original private signing link, never a guess based on car/name.
+    if text_value.startswith("/recover "):
+        chat_id=str(chat.get("id") or "").strip()
+        supplied=text_value.split(None,1)[1].strip()
+        match=re.search(r"(?:[?&]token=|^)([A-Za-z0-9_-]{30,128})(?:[&#\\s]|$)",supplied)
+        if not chat_id or not match:
+            if chat_id:
+                send_telegram_to_chat(chat_id,"Пришлите /recover и исходную ссылку на уже подписанный договор.")
+            return jsonify({"ok":True})
+        token=match.group(1)
+        session=Session()
+        try:
+            binding=session.execute(sql_text("""
+                SELECT car_code,driver_name FROM driver_telegram_bindings
+                WHERE telegram_chat_id=:chat ORDER BY linked_at DESC LIMIT 1
+            """),{"chat":chat_id}).mappings().first()
+            car=find_car(session,binding["car_code"]) if binding else None
+            if not car or (car.driver or "").strip()!=(binding["driver_name"] or "").strip():
+                send_telegram_to_chat(chat_id,"Текущая привязка водителя не подтверждена. Обратитесь к диспетчеру.")
+                return jsonify({"ok":True})
+            row=_contract_row(session,token)
+            if not row or row["status"]!="signed" or normalize_code(row["car_code"])!=normalize_code(car.code):
+                send_telegram_to_chat(chat_id,"Подписанный договор по этой ссылке для вашей машины не найден.")
+                return jsonify({"ok":True})
+            _ensure_telegram_contract_links(session)
+            existing=session.execute(sql_text("""
+                SELECT telegram_chat_id FROM driver_telegram_contract_links
+                WHERE contract_id=:id
+            """),{"id":row["id"]}).scalar()
+            if existing and str(existing)!=chat_id:
+                send_telegram_to_chat(chat_id,"Договор уже закреплён за другим Telegram. Обратитесь к диспетчеру.")
+                return jsonify({"ok":True})
+            if not existing:
+                session.execute(sql_text("""
+                    INSERT INTO driver_telegram_contract_links
+                        (contract_id,telegram_chat_id,car_code,linked_at)
+                    VALUES (:id,:chat,:code,:now)
+                    ON CONFLICT (contract_id) DO NOTHING
+                """),{"id":row["id"],"chat":chat_id,"code":normalize_code(car.code),
+                       "now":moscow_now().replace(tzinfo=None)})
+                session.commit()
+            delivery=_send_signed_contract_and_license(session,row)
+            if not delivery.get("sent"):
+                send_telegram_to_chat(chat_id,"Договор найден, но PDF пока не удалось отправить. Сообщите диспетчеру.")
+            return jsonify({"ok":True})
+        finally:
+            session.close()
+
     if text_value == "/start":
         chat_id = str(chat.get("id") or "").strip()
         if not chat_id:
