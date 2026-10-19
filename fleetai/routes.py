@@ -8238,14 +8238,7 @@ def _send_signed_contract_and_license(session,row):
 
     base_url=request.url_root.rstrip("/")
     portal_url=f"{base_url}/driver?code={normalize_code(row['car_code'])}"
-    if license_sent:
-        final_text="✅ Оформление завершено.\n\nДоговор подписан, лицензия автомобиля отправлена. Личный кабинет доступен по кнопке ниже."
-    else:
-        final_text="✅ Договор подписан.\n\nЛицензия автомобиля пока не загружена. После загрузки диспетчером её можно будет получить отдельно."
-    send_telegram_to_chat_with_keyboard(
-        chat_id,final_text,[[{"text":"👤 Открыть личный кабинет","url":portal_url}]]
-    )
-    return {"sent":bool(contract_sent),"contract_sent":bool(contract_sent),"license_sent":bool(license_sent)}
+
 
 
 @bp.route("/api/driver-contract/create",methods=["POST"])
