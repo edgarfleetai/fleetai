@@ -81,6 +81,34 @@ class MCPTransportSecurityTests(unittest.TestCase):
         headers = dict(self.headers, Origin="https://untrusted.example")
         self.assertEqual(self.call("tools/list", headers).status_code, 403)
 
+    def test_streamable_http_json_response(self):
+        headers = dict(self.headers, Accept="application/json, text/event-stream",
+                       **{"MCP-Protocol-Version": "2025-03-26"})
+        response = self.call("initialize", headers)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.mimetype, "application/json")
+        self.assertEqual(response.headers["MCP-Protocol-Version"], "2025-03-26")
+        self.assertEqual(response.json["result"]["protocolVersion"], "2025-03-26")
+
+    def test_rejects_unsupported_protocol_version(self):
+        headers = dict(self.headers, **{"MCP-Protocol-Version": "invalid"})
+        self.assertEqual(self.call("ping", headers).status_code, 400)
+
+    def test_rejects_unsupported_accept_header(self):
+        headers = dict(self.headers, Accept="image/png")
+        self.assertEqual(self.call("ping", headers).status_code, 406)
+
+    def test_oauth_challenge_includes_resource_metadata(self):
+        with patch.dict(os.environ, {
+            "FLEETAI_MCP_OAUTH_ISSUER": "https://issuer.example",
+            "FLEETAI_MCP_OAUTH_JWKS_URI": "https://issuer.example/keys",
+            "FLEETAI_MCP_OAUTH_AUDIENCE": "fleetai-api",
+        }):
+            response = self.call("ping")
+            self.assertEqual(response.status_code, 401)
+            self.assertIn('resource_metadata="http://localhost/.well-known/oauth-protected-resource/mcp"',
+                          response.headers["WWW-Authenticate"])
+
     def test_ping(self):
         response = self.call("ping", self.headers)
         self.assertEqual(response.status_code, 200)
