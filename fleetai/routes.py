@@ -13,7 +13,7 @@ from urllib.parse import unquote
 
 from datetime import datetime, date, timedelta
 
-from flask import make_response, Blueprint, request, jsonify, render_template_string, send_file
+from flask import make_response, Blueprint, request, jsonify, render_template_string, send_file, current_app
 from sqlalchemy import func, text as sql_text
 
 from reportlab.lib import colors
