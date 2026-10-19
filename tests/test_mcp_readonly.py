@@ -94,6 +94,10 @@ class MCPTransportSecurityTests(unittest.TestCase):
         headers = dict(self.headers, **{"MCP-Protocol-Version": "invalid"})
         self.assertEqual(self.call("ping", headers).status_code, 400)
 
+    def test_accepts_wildcard_header(self):
+        headers = dict(self.headers, Accept="*/*")
+        self.assertEqual(self.call("ping", headers).status_code, 200)
+
     def test_rejects_unsupported_accept_header(self):
         headers = dict(self.headers, Accept="image/png")
         self.assertEqual(self.call("ping", headers).status_code, 406)
