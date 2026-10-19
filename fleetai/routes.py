@@ -8941,7 +8941,26 @@ def api_telegram_webhook():
                         "Сообщите диспетчеру — повторно подписывать договор не нужно."
                     )
             else:
-                _send_driver_contract_step(session, car, chat_id)
+                # Never generate another agreement when this car already has
+                # a signed one we cannot safely associate with this chat.
+                signed_count=session.execute(sql_text("""
+                    SELECT COUNT(*) FROM driver_contracts
+                    WHERE TRIM(car_code)=:code AND status='signed'
+                """),{"code":normalize_code(car.code)}).scalar()
+                if signed_count:
+                    current_app.logger.warning(
+                        "Telegram signed contract unmatched: car=%s signed_count=%s",
+                        normalize_code(car.code), signed_count
+                    )
+                    send_telegram_to_chat(
+                        chat_id,
+                        "Для автомобиля уже есть подписанный договор, но бот "
+                        "не может безопасно подтвердить его привязку к вашему "
+                        "Telegram. Повторно подписывать ничего не нужно. "
+                        "Обратитесь к диспетчеру."
+                    )
+                else:
+                    _send_driver_contract_step(session, car, chat_id)
             return jsonify({"ok": True})
         finally:
             session.close()
