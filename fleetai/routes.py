@@ -7778,6 +7778,29 @@ def api_sms_call_check_call():
         return jsonify({"ok":False,"stage":"code/call","message":f"{type(e).__name__}: {e}"}),503
 
 
+def _ensure_telegram_contract_links(session):
+    session.execute(sql_text("""
+        CREATE TABLE IF NOT EXISTS driver_telegram_contract_links (
+            contract_id VARCHAR(64) PRIMARY KEY,
+            telegram_chat_id VARCHAR(64) NOT NULL,
+            car_code VARCHAR(32) NOT NULL,
+            linked_at TIMESTAMP NOT NULL
+        )
+    """))
+    session.commit()
+
+
+def _telegram_contract_for_chat(session, chat_id, car_code):
+    _ensure_telegram_contract_links(session)
+    return session.execute(sql_text("""
+        SELECT dc.* FROM driver_contracts dc
+        JOIN driver_telegram_contract_links l ON l.contract_id=dc.id
+        WHERE l.telegram_chat_id=:chat AND TRIM(l.car_code)=:code
+          AND dc.status='signed'
+        ORDER BY dc.signed_at DESC LIMIT 1
+    """),{"chat":str(chat_id),"code":normalize_code(car_code)}).mappings().first()
+
+
 def _contract_for_driver_telegram(session, car):
     """Возвращает актуальный неподписанный договор или создаёт новый."""
     _ensure_driver_contract_tables(session)
@@ -7831,7 +7854,51 @@ def _contract_for_driver_telegram(session, car):
 
 
 def _send_driver_contract_step(session, car, chat_id):
-    row=_contract_for_driver_telegram(session,car)
+    _ensure_telegram_contract_links(session)
+    # Reuse only a draft explicitly assigned to this Telegram account.
+    row=session.execute(sql_text("""
+        SELECT dc.* FROM driver_contracts dc
+        JOIN driver_telegram_contract_links l ON l.contract_id=dc.id
+        WHERE l.telegram_chat_id=:chat AND TRIM(l.car_code)=:code
+          AND dc.status IN ('draft','ready')
+        ORDER BY dc.created_at DESC LIMIT 1
+    """),{"chat":str(chat_id),"code":normalize_code(car.code)}).mappings().first()
+    if not row:
+        # Create a fresh draft for this chat; never reuse or supersede
+        # another driver's existing draft, even if names are identical.
+        code=normalize_code(car.code)
+        owner=_contract_owner(code)
+        vehicle=_contract_vehicle(code)
+        now=moscow_now().replace(tzinfo=None)
+        cid="KP-"+now.strftime("%Y%m%d")+"-"+code+"-"+uuid.uuid4().hex[:6].upper()
+        public_token=secrets.token_urlsafe(32)
+        session.execute(sql_text("""
+            INSERT INTO driver_contracts(
+                id,public_token,car_code,status,driver_name,daily_rent,rental_start_date,
+                owner_name,owner_basis,owner_poa,lessor_name,lessor_inn,lessor_ogrnip,
+                car_make,car_model,car_plate,car_vin,car_year,car_sts,created_at,updated_at
+            ) VALUES(
+                :id,:token,:code,'draft',:driver,:rent,:start,
+                :owner,:basis,:poa,:lessor,:inn,:ogrnip,
+                :make,:model,:plate,:vin,:year,:sts,:now,:now
+            )
+        """),{
+            "id":cid,"token":public_token,"code":code,"driver":(car.driver or "").strip(),
+            "rent":int(effective_daily_rent(car) or 0),"start":moscow_now().date().isoformat(),
+            "owner":owner["owner"],"basis":owner["basis"],"poa":owner["poa"],
+            "lessor":(os.getenv("LESSOR_FULL_NAME") or "ИП Лебедкин Эдгар Алексеевич").strip(),
+            "inn":LESSOR_INN,"ogrnip":LESSOR_OGRNIP,
+            "make":vehicle.get("car_make",""),"model":vehicle.get("car_model",""),
+            "plate":vehicle.get("car_plate",""),"vin":vehicle.get("car_vin",""),
+            "year":vehicle.get("car_year",""),"sts":vehicle.get("car_sts",""),"now":now,
+        })
+        session.execute(sql_text("""
+            INSERT INTO driver_telegram_contract_links
+                (contract_id,telegram_chat_id,car_code,linked_at)
+            VALUES (:id,:chat,:code,:now)
+        """),{"id":cid,"chat":str(chat_id),"code":code,"now":now})
+        session.commit()
+        row=_contract_row(session,public_token)
     base_url=request.url_root.rstrip("/")
     contract_url=f"{base_url}/driver-contract?token={row['public_token']}"
     text=(
@@ -7858,27 +7925,17 @@ def _telegram_binding_for_contract(session,row):
 
 def _send_signed_contract_and_license(session,row):
     """После подписи: PDF договора -> лицензия -> личный кабинет."""
-    binding=_telegram_binding_for_contract(session,row)
-    if not binding:
-        return {"sent":False,"reason":"telegram_not_linked"}
-    if (binding.get("driver_name") or "").strip() != (row.get("driver_name") or "").strip():
-        # The signed form may contain a corrected name. Only allow delivery
-        # when the contract was created within the current Telegram binding
-        # and this is the sole signed contract for that binding.
-        matches=session.execute(sql_text("""
-            SELECT dc.id FROM driver_contracts dc
-            JOIN driver_telegram_bindings b
-              ON TRIM(b.car_code)=TRIM(dc.car_code)
-            WHERE b.telegram_chat_id=:chat_id
-              AND TRIM(dc.car_code)=:code
-              AND dc.status='signed'
-              AND dc.created_at >= b.linked_at
-            LIMIT 2
-        """),{"chat_id":str(binding["telegram_chat_id"]),"code":normalize_code(row["car_code"])}).scalars().all()
-        if len(matches)!=1 or matches[0]!=row["id"]:
-            return {"sent":False,"reason":"driver_changed"}
-
-    chat_id=str(binding["telegram_chat_id"])
+    _ensure_telegram_contract_links(session)
+    linked=session.execute(sql_text("""
+        SELECT l.telegram_chat_id FROM driver_telegram_contract_links l
+        JOIN driver_telegram_bindings b
+          ON b.telegram_chat_id=l.telegram_chat_id
+         AND TRIM(b.car_code)=TRIM(l.car_code)
+        WHERE l.contract_id=:id AND TRIM(l.car_code)=:code
+    """),{"id":row["id"],"code":normalize_code(row["car_code"])}).scalar()
+    if not linked:
+        return {"sent":False,"reason":"contract_telegram_link_missing"}
+    chat_id=str(linked)
     pdf_bytes=bytes(row.get("pdf_data") or b"")
     if not pdf_bytes:
         return {"sent":False,"reason":"contract_pdf_missing"}
@@ -8901,29 +8958,7 @@ def api_telegram_webhook():
                     "Привязка устарела. Попросите диспетчера создать новую ссылку.",
                 )
                 return jsonify({"ok": True})
-            # First prefer an exact driver match. The signed form may have
-            # corrected the driver's spelling, so a scoped fallback is needed.
-            signed_contract=session.execute(sql_text("""
-                SELECT * FROM driver_contracts
-                WHERE TRIM(car_code)=:code AND TRIM(driver_name)=:driver AND status='signed'
-                ORDER BY signed_at DESC LIMIT 1
-            """),{"code":normalize_code(car.code),"driver":(car.driver or "").strip()}).mappings().first()
-            if not signed_contract:
-                # Only consider contracts created during THIS Telegram binding.
-                # Never guess if multiple signed contracts could belong to
-                # different drivers who used the same car.
-                candidates=session.execute(sql_text("""
-                    SELECT dc.* FROM driver_contracts dc
-                    JOIN driver_telegram_bindings b
-                      ON TRIM(b.car_code)=TRIM(dc.car_code)
-                    WHERE b.telegram_chat_id=:chat_id
-                      AND TRIM(dc.car_code)=:code
-                      AND dc.status='signed'
-                      AND dc.created_at >= b.linked_at
-                    ORDER BY dc.signed_at DESC LIMIT 2
-                """),{"chat_id":chat_id,"code":normalize_code(car.code)}).mappings().all()
-                if len(candidates)==1:
-                    signed_contract=candidates[0]
+            signed_contract=_telegram_contract_for_chat(session,chat_id,car.code)
             if signed_contract:
                 # Повторная команда /start позволяет восстановить доставку после подписи
                 # без повторного подтверждения звонком или создания нового договора.
@@ -8944,11 +8979,11 @@ def api_telegram_webhook():
                 # Never generate another agreement when this car already has
                 # a signed one we cannot safely associate with this chat.
                 signed_count=session.execute(sql_text("""
-                    SELECT COUNT(*) FROM driver_contracts
-                    WHERE TRIM(car_code)=:code
-                      AND TRIM(driver_name)=:driver
-                      AND status='signed'
-                """),{"code":normalize_code(car.code),"driver":(car.driver or "").strip()}).scalar()
+                    SELECT COUNT(*) FROM driver_contracts dc
+                    JOIN driver_telegram_contract_links l ON l.contract_id=dc.id
+                    WHERE l.telegram_chat_id=:chat AND TRIM(l.car_code)=:code
+                      AND dc.status='signed'
+                """),{"chat":chat_id,"code":normalize_code(car.code)}).scalar()
                 if signed_count:
                     current_app.logger.warning(
                         "Telegram signed contract unmatched: car=%s signed_count=%s",
