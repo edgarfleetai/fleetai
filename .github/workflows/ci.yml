@@ -2,7 +2,7 @@ name: FleetAI checks
 
 on:
   pull_request:
-    branches: [main, development]
+    branches: [main, development, feature/admin-topup-guard]
   push:
     branches: [development]
 
