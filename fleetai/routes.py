@@ -7864,27 +7864,41 @@ def _send_driver_contract_step(session, car, chat_id):
         ORDER BY dc.created_at DESC LIMIT 1
     """),{"chat":str(chat_id),"code":normalize_code(car.code)}).mappings().first()
     if not row:
-        row=_contract_for_driver_telegram(session,car)
-        existing_owner=session.execute(sql_text("""
-            SELECT telegram_chat_id FROM driver_telegram_contract_links
-            WHERE contract_id=:id
-        """),{"id":row["id"]}).scalar()
-        if existing_owner and str(existing_owner)!=str(chat_id):
-            # Do not hand another Telegram user's draft to this driver.
-            session.execute(sql_text("""
-                UPDATE driver_contracts SET status='superseded'
-                WHERE id=:id AND status IN ('draft','ready')
-            """),{"id":row["id"]})
-            session.commit()
-            row=_contract_for_driver_telegram(session,car)
+        # Create a fresh draft for this chat; never reuse or supersede
+        # another driver's existing draft, even if names are identical.
+        code=normalize_code(car.code)
+        owner=_contract_owner(code)
+        vehicle=_contract_vehicle(code)
+        now=moscow_now().replace(tzinfo=None)
+        cid="KP-"+now.strftime("%Y%m%d")+"-"+code+"-"+uuid.uuid4().hex[:6].upper()
+        public_token=secrets.token_urlsafe(32)
+        session.execute(sql_text("""
+            INSERT INTO driver_contracts(
+                id,public_token,car_code,status,driver_name,daily_rent,rental_start_date,
+                owner_name,owner_basis,owner_poa,lessor_name,lessor_inn,lessor_ogrnip,
+                car_make,car_model,car_plate,car_vin,car_year,car_sts,created_at,updated_at
+            ) VALUES(
+                :id,:token,:code,'draft',:driver,:rent,:start,
+                :owner,:basis,:poa,:lessor,:inn,:ogrnip,
+                :make,:model,:plate,:vin,:year,:sts,:now,:now
+            )
+        """),{
+            "id":cid,"token":public_token,"code":code,"driver":(car.driver or "").strip(),
+            "rent":int(effective_daily_rent(car) or 0),"start":moscow_now().date().isoformat(),
+            "owner":owner["owner"],"basis":owner["basis"],"poa":owner["poa"],
+            "lessor":(os.getenv("LESSOR_FULL_NAME") or "ИП Лебедкин Эдгар Алексеевич").strip(),
+            "inn":LESSOR_INN,"ogrnip":LESSOR_OGRNIP,
+            "make":vehicle.get("car_make",""),"model":vehicle.get("car_model",""),
+            "plate":vehicle.get("car_plate",""),"vin":vehicle.get("car_vin",""),
+            "year":vehicle.get("car_year",""),"sts":vehicle.get("car_sts",""),"now":now,
+        })
         session.execute(sql_text("""
             INSERT INTO driver_telegram_contract_links
                 (contract_id,telegram_chat_id,car_code,linked_at)
             VALUES (:id,:chat,:code,:now)
-            ON CONFLICT (contract_id) DO NOTHING
-        """),{"id":row["id"],"chat":str(chat_id),"code":normalize_code(car.code),
-               "now":moscow_now().replace(tzinfo=None)})
+        """),{"id":cid,"chat":str(chat_id),"code":code,"now":now})
         session.commit()
+        row=_contract_row(session,public_token)
     base_url=request.url_root.rstrip("/")
     contract_url=f"{base_url}/driver-contract?token={row['public_token']}"
     text=(
