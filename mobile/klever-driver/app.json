@@ -11,10 +11,18 @@
       "bundleIdentifier": "ru.kleverpark.driver"
     },
     "android": {
-      "package": "ru.kleverpark.driver"
+      "package": "ru.kleverpark.driver",
+      "permissions": []
     },
     "plugins": [
-      "expo-router"
+      "expo-router",
+      [
+        "expo-secure-store",
+        {
+          "configureAndroidBackup": true,
+          "faceIDPermission": "Разрешите использовать Face ID для безопасного доступа к приложению"
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true
