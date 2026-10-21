@@ -1,0 +1,31 @@
+{
+  "expo": {
+    "name": "Клевер Парк",
+    "slug": "klever-driver",
+    "scheme": "kleverpark",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "ru.kleverpark.driver"
+    },
+    "android": {
+      "package": "ru.kleverpark.driver",
+      "permissions": []
+    },
+    "plugins": [
+      "expo-router",
+      [
+        "expo-secure-store",
+        {
+          "configureAndroidBackup": true,
+          "faceIDPermission": "Разрешите использовать Face ID для безопасного доступа к приложению"
+        }
+      ]
+    ],
+    "experiments": {
+      "typedRoutes": true
+    }
+  }
+}
