@@ -23,3 +23,7 @@ jobs:
           node-version: '22'
       - run: npm install --no-audit --no-fund
       - run: npm run typecheck
+      - name: Validate Expo configuration
+        run: npx expo config --type public --json > /dev/null
+      - name: Bundle Android and iOS JavaScript
+        run: npx expo export --platform all --output-dir dist
