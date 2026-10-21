@@ -34,3 +34,17 @@ npx eas-cli build --platform ios --profile preview
 Потребуются Expo/EAS project ID, Apple Developer account, App Store Connect, Google Play Console, реальные иконки/скриншоты, настройки приватности и проверенные API. Ничего из этого пока не создано или подтверждено. Bundle IDs `ru.kleverpark.driver` предварительные, перед публикацией требуется проверить право на идентификатор.
 
 **Не публиковать** демо как готовый сервис аренды. Текущие данные и брони демонстрационные.
+
+## iPhone (физическое устройство)
+
+После подключения Apple Developer и настройки сертификатов:
+
+```bash
+npx eas-cli build --platform ios --profile ios-device
+```
+
+Для публичного тестирования через TestFlight потребуется production iOS build и отправка в App Store Connect. Наличие профиля не означает, что сертификаты и Apple Developer уже настроены.
+
+## Важная проверка перед релизом
+
+Expo/EAS CLI должен связать проект с учётной записью Expo. Если при сборке запрашивается создание EAS project ID, подтвердить это может только владелец учётной записи. Android APK и iOS binary пока не собирались.
