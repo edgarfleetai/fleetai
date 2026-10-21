@@ -7,6 +7,7 @@ export default function Home(){return <ScrollView style={styles.page} contentCon
   <View style={styles.hero}><Text style={styles.heroTitle}>Ваша машина. Ваш маршрут.</Text><Text style={styles.heroSub}>Выбирайте автомобиль, оформляйте аренду и управляйте платежами в одном приложении.</Text></View>
   <Text style={styles.section}>Начните с регистрации</Text><Text style={styles.note}>Подтвердите телефон, документы и личность. После одобрения можно забронировать свободный автомобиль.</Text>
   <Link href="/register" asChild><Pressable style={styles.primary}><Text style={styles.primaryText}>Зарегистрироваться →</Text></Pressable></Link>
+  <Link href="/demo-catalog" asChild><Pressable style={styles.primary}><Text style={styles.primaryText}>Посмотреть демо каталога →</Text></Pressable></Link>
   <Link href="/vehicles" asChild><Pressable style={styles.secondary}><Text style={styles.secondaryText}>Посмотреть автомобили</Text></Pressable></Link>
   <Link href="/verification" asChild><Pressable style={styles.secondary}><Text style={styles.secondaryText}>Как проходит проверка личности</Text></Pressable></Link>
   <Link href="/profile" asChild><Pressable style={styles.secondary}><Text style={styles.secondaryText}>Мой профиль и статус проверки</Text></Pressable></Link>
