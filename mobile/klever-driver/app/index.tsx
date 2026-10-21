@@ -9,6 +9,7 @@ export default function Home(){return <ScrollView style={styles.page} contentCon
   <Link href="/register" asChild><Pressable style={styles.primary}><Text style={styles.primaryText}>Зарегистрироваться →</Text></Pressable></Link>
   <Link href="/vehicles" asChild><Pressable style={styles.secondary}><Text style={styles.secondaryText}>Посмотреть автомобили</Text></Pressable></Link>
   <Link href="/verification" asChild><Pressable style={styles.secondary}><Text style={styles.secondaryText}>Как проходит проверка личности</Text></Pressable></Link>
+  <Link href="/profile" asChild><Pressable style={styles.secondary}><Text style={styles.secondaryText}>Мой профиль и статус проверки</Text></Pressable></Link>
   <Link href="/dashboard" asChild><Pressable style={styles.secondary}><Text style={styles.secondaryText}>Посмотреть демо кабинета</Text></Pressable></Link>
   <Text style={styles.footer}>Демо-версия. Реальные бронирования, платежи и проверка документов пока отключены.</Text>
 </ScrollView>}
