@@ -1,0 +1,23 @@
+{
+  "expo": {
+    "name": "Клевер Парк",
+    "slug": "klever-driver",
+    "scheme": "kleverpark",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "ru.kleverpark.driver"
+    },
+    "android": {
+      "package": "ru.kleverpark.driver"
+    },
+    "plugins": [
+      "expo-router"
+    ],
+    "experiments": {
+      "typedRoutes": true
+    }
+  }
+}
