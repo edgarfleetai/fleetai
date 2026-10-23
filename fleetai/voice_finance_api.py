@@ -1,6 +1,7 @@
 """Admin-only financial voice operations, with explicit two-step confirmation."""
 import os
 from flask import Blueprint, jsonify, request
+from sqlalchemy.exc import IntegrityError
 from .db import Session
 from .utils import find_car
 from .voice_finance_preview import preview_finance_voice
@@ -43,3 +44,5 @@ def finance_confirm():
         return jsonify(result), 200
     except ValueError as exc:
         return jsonify(ok=False, error=str(exc)), 422
+    except IntegrityError:
+        return jsonify(ok=False, error='Операция уже была проведена'), 409
