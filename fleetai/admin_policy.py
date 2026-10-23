@@ -32,6 +32,8 @@ ADMIN_WRITE_RULES = frozenset({
     "/api/assistant/voice/lookup",
     "/api/assistant/finance/preview",
     "/api/assistant/finance/confirm",
+    "/api/assistant/wallet/preview",
+    "/api/assistant/wallet/confirm",
     "/api/assistant/driver-move/preview",
     "/api/driver-contract/create",
     "/api/edit-operation/<int:operation_id>",
