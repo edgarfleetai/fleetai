@@ -7,6 +7,7 @@ from .driver_move_guard import assignment_fingerprint
 from .driver_move_risk import financial_closeout_requirements
 from .driver_move_closeout import build_closeout_plan
 from .driver_move_voice import parse_driver_move_voice
+from .driver_move_mobile import mobile_move_summary
 
 bp_driver_move = Blueprint('driver_move_preview', __name__)
 
@@ -38,4 +39,5 @@ def driver_move_preview():
             result['assignment_fingerprint'] = assignment_fingerprint([cars[source], cars[target]])
             result['financial_closeout'] = financial_closeout_requirements(result['financial_review'])
             result['closeout_plan'] = build_closeout_plan(result['financial_review'], result['changes'])
+            result['mobile_summary'] = mobile_move_summary(result)
     return jsonify(result), 200 if result['ok'] else 422
