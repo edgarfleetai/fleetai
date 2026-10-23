@@ -16,6 +16,9 @@ def preview_driver_move(assignments, source, target, swap=False):
     if swap and not old_target:
         return {'ok': False, 'error': 'Для обмена нужны два водителя'}
     return {'ok': True, 'requires_confirmation': True, 'writes_performed': False,
+            'execution_enabled': False,
+            'requires_wallet_review': True,
+            'warning': 'Перестановка затрагивает кошельки, начисления аренды и Telegram-привязки. До сверки расчетов запись заблокирована.',
             'changes': [
                 {'car': source, 'before': old_source, 'after': old_target if swap else ''},
                 {'car': target, 'before': old_target, 'after': old_source},
