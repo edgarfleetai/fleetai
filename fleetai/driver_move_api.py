@@ -3,6 +3,7 @@ from .db import Session
 from .utils import find_car
 from .driver_move_preview import preview_driver_move
 from .driver_move_finance import review_driver_finances
+from .driver_move_guard import assignment_fingerprint
 
 bp_driver_move = Blueprint('driver_move_preview', __name__)
 
@@ -23,4 +24,5 @@ def driver_move_preview():
         result = preview_driver_move(assignments, source, target, swap=data.get('swap', False))
         if result['ok']:
             result['financial_review'] = review_driver_finances(db, [cars[source], cars[target]])
+            result['assignment_fingerprint'] = assignment_fingerprint([cars[source], cars[target]])
     return jsonify(result), 200 if result['ok'] else 422
