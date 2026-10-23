@@ -8306,10 +8306,10 @@ def driver_telegram_page():
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Клевер Парк — Telegram</title>
+<title>Клевер Парк — Водители</title>
 <style>
 *{box-sizing:border-box}body{margin:0;background:#f4f7f6;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#17211d}
-.wrap{max-width:620px;margin:auto;padding:20px}.brand{font-size:25px;font-weight:800;margin:8px 0 20px}
+.wrap{max-width:1100px;margin:auto;padding:20px}.brand{font-size:25px;font-weight:800;margin:8px 0 20px}
 .card{background:#fff;border-radius:18px;padding:20px;margin-bottom:14px;box-shadow:0 6px 24px rgba(0,0,0,.06)}
 label{display:block;font-size:13px;color:#708078;margin:14px 0 6px}
 select,input{width:100%;padding:13px 14px;border:1px solid #d8dfdc;border-radius:12px;font-size:16px;background:#fff}
@@ -8317,29 +8317,41 @@ button,a.action{width:100%;display:block;text-align:center;margin-top:12px;borde
 .secondary{background:#e5e7eb!important;color:#17211d!important}
 .muted{color:#708078;font-size:14px}.ok{background:#e8f6ed;padding:12px;border-radius:12px;margin-top:14px}.err{background:#fdeceb;padding:12px;border-radius:12px;margin-top:14px}
 .linkbox{word-break:break-all;margin-top:10px;padding:12px;background:#f4f7f6;border-radius:10px;font-size:14px}
+.driver-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:14px;margin:18px 0}.driver-card{padding:17px;border:1px solid #d8dfdc;border-radius:14px;background:#fbfdfc}.driver-card h3{margin:0 0 8px}.driver-card p{margin:5px 0}.driver-card button{font-size:14px;padding:11px;margin-top:12px}.driver-card a{color:#136c4b}
 </style>
 </head>
 <body><div class="wrap">
 <div class="brand">🍀 Клевер Парк</div>
 <div class="card">
-<h2 style="margin-top:0">Привязка Telegram водителя</h2>
-<p class="muted">Выбери машину и создай персональную ссылку. Отправь её водителю — он нажмёт Start в вашем боте.</p>
+<h2 style="margin-top:0">Водители</h2>
+<p class="muted">Карточки действующих водителей и закреплённых автомобилей.</p><div id="driverCards" class="driver-grid"></div><details style="margin-top:20px"><summary>Управление Telegram водителя</summary>
 <label>Машина / водитель</label>
 <select id="car"><option value="">Загрузка...</option></select>
 <button id="createBtn" onclick="createLink()">🔗 Создать ссылку Telegram</button>
 <button class="secondary" onclick="sendTest()">🧪 Отправить тестовое уведомление</button>
-<div id="result"></div>
+<div id="result"></div></details>
 </div></div>
 <script>
 const carSelect=document.getElementById('car');
 const resultBox=document.getElementById('result');
 const createBtn=document.getElementById('createBtn');
+const driverCards=document.getElementById('driverCards');
 
 async function loadCars(){
   try{
     const r=await fetch('/api/driver-wallet/cars');
     const d=await r.json();
     carSelect.innerHTML='<option value="">Выбери машину</option>';
+    const drivers=(d.items||[]).filter(c=>c.has_driver||c.driver);
+    driverCards.innerHTML=drivers.length?'':'<p class="muted">Назначенных водителей пока нет.</p>';
+    drivers.forEach(c=>{
+      const card=document.createElement('article');card.className='driver-card';
+      const name=document.createElement('h3');name.textContent=c.driver||'Водитель';card.appendChild(name);
+      const car=document.createElement('p');car.textContent='Автомобиль: '+c.code+(c.plate?' · '+c.plate:'');card.appendChild(car);
+      const btn=document.createElement('button');btn.textContent='🔗 Создать ссылку Telegram';btn.onclick=()=>{carSelect.value=c.code;document.querySelector('details').open=true;document.querySelector('details').scrollIntoView({behavior:'smooth',block:'center'});createLink();};card.appendChild(btn);
+      const portal=document.createElement('a');portal.href='/driver?code='+encodeURIComponent(c.code);portal.textContent='Открыть кабинет';portal.target='_blank';portal.rel='noopener';card.appendChild(portal);
+      driverCards.appendChild(card);
+    });
     (d.items||[]).forEach(c=>{
       const o=document.createElement('option');
       o.value=c.code;
@@ -8382,8 +8394,9 @@ async function createLink(){
       headers:{'Content-Type':'application/json'},
       body:JSON.stringify({car_code:code})
     });
-    const d=await r.json();
-    if(!r.ok || !d.ok) throw new Error(d.message||'Ошибка');
+    const raw=await r.text();
+    let d;try{d=JSON.parse(raw);}catch(e){throw new Error('Сервер вернул ответ '+r.status+' вместо JSON. Проверь авторизацию и настройки тестового сервера.');}
+    if(!r.ok || !d.ok) throw new Error(d.message||'Ошибка создания ссылки (HTTP '+r.status+')');
     const link=d.link;
     resultBox.innerHTML=`
       <div class="ok"><b>Ссылка готова</b><br>Водитель: ${escapeHtml(d.driver_name)} · машина ${escapeHtml(d.car_code)}
