@@ -65,6 +65,7 @@ def run_migrations():
 
 def init_db():
     from .models import Base
+    from .driver_move_idempotency import DriverMoveRequest  # register request table
     Base.metadata.create_all(engine)
     run_migrations()
     seed_cars()
