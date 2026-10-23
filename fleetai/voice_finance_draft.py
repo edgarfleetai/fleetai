@@ -8,13 +8,14 @@ def parse_finance_voice(text):
     if not isinstance(text, str) or not text.strip() or len(text) > 500:
         return {'ok': False, 'error': 'Слишком длинная или пустая команда'}
     normalized = ' '.join(text.lower().replace('ё', 'е').split())
-    codes = re.findall(r'(?<!\d)(\d{3,4})(?!\d)', normalized)
-    if len(codes) != 1:
-        return {'ok': False, 'error': 'Нужно указать ровно одну машину'}
     amounts = list(re.finditer(_AMOUNT, normalized))
     if len(amounts) != 1:
         return {'ok': False, 'error': 'Укажите одну сумму в рублях'}
     match = amounts[0]
+    without_amount = normalized[:match.start()] + ' ' + normalized[match.end():]
+    codes = re.findall(r'(?<!\d)(\d{3,4})(?!\d)', without_amount)
+    if len(codes) != 1:
+        return {'ok': False, 'error': 'Нужно указать ровно одну машину'}
     amount = int(match.group(1).replace(' ', ''))
     if 'тысяч' in match.group(0):
         amount *= 1000
