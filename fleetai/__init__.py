@@ -176,4 +176,5 @@ def create_app():
     app.register_blueprint(bp)
     app.register_blueprint(bp_mcp)
     app.register_blueprint(bp_assistant_voice)
+    app.register_blueprint(bp_driver_move)
     return app
