@@ -105,56 +105,50 @@ def _split_expenses(session, car_code, start=None, end=None):
 
 
 def car_finance(session, code):
+    """Totals for one car; keep historical investment deduplication intact."""
     code = normalize_code(code)
+    car_filter = lambda model: func.trim(model.car_code) == code
 
     income = sum(
         (row.amount or 0)
-        for row in session.query(Income).all()
-        if _same_car(row, code)
+        for row in session.query(Income.amount).filter(car_filter(Income))
     )
-
     expenses = sum(
         (row.amount or 0)
-        for row in session.query(Expense).all()
-        if _same_car(row, code)
+        for row in session.query(Expense.amount).filter(car_filter(Expense))
     )
 
     car_investment_operation_ids = set()
     investments = 0
+    for row in session.query(CarInvestment.amount, CarInvestment.operation_id).filter(
+        car_filter(CarInvestment)
+    ):
+        investments += row.amount or 0
+        if row.operation_id:
+            car_investment_operation_ids.add(row.operation_id)
 
-    for row in session.query(CarInvestment).all():
-        if _same_car(row, code):
-            investments += row.amount or 0
-            if row.operation_id:
-                car_investment_operation_ids.add(row.operation_id)
-
-    # Старые записи могли остаться только в operations.
-    for operation in session.query(Operation).all():
-        if (
-            _same_car(operation, code)
-            and operation.type == "car_investment"
-            and operation.id not in car_investment_operation_ids
-        ):
+    # Legacy investments can exist only as operations; avoid double counting.
+    for operation in session.query(Operation.id, Operation.amount).filter(
+        car_filter(Operation), Operation.type == "car_investment"
+    ):
+        if operation.id not in car_investment_operation_ids:
             investments += operation.amount or 0
 
     payouts = sum(
         (row.amount or 0)
-        for row in session.query(InvestorPayout).all()
-        if _same_car(row, code)
+        for row in session.query(InvestorPayout.amount).filter(car_filter(InvestorPayout))
     )
-
     investor_invested = sum(
         (row.amount or 0)
-        for row in session.query(InvestorInvestment).all()
-        if _same_car(row, code)
+        for row in session.query(InvestorInvestment.amount).filter(
+            car_filter(InvestorInvestment)
+        )
     )
 
     downtime_days = 0
-
-    for row in session.query(Downtime).all():
-        if not _same_car(row, code):
-            continue
-
+    for row in session.query(Downtime.active, Downtime.start_date, Downtime.days).filter(
+        car_filter(Downtime)
+    ):
         if row.active and row.start_date:
             downtime_days += max(
                 (moscow_now().date() - row.start_date.date()).days,
