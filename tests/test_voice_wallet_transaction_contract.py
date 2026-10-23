@@ -10,9 +10,11 @@ from fleetai.voice_wallet_guard import validate_wallet_confirmation
 
 
 class VoiceWalletTransactionContractTests(unittest.TestCase):
-    def test_legacy_rent_sync_commits_internally(self):
-        source = inspect.getsource(routes._sync_daily_rent)
-        self.assertIn('session.commit()', source)
+    def test_legacy_wrapper_commits_but_atomic_helper_does_not(self):
+        legacy = inspect.getsource(routes._sync_daily_rent)
+        atomic = inspect.getsource(routes._sync_daily_rent_uncommitted)
+        self.assertIn('session.commit()', legacy)
+        self.assertNotIn('session.commit()', atomic)
 
     def test_driver_change_blocks_confirmation_before_rent_sync(self):
         preview = {'ok': True, 'car_code': '636', 'driver_name': 'Мердан',
