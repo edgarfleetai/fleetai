@@ -4464,6 +4464,20 @@ def api_investor_ledger_readonly():
             current_start = datetime(last_month.year, last_month.month, 16)
         previous_month = current_start.replace(day=1) - timedelta(days=1)
         previous_start = datetime(previous_month.year, previous_month.month, 16)
+        # Optional inclusive date range for dashboard comparisons; no ledger mutations.
+        custom_start_text = request.args.get("start", "").strip()
+        custom_end_text = request.args.get("end", "").strip()
+        custom_start = custom_end = None
+        if custom_start_text or custom_end_text:
+            try:
+                if not custom_start_text or not custom_end_text:
+                    raise ValueError("Both dates required")
+                custom_start = datetime.strptime(custom_start_text, "%Y-%m-%d")
+                custom_end = datetime.strptime(custom_end_text, "%Y-%m-%d") + timedelta(days=1)
+                if custom_start >= custom_end or (custom_end - custom_start).days > 366:
+                    raise ValueError("Invalid range")
+            except ValueError:
+                return jsonify({"ok": False, "message": "Некорректный диапазон дат"}), 400
         calculated = {}
         for car in cars:
             next_month = current_start + timedelta(days=32)
@@ -4471,6 +4485,7 @@ def api_investor_ledger_readonly():
             previous_end = current_start
             calculated[str(car.code).strip()] = {
                 "cycle": calculate_period_for_car(session, car, current_start, current_end, include_previous_carry=False),
+                **({"custom": calculate_period_for_car(session, car, custom_start, custom_end, include_previous_carry=False)} if custom_start else {}),
                 "previous": calculate_period_for_car(session, car, previous_start, previous_end, include_previous_carry=False),
                 "all": calculate_period_for_car(session, car, datetime(2000, 1, 1), current_end, include_previous_carry=False),
             }
