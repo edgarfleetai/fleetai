@@ -49,6 +49,7 @@ def commit_wallet_topup(db, preview, *, approved, request_key):
                                kind='driver_wallet_topup', amount_rub=amount,
                                operation_id=op.id, raw_draft_json=json.dumps(preview, ensure_ascii=False)))
     db.flush()
+    db.flush()
     balance = db.execute(select(func.coalesce(func.sum(DriverWalletTransaction.amount), 0)).where(
         DriverWalletTransaction.car_code == code)).scalar_one()
     return {'ok': True, 'operation_id': op.id, 'driver_name': driver,
