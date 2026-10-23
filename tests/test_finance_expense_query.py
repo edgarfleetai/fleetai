@@ -6,8 +6,8 @@ import unittest
 from datetime import datetime
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
-from fleetai.models import Base, Expense, Operation
-from fleetai.finance import _split_expenses
+from fleetai.models import Base, Expense, Operation, Income, CarInvestment, InvestorPayout, InvestorInvestment, Downtime
+from fleetai.finance import _split_expenses, car_finance
 
 
 class ExpenseQueryTests(unittest.TestCase):
@@ -42,6 +42,20 @@ class ExpenseQueryTests(unittest.TestCase):
             (75, 100, 50),
         )
         self.assertEqual(_split_expenses(self.session, "404"), (1074, 100, 50))
+
+    def test_car_finance_deduplicates_legacy_investments(self):
+        self.session.add_all([
+            Income(car_code=" 404 ", amount=2000),
+            Income(car_code="218", amount=9000),
+            Expense(car_code="404", amount=300),
+            Operation(id=21, car_code="404", type="car_investment", amount=700),
+            Operation(id=22, car_code="404", type="car_investment", amount=400),
+            CarInvestment(car_code="404", amount=700, operation_id=21),
+            InvestorPayout(car_code="404", amount=100),
+            InvestorInvestment(car_code="404", amount=150),
+        ])
+        self.session.commit()
+        self.assertEqual(car_finance(self.session, "404")[:5], (2000, 300, 1100, 100, 150))
 
 
 if __name__ == "__main__":
