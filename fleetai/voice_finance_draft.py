@@ -1,0 +1,38 @@
+"""Parse voice income/repair into drafts only; no database writes."""
+import re
+from .voice_payment_intent import classify_voice_payment
+
+_AMOUNT = r'(\d+(?: \d{3})*)\s*(?:рублей|рубля|рубль|руб|р\b|₽|тысяч(?:у|и)?)'
+
+
+def parse_finance_voice(text):
+    if not isinstance(text, str) or not text.strip() or len(text) > 500:
+        return {'ok': False, 'error': 'Слишком длинная или пустая команда'}
+    normalized = ' '.join(text.lower().replace('ё', 'е').split())
+    amounts = list(re.finditer(_AMOUNT, normalized))
+    if len(amounts) != 1:
+        return {'ok': False, 'error': 'Укажите одну сумму в рублях'}
+    match = amounts[0]
+    without_amount = normalized[:match.start()] + ' ' + normalized[match.end():]
+    codes = re.findall(r'(?<!\d)(\d{3,4})(?!\d)', without_amount)
+    if len(codes) != 1:
+        return {'ok': False, 'error': 'Нужно указать ровно одну машину'}
+    amount = int(match.group(1).replace(' ', ''))
+    if 'тысяч' in match.group(0):
+        amount *= 1000
+    if not 0 < amount <= 10000000:
+        return {'ok': False, 'error': 'Недопустимая сумма'}
+    expense = bool(re.search(r'\b(ремонт|починил|замена|заменил|потратил|расход)\b', normalized))
+    income = bool(re.search(r'\b(получил|поступило|приход|заработал|доход)\b', normalized))
+    if expense == income:
+        return {'ok': False, 'error': 'Не удалось однозначно определить доход или расход'}
+    if income:
+        payment = classify_voice_payment(normalized)
+        if not payment['ok']:
+            return payment
+        if payment['kind'] != 'generic_income':
+            return {'ok': False, 'error': 'Для платежей водителя требуется отдельное подтверждение кошелька или долга'}
+    kind = 'repair_expense' if expense else 'income'
+    return {'ok': True, 'draft': {'kind': kind, 'car_code': codes[0],
+        'amount_rub': amount, 'description': text.strip(),
+        'requires_confirmation': True, 'writes_performed': False}}
