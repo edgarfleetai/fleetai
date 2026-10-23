@@ -68,27 +68,38 @@ def _expense_type(session, row):
 
 
 def _split_expenses(session, car_code, start=None, end=None):
+    """Split car expenses without loading every expense or N+1 operation lookups."""
     shared = 0
     investor_only = 0
     park_only = 0
 
-    for row in session.query(Expense).all():
-        if not _same_car(row, car_code):
-            continue
+    query = (
+        session.query(Expense.amount, Expense.share_type, Operation.type)
+        .outerjoin(Operation, Expense.operation_id == Operation.id)
+        .filter(func.trim(Expense.car_code) == normalize_code(car_code))
+    )
+    if start is not None and end is not None:
+        query = query.filter(Expense.date >= start, Expense.date < end)
 
-        if start is not None and end is not None:
-            if not row.date or not (start <= row.date < end):
-                continue
-
-        amount = row.amount or 0
-        expense_type = _expense_type(session, row)
+    for amount, share_type, operation_type in query:
+        # Historical split operations take precedence over share_type.
+        if operation_type == "investor_expense_split":
+            expense_type = "investor_only"
+        else:
+            value = (share_type or "shared").strip().lower()
+            if value in INVESTOR_ONLY_TYPES:
+                expense_type = "investor_only"
+            elif value in PARK_ONLY_TYPES:
+                expense_type = "park_only"
+            else:
+                expense_type = "shared"
 
         if expense_type == "investor_only":
-            investor_only += amount
+            investor_only += amount or 0
         elif expense_type == "park_only":
-            park_only += amount
+            park_only += amount or 0
         else:
-            shared += amount
+            shared += amount or 0
 
     return shared, investor_only, park_only
 
