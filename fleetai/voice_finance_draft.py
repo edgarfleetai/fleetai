@@ -1,7 +1,7 @@
 """Parse voice income/repair into drafts only; no database writes."""
 import re
 
-_AMOUNT = r'(\d[\d ]{0,12})\s*(?:рублей|рубля|рубль|руб|р\b|₽|тысяч(?:у|и)?)'
+_AMOUNT = r'(\d+(?: \d{3})*)\s*(?:рублей|рубля|рубль|руб|р\b|₽|тысяч(?:у|и)?)'
 
 
 def parse_finance_voice(text):
