@@ -26,8 +26,8 @@ def commit_finance_draft(db, draft, *, approved, request_key):
     if car is None:
         raise ValueError('Автомобиль не найден')
     kind = draft['kind']
-    op = Operation(car_code=code, type='Доход' if kind == 'income' else 'Расход',
-                   category='Аренда/поступление' if kind == 'income' else 'Ремонт',
+    op = Operation(car_code=code, type='income' if kind == 'income' else 'repair',
+                   category='Аренда' if kind == 'income' else 'Ремонт',
                    description=description.strip(), amount=amount, raw_message=description.strip())
     db.add(op)
     db.flush()
