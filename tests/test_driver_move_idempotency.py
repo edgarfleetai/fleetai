@@ -1,4 +1,4 @@
-import pytest
+import unittest
 from sqlalchemy import create_engine
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -18,7 +18,7 @@ def test_duplicate_request_key_rejected():
         for source in ('636', '404'):
             db.add(DriverMoveRequest(request_key='request_unique_123456', source_car=source,
                 target_car='218', expected_fingerprint='a' * 64, action='swap', status='pending'))
-        with pytest.raises(IntegrityError):
+        with unittest.TestCase().assertRaises(IntegrityError):
             db.commit()
         db.rollback()
     engine.dispose()
