@@ -2,6 +2,7 @@ from flask import Blueprint, jsonify, request
 from .db import Session
 from .utils import find_car
 from .driver_move_preview import preview_driver_move
+from .driver_move_finance import review_driver_finances
 
 bp_driver_move = Blueprint('driver_move_preview', __name__)
 
@@ -19,5 +20,7 @@ def driver_move_preview():
     with Session() as db:
         cars = {code: find_car(db, code) for code in (source, target)}
         assignments = {code: car.driver for code, car in cars.items() if car is not None}
-    result = preview_driver_move(assignments, source, target, swap=data.get('swap', False))
+        result = preview_driver_move(assignments, source, target, swap=data.get('swap', False))
+        if result['ok']:
+            result['financial_review'] = review_driver_finances(db, [cars[source], cars[target]])
     return jsonify(result), 200 if result['ok'] else 422
