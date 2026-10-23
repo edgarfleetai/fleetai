@@ -1,5 +1,6 @@
 """Parse voice income/repair into drafts only; no database writes."""
 import re
+from .voice_payment_intent import classify_voice_payment
 
 _AMOUNT = r'(\d+(?: \d{3})*)\s*(?:рублей|рубля|рубль|руб|р\b|₽|тысяч(?:у|и)?)'
 
@@ -25,6 +26,12 @@ def parse_finance_voice(text):
     income = bool(re.search(r'\b(получил|поступило|приход|заработал|доход)\b', normalized))
     if expense == income:
         return {'ok': False, 'error': 'Не удалось однозначно определить доход или расход'}
+    if income:
+        payment = classify_voice_payment(normalized)
+        if not payment['ok']:
+            return payment
+        if payment['kind'] != 'generic_income':
+            return {'ok': False, 'error': 'Для платежей водителя требуется отдельное подтверждение кошелька или долга'}
     kind = 'repair_expense' if expense else 'income'
     return {'ok': True, 'draft': {'kind': kind, 'car_code': codes[0],
         'amount_rub': amount, 'description': text.strip(),
