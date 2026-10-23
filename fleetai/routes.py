@@ -9804,7 +9804,7 @@ def _driver_wallet_credit_after_fee(paid_amount, payment_source):
     return int(round(paid_amount * 0.96)), 4, "Банковская карта"
 
 
-def _sync_daily_rent(session, car):
+def _sync_daily_rent_uncommitted(session, car):
     """
     Начисляет суточную аренду один раз за каждый календарный день.
     Дни простоя не списываются. Повторный запуск безопасен.
@@ -9835,7 +9835,6 @@ def _sync_daily_rent(session, car):
             comment=f"V7_START:{today.isoformat()}",
             date=moscow_now().replace(tzinfo=None),
         ))
-        session.commit()
         return {"charged": 0, "skipped_downtime": 0}
 
     start = None
@@ -9905,9 +9904,15 @@ def _sync_daily_rent(session, car):
 
         day += timedelta(days=1)
 
-    session.commit()
     return {"charged": charged, "skipped_downtime": skipped_downtime}
 
+
+
+def _sync_daily_rent(session, car):
+    """Compatibility wrapper for existing callers; preserves legacy commit behavior."""
+    result = _sync_daily_rent_uncommitted(session, car)
+    session.commit()
+    return result
 
 
 @bp.route("/api/setup/897", methods=["POST"])
