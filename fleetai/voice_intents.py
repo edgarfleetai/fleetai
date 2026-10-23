@@ -13,7 +13,7 @@ def parse_voice_draft(text):
     if not isinstance(text, str) or not text.strip() or len(text) > MAX_TEXT_LENGTH:
         return {"ok": False, "error": "Введите короткое описание операции"}
     normalized = " ".join(text.lower().replace("ё", "е").split())
-    cars = set(re.findall(r"(?<!\d)\d{3,4}(?!\d)", normalized))
+    cars = set(re.findall(r"\b(?:на|машин[еуы]?|авто)\s*(?:номер\s*)?(\d{3,4})(?!\d)", normalized))
     # Avoid guessing when multiple vehicle identifiers are present.
     if len(cars) != 1:
         return {"ok": False, "error": "Укажите один номер автомобиля"}
