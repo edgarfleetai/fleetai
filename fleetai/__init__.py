@@ -10,6 +10,7 @@ from .db import init_db
 from .routes import bp
 from .mcp_readonly import bp_mcp
 from .assistant_voice_api import bp_assistant_voice
+from .driver_move_api import bp_driver_move
 from .admin_auth import verify_admin_password, is_admin
 from .login_limiter import login_blocked, record_login_failure, clear_login_failures
 from .admin_policy import requires_owner, DANGEROUS_WIALON_COMMAND
