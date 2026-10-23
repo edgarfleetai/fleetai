@@ -4,6 +4,7 @@ from .utils import find_car
 from .driver_move_preview import preview_driver_move
 from .driver_move_finance import review_driver_finances
 from .driver_move_guard import assignment_fingerprint
+from .driver_move_risk import financial_closeout_requirements
 
 bp_driver_move = Blueprint('driver_move_preview', __name__)
 
@@ -25,4 +26,5 @@ def driver_move_preview():
         if result['ok']:
             result['financial_review'] = review_driver_finances(db, [cars[source], cars[target]])
             result['assignment_fingerprint'] = assignment_fingerprint([cars[source], cars[target]])
+            result['financial_closeout'] = financial_closeout_requirements(result['financial_review'])
     return jsonify(result), 200 if result['ok'] else 422
