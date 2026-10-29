@@ -9,6 +9,10 @@ from flask import Flask, request, jsonify, session, redirect, render_template_st
 from .db import init_db
 from .routes import bp
 from .mcp_readonly import bp_mcp
+from .assistant_voice_api import bp_assistant_voice
+from .driver_move_api import bp_driver_move
+from .voice_finance_api import bp_voice_finance
+from .voice_wallet_api import bp_voice_wallet
 from .admin_auth import verify_admin_password, is_admin
 from .login_limiter import login_blocked, record_login_failure, clear_login_failures
 from .admin_policy import requires_owner, DANGEROUS_WIALON_COMMAND
@@ -173,4 +177,8 @@ def create_app():
 
     app.register_blueprint(bp)
     app.register_blueprint(bp_mcp)
+    app.register_blueprint(bp_assistant_voice)
+    app.register_blueprint(bp_driver_move)
+    app.register_blueprint(bp_voice_finance)
+    app.register_blueprint(bp_voice_wallet)
     return app

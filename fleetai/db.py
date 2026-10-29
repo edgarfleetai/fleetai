@@ -65,6 +65,9 @@ def run_migrations():
 
 def init_db():
     from .models import Base
+    from .driver_move_idempotency import DriverMoveRequest  # register request table
+    from .driver_move_audit import DriverMoveAudit  # register audit table
+    from .voice_finance_receipt import VoiceFinanceReceipt  # register voice receipts
     Base.metadata.create_all(engine)
     run_migrations()
     seed_cars()
