@@ -10,7 +10,7 @@ class VoiceFinanceDraftTests(unittest.TestCase):
         self.assertEqual(draft['draft']['amount_rub'], 3500)
 
     def test_income(self):
-        draft = parse_finance_voice('Получил 15 тысяч за аренду 897')
+        draft = parse_finance_voice('Получил 15 тысяч за продажу деталей 897')
         self.assertTrue(draft['ok'])
         self.assertEqual(draft['draft']['amount_rub'], 15000)
         self.assertEqual(draft['draft']['kind'], 'income')
