@@ -2,9 +2,9 @@ name: FleetAI checks
 
 on:
   pull_request:
-    branches: [main, development, feature/admin-topup-guard]
+    branches: [main, development, feature/admin-topup-guard, perf/finance-query-audit-20261023]
   push:
-    branches: [development]
+    branches: [development, perf/finance-query-audit-20261023]
 
 jobs:
   python-checks:

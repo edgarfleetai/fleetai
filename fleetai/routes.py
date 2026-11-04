@@ -13,7 +13,7 @@ from urllib.parse import unquote
 
 from datetime import datetime, date, timedelta
 
-from flask import make_response, Blueprint, request, jsonify, render_template_string, send_file
+from flask import make_response, Blueprint, request, jsonify, render_template_string, send_file, current_app
 from flask import redirect as flask_redirect
 from sqlalchemy import func, text as sql_text
 
@@ -8149,6 +8149,29 @@ def api_sms_call_check_call():
         return jsonify({"ok":False,"stage":"code/call","message":f"{type(e).__name__}: {e}"}),503
 
 
+def _ensure_telegram_contract_links(session):
+    session.execute(sql_text("""
+        CREATE TABLE IF NOT EXISTS driver_telegram_contract_links (
+            contract_id VARCHAR(64) PRIMARY KEY,
+            telegram_chat_id VARCHAR(64) NOT NULL,
+            car_code VARCHAR(32) NOT NULL,
+            linked_at TIMESTAMP NOT NULL
+        )
+    """))
+    session.commit()
+
+
+def _telegram_contract_for_chat(session, chat_id, car_code):
+    _ensure_telegram_contract_links(session)
+    return session.execute(sql_text("""
+        SELECT dc.* FROM driver_contracts dc
+        JOIN driver_telegram_contract_links l ON l.contract_id=dc.id
+        WHERE l.telegram_chat_id=:chat AND TRIM(l.car_code)=:code
+          AND dc.status='signed'
+        ORDER BY dc.signed_at DESC LIMIT 1
+    """),{"chat":str(chat_id),"code":normalize_code(car_code)}).mappings().first()
+
+
 def _contract_for_driver_telegram(session, car):
     """Возвращает актуальный неподписанный договор или создаёт новый."""
     _ensure_driver_contract_tables(session)
@@ -8202,7 +8225,51 @@ def _contract_for_driver_telegram(session, car):
 
 
 def _send_driver_contract_step(session, car, chat_id):
-    row=_contract_for_driver_telegram(session,car)
+    _ensure_telegram_contract_links(session)
+    # Reuse only a draft explicitly assigned to this Telegram account.
+    row=session.execute(sql_text("""
+        SELECT dc.* FROM driver_contracts dc
+        JOIN driver_telegram_contract_links l ON l.contract_id=dc.id
+        WHERE l.telegram_chat_id=:chat AND TRIM(l.car_code)=:code
+          AND dc.status IN ('draft','ready')
+        ORDER BY dc.created_at DESC LIMIT 1
+    """),{"chat":str(chat_id),"code":normalize_code(car.code)}).mappings().first()
+    if not row:
+        # Create a fresh draft for this chat; never reuse or supersede
+        # another driver's existing draft, even if names are identical.
+        code=normalize_code(car.code)
+        owner=_contract_owner(code)
+        vehicle=_contract_vehicle(code)
+        now=moscow_now().replace(tzinfo=None)
+        cid="KP-"+now.strftime("%Y%m%d")+"-"+code+"-"+uuid.uuid4().hex[:6].upper()
+        public_token=secrets.token_urlsafe(32)
+        session.execute(sql_text("""
+            INSERT INTO driver_contracts(
+                id,public_token,car_code,status,driver_name,daily_rent,rental_start_date,
+                owner_name,owner_basis,owner_poa,lessor_name,lessor_inn,lessor_ogrnip,
+                car_make,car_model,car_plate,car_vin,car_year,car_sts,created_at,updated_at
+            ) VALUES(
+                :id,:token,:code,'draft',:driver,:rent,:start,
+                :owner,:basis,:poa,:lessor,:inn,:ogrnip,
+                :make,:model,:plate,:vin,:year,:sts,:now,:now
+            )
+        """),{
+            "id":cid,"token":public_token,"code":code,"driver":(car.driver or "").strip(),
+            "rent":int(effective_daily_rent(car) or 0),"start":moscow_now().date().isoformat(),
+            "owner":owner["owner"],"basis":owner["basis"],"poa":owner["poa"],
+            "lessor":(os.getenv("LESSOR_FULL_NAME") or "ИП Лебедкин Эдгар Алексеевич").strip(),
+            "inn":LESSOR_INN,"ogrnip":LESSOR_OGRNIP,
+            "make":vehicle.get("car_make",""),"model":vehicle.get("car_model",""),
+            "plate":vehicle.get("car_plate",""),"vin":vehicle.get("car_vin",""),
+            "year":vehicle.get("car_year",""),"sts":vehicle.get("car_sts",""),"now":now,
+        })
+        session.execute(sql_text("""
+            INSERT INTO driver_telegram_contract_links
+                (contract_id,telegram_chat_id,car_code,linked_at)
+            VALUES (:id,:chat,:code,:now)
+        """),{"id":cid,"chat":str(chat_id),"code":code,"now":now})
+        session.commit()
+        row=_contract_row(session,public_token)
     base_url=request.url_root.rstrip("/")
     contract_url=f"{base_url}/driver-contract?token={row['public_token']}"
     text=(
@@ -8229,13 +8296,17 @@ def _telegram_binding_for_contract(session,row):
 
 def _send_signed_contract_and_license(session,row):
     """После подписи: PDF договора -> лицензия -> личный кабинет."""
-    binding=_telegram_binding_for_contract(session,row)
-    if not binding:
-        return {"sent":False,"reason":"telegram_not_linked"}
-    if (binding.get("driver_name") or "").strip() != (row.get("driver_name") or "").strip():
-        return {"sent":False,"reason":"driver_changed"}
-
-    chat_id=str(binding["telegram_chat_id"])
+    _ensure_telegram_contract_links(session)
+    linked=session.execute(sql_text("""
+        SELECT l.telegram_chat_id FROM driver_telegram_contract_links l
+        JOIN driver_telegram_bindings b
+          ON b.telegram_chat_id=l.telegram_chat_id
+         AND TRIM(b.car_code)=TRIM(l.car_code)
+        WHERE l.contract_id=:id AND TRIM(l.car_code)=:code
+    """),{"id":row["id"],"code":normalize_code(row["car_code"])}).scalar()
+    if not linked:
+        return {"sent":False,"reason":"contract_telegram_link_missing"}
+    chat_id=str(linked)
     pdf_bytes=bytes(row.get("pdf_data") or b"")
     if not pdf_bytes:
         return {"sent":False,"reason":"contract_pdf_missing"}
@@ -8351,7 +8422,8 @@ def api_driver_contract_sign(token):
     try:
         row=_contract_row(session,token)
         if not row:return jsonify({"ok":False,"message":"Договор не найден"}),404
-        if row["status"]=="signed":return jsonify({"ok":True,"message":"Договор уже подписан"})
+        if row["status"]=="signed":
+            return jsonify({"ok":True,"message":"Договор уже подписан","already_signed":True})
         now=moscow_now().replace(tzinfo=None)
         marker=str(row.get("otp_hash") or "")
         if not marker.startswith("callcheck:") or not row.get("otp_expires_at") or now>row["otp_expires_at"]:
@@ -8383,6 +8455,8 @@ def api_driver_contract_sign(token):
         session.commit()
         signed=_contract_row(session,token)
         telegram_result=_send_signed_contract_and_license(session,signed)
+        if not telegram_result.get("sent"):
+            current_app.logger.warning("Contract signed but Telegram delivery failed: contract=%s reason=%s", signed["id"], telegram_result.get("reason", "send_failed"))
         return jsonify({
             "ok":True,
             "message":"Номер телефона подтверждён. Договор подписан",
@@ -8487,7 +8561,7 @@ def driver_contract_admin_page():
         return render_template_string(_owner_csrf_html(DRIVER_CONTRACT_ADMIN_HTML),code=code,driver=(car.driver or "").strip(),owner=o["owner"],poa=o["poa"],rent=int(effective_daily_rent(car) or 0),today=moscow_now().date().isoformat())
     finally:session.close()
 
-DRIVER_CONTRACT_HTML = r'''<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Клевер Парк — договор</title><style>*{box-sizing:border-box}body{margin:0;background:#f4f3f1;color:#1f1d1a;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}.wrap{max-width:780px;margin:auto;padding:18px}.card{background:#fff;border:1px solid #e6e2de;border-radius:18px;padding:20px;margin:12px 0}.grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}label{font-size:12px;color:#6f6a64}input{width:100%;padding:11px;border:1px solid #d7d1cb;border-radius:10px;margin-top:4px;font-size:15px}button,a{display:inline-block;padding:11px 15px;border:0;border-radius:11px;background:#35312d;color:#fff;text-decoration:none;font-weight:700;cursor:pointer}.hidden{display:none}.ok{color:#356046}.err{color:#a73a3a}.meta{font-size:13px;color:#6f6a64}.full{grid-column:1/-1}@media(max-width:650px){.grid{grid-template-columns:1fr}}</style></head><body><div class="wrap"><h1>🍀 Клевер Парк</h1><div id="root" class="card">Загрузка…</div></div><script>const token={{token|tojson}};let C;const F=[['driver_name','ФИО'],['driver_birth_date','Дата рождения','date'],['passport_series','Серия паспорта'],['passport_number','Номер паспорта'],['passport_issued_by','Кем выдан'],['passport_issue_date','Дата выдачи','date'],['passport_department_code','Код подразделения'],['registration_address','Адрес регистрации'],['phone','Телефон'],['license_number','Водительское удостоверение'],['license_expires','ВУ до','date'],['car_make','Марка'],['car_model','Модель'],['car_plate','Госномер'],['car_vin','VIN'],['car_year','Год','number'],['car_sts','СТС'],['deposit','Залог, ₽','number']];const E=s=>String(s??'').replace(/[&<>\"]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;'}[m]));async function Q(u,o){let r=await fetch(u,o),d=await r.json();if(!r.ok||!d.ok)throw Error(d.message||'Ошибка');return d}async function load(){try{C=(await Q('/api/driver-contract/'+encodeURIComponent(token))).contract;draw()}catch(e){root.innerHTML='<b class="err">'+E(e.message)+'</b>'}}function draw(){if(C.status==='signed'){root.innerHTML=`<h2>Договор подписан</h2><p>${E(C.id)} · машина ${E(C.car_code)}</p><p class="meta">PDF SHA-256: ${E(C.pdf_sha256)}</p><a href="/driver-contract/${encodeURIComponent(token)}/pdf">Скачать PDF</a>`;return}root.innerHTML=`<h2>Договор аренды · ${E(C.car_code)}</h2><p class="meta">${E(C.lessor_name)} · ИНН ${E(C.lessor_inn)} · ОГРНИП ${E(C.lessor_ogrnip)}</p><p class="meta">Собственник: ${E(C.owner_name||'—')} ${C.owner_poa?'· доверенность '+E(C.owner_poa):''}</p><p><b>${Number(C.daily_rent||0).toLocaleString('ru-RU')} ₽/сутки</b> · с ${E(C.rental_start_date)}</p><div class="grid">${F.map(([k,l,t])=>`<label class="${['passport_issued_by','registration_address'].includes(k)?'full':''}">${l}<input id="f_${k}" type="${t||'text'}" value="${E(C[k]||'')}"></label>`).join('')}</div><p><button onclick="save()">Сохранить данные</button></p><div id="sign" class="${C.status==='ready'?'':'hidden'}"><hr><h3>Подписание</h3><p>После проверки договора получи номер для подтверждения. Позвони на него <b>с телефона, указанного в договоре</b>. SMS.ru автоматически сбросит звонок. После этого нажми «Проверить и подписать».</p><p><a href="/driver-contract/${encodeURIComponent(token)}/preview.pdf" target="_blank">Открыть договор перед подписанием</a></p><button onclick="sendCode()">Получить номер для звонка</button><div id="callbox" class="hidden"><p>Позвони в течение 5 минут:</p><p><a id="calllink" href="#" style="font-size:20px"></a></p><button onclick="signNow()">Проверить и подписать</button></div></div><p id="msg"></p>`}async function save(){let b={};F.forEach(([k])=>b[k]=document.getElementById('f_'+k).value);try{await Q('/api/driver-contract/'+encodeURIComponent(token)+'/save',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)});await load();msg.className='ok';msg.textContent='Сохранено. Проверь договор и получи номер для подтверждения.'}catch(e){msg.className='err';msg.textContent=e.message}}async function sendCode(){try{let d=await Q('/api/driver-contract/'+encodeURIComponent(token)+'/send-code',{method:'POST'});callbox.classList.remove('hidden');calllink.textContent=d.call_phone_pretty||d.call_phone;calllink.href='tel:+'+String(d.call_phone||'').replace(/\D/g,'');msg.className='ok';msg.textContent=d.message+' На звонок есть 5 минут.'}catch(e){msg.className='err';msg.textContent=e.message}}async function signNow(){try{await Q('/api/driver-contract/'+encodeURIComponent(token)+'/sign',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});await load()}catch(e){msg.className='err';msg.textContent=e.message}}load();</script></body></html>'''
+DRIVER_CONTRACT_HTML = r'''<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Клевер Парк — договор</title><style>*{box-sizing:border-box}body{margin:0;background:#f4f3f1;color:#1f1d1a;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}.wrap{max-width:780px;margin:auto;padding:18px}.card{background:#fff;border:1px solid #e6e2de;border-radius:18px;padding:20px;margin:12px 0}.grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}label{font-size:12px;color:#6f6a64}input{width:100%;padding:11px;border:1px solid #d7d1cb;border-radius:10px;margin-top:4px;font-size:15px}button,a{display:inline-block;padding:11px 15px;border:0;border-radius:11px;background:#35312d;color:#fff;text-decoration:none;font-weight:700;cursor:pointer}.hidden{display:none}.ok{color:#356046}.err{color:#a73a3a}.meta{font-size:13px;color:#6f6a64}.full{grid-column:1/-1}@media(max-width:650px){.grid{grid-template-columns:1fr}}</style></head><body><div class="wrap"><h1>🍀 Клевер Парк</h1><div id="root" class="card">Загрузка…</div></div><script>const token={{token|tojson}};let C;const F=[['driver_name','ФИО'],['driver_birth_date','Дата рождения','date'],['passport_series','Серия паспорта'],['passport_number','Номер паспорта'],['passport_issued_by','Кем выдан'],['passport_issue_date','Дата выдачи','date'],['passport_department_code','Код подразделения'],['registration_address','Адрес регистрации'],['phone','Телефон'],['license_number','Водительское удостоверение'],['license_expires','ВУ до','date'],['car_make','Марка'],['car_model','Модель'],['car_plate','Госномер'],['car_vin','VIN'],['car_year','Год','number'],['car_sts','СТС'],['deposit','Залог, ₽','number']];const E=s=>String(s??'').replace(/[&<>\"]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;'}[m]));async function Q(u,o){let r=await fetch(u,o),d=await r.json();if(!r.ok||!d.ok)throw Error(d.message||'Ошибка');return d}async function load(){try{C=(await Q('/api/driver-contract/'+encodeURIComponent(token))).contract;draw()}catch(e){root.innerHTML='<b class="err">'+E(e.message)+'</b>'}}function draw(){if(C.status==='signed'){root.innerHTML=`<h2>Договор подписан</h2><p>${E(C.id)} · машина ${E(C.car_code)}</p><p class="meta">PDF SHA-256: ${E(C.pdf_sha256)}</p><a href="/driver-contract/${encodeURIComponent(token)}/pdf">Скачать PDF</a>`;return}root.innerHTML=`<h2>Договор аренды · ${E(C.car_code)}</h2><p class="meta">${E(C.lessor_name)} · ИНН ${E(C.lessor_inn)} · ОГРНИП ${E(C.lessor_ogrnip)}</p><p class="meta">Собственник: ${E(C.owner_name||'—')} ${C.owner_poa?'· доверенность '+E(C.owner_poa):''}</p><p><b>${Number(C.daily_rent||0).toLocaleString('ru-RU')} ₽/сутки</b> · с ${E(C.rental_start_date)}</p><div class="grid">${F.map(([k,l,t])=>`<label class="${['passport_issued_by','registration_address'].includes(k)?'full':''}">${l}<input id="f_${k}" type="${t||'text'}" value="${E(C[k]||'')}"></label>`).join('')}</div><p><button onclick="save()">Сохранить данные</button></p><div id="sign" class="${C.status==='ready'?'':'hidden'}"><hr><h3>Подписание</h3><p>После проверки договора получи номер для подтверждения. Позвони на него <b>с телефона, указанного в договоре</b>. SMS.ru автоматически сбросит звонок. После этого нажми «Проверить и подписать».</p><p><a href="/driver-contract/${encodeURIComponent(token)}/preview.pdf" target="_blank">Открыть договор перед подписанием</a></p><button onclick="sendCode()">Получить номер для звонка</button><div id="callbox" class="hidden"><p>Позвони в течение 5 минут:</p><p><a id="calllink" href="#" style="font-size:20px"></a></p><button onclick="signNow()">Проверить и подписать</button></div></div><p id="msg"></p>`}async function save(){let b={};F.forEach(([k])=>b[k]=document.getElementById('f_'+k).value);try{await Q('/api/driver-contract/'+encodeURIComponent(token)+'/save',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)});await load();msg.className='ok';msg.textContent='Сохранено. Проверь договор и получи номер для подтверждения.'}catch(e){msg.className='err';msg.textContent=e.message}}async function sendCode(){try{let d=await Q('/api/driver-contract/'+encodeURIComponent(token)+'/send-code',{method:'POST'});callbox.classList.remove('hidden');calllink.textContent=d.call_phone_pretty||d.call_phone;calllink.href='tel:+'+String(d.call_phone||'').replace(/\D/g,'');msg.className='ok';msg.textContent=d.message+' На звонок есть 5 минут.'}catch(e){msg.className='err';msg.textContent=e.message}}async function signNow(){try{let result=await Q('/api/driver-contract/'+encodeURIComponent(token)+'/sign',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});await load();let notice=document.createElement('p');notice.className=result.telegram&&result.telegram.sent?'ok':'err';notice.textContent=result.already_signed?'Договор уже подписан. Если документы не пришли в Telegram, обратитесь к диспетчеру.':result.telegram&&result.telegram.sent?'Договор подписан. Проверьте Telegram: туда отправлены документы.':'Договор подписан, но отправка в Telegram не подтверждена. Сообщите диспетчеру, чтобы он проверил привязку бота.';root.prepend(notice)}catch(e){msg.className='err';msg.textContent=e.message}}load();</script></body></html>'''
 
 DRIVER_CONTRACT_ADMIN_HTML = r'''<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Создать договор</title><style>body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#f4f3f1}.wrap{max-width:650px;margin:30px auto;background:#fff;padding:22px;border-radius:18px}button{padding:11px 15px;border:0;border-radius:11px;background:#35312d;color:#fff;font-weight:700}input{width:100%;padding:10px;margin:7px 0}</style></head><body><div class="wrap"><h2>Новый договор · {{code}}</h2><p>Водитель: <b>{{driver}}</b></p><p>Собственник: <b>{{owner}}</b>{% if poa %}<br>Доверенность: <b>{{poa}}</b>{% endif %}</p><p>Аренда: <b>{{rent}} ₽/сутки</b></p><label>Дата начала<input id="start" type="date" value="{{today}}"></label><button onclick="go()">Создать ссылку</button><div id="res"></div></div><script>async function go(){let r=await fetch('/api/driver-contract/create',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({car_code:{{code|tojson}},start_date:start.value})}),d=await r.json();if(!r.ok||!d.ok){res.textContent=d.message||'Ошибка';return}res.innerHTML='<p><b>Ссылка для водителя:</b></p><input id="link" value="'+d.driver_url+'" readonly><button onclick="navigator.clipboard.writeText(link.value);this.textContent=\'✓ Скопировано\'">Скопировать</button><p>'+d.contract_id+'</p>'}</script></body></html>'''
 
@@ -9232,6 +9306,55 @@ def api_telegram_webhook():
     chat = message.get("chat") or {}
     sender = message.get("from") or {}
 
+    # Recovery of a previously signed contract requires proof of possession
+    # of its original private signing link, never a guess based on car/name.
+    if text_value.startswith("/recover "):
+        chat_id=str(chat.get("id") or "").strip()
+        supplied=text_value.split(None,1)[1].strip()
+        match=re.search(r"(?:[?&]token=|^)([A-Za-z0-9_-]{30,128})(?:[&#\\s]|$)",supplied)
+        if not chat_id or not match:
+            if chat_id:
+                send_telegram_to_chat(chat_id,"Пришлите /recover и исходную ссылку на уже подписанный договор.")
+            return jsonify({"ok":True})
+        token=match.group(1)
+        session=Session()
+        try:
+            binding=session.execute(sql_text("""
+                SELECT car_code,driver_name FROM driver_telegram_bindings
+                WHERE telegram_chat_id=:chat ORDER BY linked_at DESC LIMIT 1
+            """),{"chat":chat_id}).mappings().first()
+            car=find_car(session,binding["car_code"]) if binding else None
+            if not car or (car.driver or "").strip()!=(binding["driver_name"] or "").strip():
+                send_telegram_to_chat(chat_id,"Текущая привязка водителя не подтверждена. Обратитесь к диспетчеру.")
+                return jsonify({"ok":True})
+            row=_contract_row(session,token)
+            if not row or row["status"]!="signed" or normalize_code(row["car_code"])!=normalize_code(car.code):
+                send_telegram_to_chat(chat_id,"Подписанный договор по этой ссылке для вашей машины не найден.")
+                return jsonify({"ok":True})
+            _ensure_telegram_contract_links(session)
+            existing=session.execute(sql_text("""
+                SELECT telegram_chat_id FROM driver_telegram_contract_links
+                WHERE contract_id=:id
+            """),{"id":row["id"]}).scalar()
+            if existing and str(existing)!=chat_id:
+                send_telegram_to_chat(chat_id,"Договор уже закреплён за другим Telegram. Обратитесь к диспетчеру.")
+                return jsonify({"ok":True})
+            if not existing:
+                session.execute(sql_text("""
+                    INSERT INTO driver_telegram_contract_links
+                        (contract_id,telegram_chat_id,car_code,linked_at)
+                    VALUES (:id,:chat,:code,:now)
+                    ON CONFLICT (contract_id) DO NOTHING
+                """),{"id":row["id"],"chat":chat_id,"code":normalize_code(car.code),
+                       "now":moscow_now().replace(tzinfo=None)})
+                session.commit()
+            delivery=_send_signed_contract_and_license(session,row)
+            if not delivery.get("sent"):
+                send_telegram_to_chat(chat_id,"Договор найден, но PDF пока не удалось отправить. Сообщите диспетчеру.")
+            return jsonify({"ok":True})
+        finally:
+            session.close()
+
     if text_value == "/start":
         chat_id = str(chat.get("id") or "").strip()
         if not chat_id:
@@ -9261,28 +9384,14 @@ def api_telegram_webhook():
                     "Привязка устарела. Попросите диспетчера создать новую ссылку.",
                 )
                 return jsonify({"ok": True})
-            signed_contract=session.execute(sql_text("""
-                SELECT * FROM driver_contracts
-                WHERE TRIM(car_code)=:code AND TRIM(driver_name)=:driver AND status='signed'
-                ORDER BY signed_at DESC LIMIT 1
-            """),{"code":normalize_code(car.code),"driver":(car.driver or "").strip()}).mappings().first()
+            signed_contract=_telegram_contract_for_chat(session,chat_id,car.code)
             if signed_contract:
-                send_driver_welcome(chat_id, car)
-                # Повторный /start позволяет получить лицензию и ссылку
-                # без повторного подписания уже оформленного договора.
-                if _vehicle_license_row(session, car.code):
-                    if not _send_vehicle_license_to_chat(session, car, chat_id):
-                        send_telegram_to_chat(
-                            chat_id,
-                            "Лицензия загружена, но Telegram не смог отправить файл. "
-                            "Обратитесь к диспетчеру.",
-                        )
+                delivery=_send_signed_contract_and_license(session,signed_contract)
+                if delivery.get("sent"):
+                    send_driver_welcome(chat_id, car)
                 else:
-                    send_telegram_to_chat(
-                        chat_id,
-                        "Лицензия для этой машины ещё не загружена. "
-                        "Обратитесь к диспетчеру.",
-                    )
+                    current_app.logger.warning("Signed contract resend failed: contract=%s reason=%s", signed_contract["id"], delivery.get("reason", "send_failed"))
+                    send_telegram_to_chat(chat_id, "Договор уже подписан, но отправка документов не удалась. Сообщите диспетчеру.")
             else:
                 _send_driver_contract_step(session, car, chat_id)
             return jsonify({"ok": True})
