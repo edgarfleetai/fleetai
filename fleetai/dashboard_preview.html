@@ -639,7 +639,17 @@ input,select,textarea{color:var(--ink);accent-color:var(--accent)}
    const more=document.createElement('span');more.className='profile-repair-more';more.textContent='Посмотреть состав работ →';
    row.append(head,name,desc,more);row.addEventListener('click',()=>openDetail(x.id));repairs.append(row);
   }
-  const panes=[['Обзор',finance],['Операции',breakdown],['Кошелёк и долги',wallet],['Ремонты · '+data.repairs.length,repairs]];
+  const assignment=document.createElement('section');assignment.className='profile-pane';
+  const assignmentTitle=document.createElement('h3');assignmentTitle.textContent='Управление водителем';assignment.append(assignmentTitle);
+  const assignmentInfo=document.createElement('p');assignmentInfo.className='profile-note';assignmentInfo.textContent='Текущий водитель: '+(c.driver||'не назначен')+'. Назначение изменяет аренду, кошелёк и начисления, поэтому доступно только после проверки изоляции тестовой базы.';assignment.append(assignmentInfo);
+  const assignmentForm=document.createElement('div');assignmentForm.style.cssText='display:grid;gap:10px;max-width:420px';
+  const makeField=(label,value,type='text')=>{const wrap=document.createElement('label');wrap.style.cssText='display:grid;gap:5px';const caption=document.createElement('span');caption.textContent=label;const input=document.createElement('input');input.type=type;input.value=value;input.style.cssText='padding:11px;border-radius:9px;border:1px solid #735c65;background:#21151c;color:white';wrap.append(caption,input);assignmentForm.append(wrap);return input};
+  const driverInput=makeField('Имя водителя',c.driver||'Тест');
+  const rentInput=makeField('Аренда в сутки, ₽','0','number');rentInput.min='1';
+  const balanceInput=makeField('Стартовый баланс, ₽','0','number');
+  const saveAssignment=document.createElement('button');saveAssignment.className='button';saveAssignment.type='button';saveAssignment.disabled=true;saveAssignment.textContent='Сохранение заблокировано до проверки тестовой базы';
+  const caution=document.createElement('p');caution.className='profile-note';caution.textContent='Поля подготовлены для машины '+c.code+'. Пока ничего не записывается и Telegram-ссылки не создаются.';assignmentForm.append(saveAssignment,caution);assignment.append(assignmentForm);
+  const panes=[['Обзор',finance],['Операции',breakdown],['Кошелёк и долги',wallet],['Ремонты · '+data.repairs.length,repairs],['Водитель',assignment]];
   panes.forEach(([label,pane],i)=>{const tab=document.createElement('button');tab.type='button';tab.className='profile-tab';tab.textContent=label;tab.setAttribute('role','tab');tab.addEventListener('click',()=>{tabs.querySelectorAll('button').forEach(t=>{t.classList.remove('active');t.setAttribute('aria-selected','false')});tab.classList.add('active');tab.setAttribute('aria-selected','true');content.replaceChildren(pane)});tabs.append(tab);if(i===0)tab.click()});
   panel.focus();
  }catch(e){status.textContent='Не удалось открыть автомобиль: '+e.message}
