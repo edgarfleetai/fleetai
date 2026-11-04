@@ -350,3 +350,5 @@ def api_overview_readonly():
     except Exception:
         session.rollback()
         return jsonify({"ok": False, "message": "Не удалось получить список автомобилей"}), 500
+    finally:
+        session.close()
