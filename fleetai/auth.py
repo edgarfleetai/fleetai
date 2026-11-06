@@ -355,6 +355,29 @@ def _login_allowed(username):
     return True
 
 
+class OwnerAlreadyExists(ValueError):
+    """Singleton owner creation refused; existing credentials are never reset."""
+
+
+def create_owner(session, username, password, *, password_method='scrypt'):
+    """Create the singleton owner; caller owns commit/rollback and authorization.
+
+    This is not an HTTP endpoint. A concurrent insert is rejected by the existing
+    singleton constraint; callers must roll back on IntegrityError.
+    """
+    username = username.strip().casefold()
+    if not username or len(username) > 128:
+        raise ValueError('Invalid username')
+    if session.scalar(select(Owner.id).limit(1)) is not None:
+        raise OwnerAlreadyExists('Owner already exists')
+    if not isinstance(password, str) or not 12 <= len(password) <= 1024:
+        raise ValueError('Password must have 12 to 1024 characters')
+    session.execute(delete(AuthSession).where(AuthSession.kind == 'owner'))
+    session.add(Owner(id=1, username=username, password_hash=generate_password_hash(
+        password, method=password_method)))
+    session.flush()
+
+
 def init_auth(app):
     """Register metadata, routes, CLI; performs no DB connections itself."""
     if 'fleetai_auth' in app.extensions:
@@ -487,17 +510,16 @@ document.getElementById('confirm').onclick = async () => {
             if session.scalar(select(Owner.id).limit(1)) is not None:
                 raise click.ClickException('Owner already exists')
             password = click.prompt('Password', hide_input=True, confirmation_prompt=True)
-            if not 12 <= len(password) <= 1024:
-                raise click.ClickException('Password must have 12 to 1024 characters')
-            session.execute(delete(AuthSession).where(AuthSession.kind == 'owner'))
-            session.add(Owner(id=1, username=username, password_hash=generate_password_hash(
-                password, method=password_method)))
             from sqlalchemy.exc import IntegrityError
             try:
+                create_owner(session, username, password, password_method=password_method)
                 session.commit()
             except IntegrityError:
                 session.rollback()
                 raise click.ClickException('Owner already exists') from None
+            except ValueError as exc:
+                session.rollback()
+                raise click.ClickException(str(exc)) from None
         click.echo('Owner created')
 
     @auth_cli.command('create-hermes-credential')

@@ -26,7 +26,7 @@ def create_app(config=None):
     from .auth import init_auth
     init_auth(app)
     if app.config['INIT_LEGACY_DB']:
-        db.init_db()
+        db.init_db(seed=app.config.get('SEED_LEGACY_CARS', True))
     else:
         if not app.config.get('TESTING'):
             raise ValueError('Skipping legacy initialization is only supported in isolated tests')
