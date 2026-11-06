@@ -11,7 +11,7 @@ import os
 
 import click
 from flask import Blueprint, current_app, g, jsonify, redirect, request
-from sqlalchemy import select, text, update, event, case, delete, inspect
+from sqlalchemy import select, text, update, event, case, delete, inspect, func
 from .models import Car
 from werkzeug.security import check_password_hash, generate_password_hash
 from . import db
@@ -156,6 +156,11 @@ def _clear_rolled_back_assignments(session, previous_transaction):
 def _install_assignment_triggers(metadata, connection, **kwargs):
     """DB-level invalidation protects ORM and legacy SQL assignment writers."""
     dialect = connection.dialect.name
+    if dialect in {'sqlite', 'postgresql'}:
+        # Legacy finance/document lookups trim car keys. Exact-key uniqueness
+        # alone permits aliases and a concurrent second identity for one ledger.
+        # Reject duplicates atomically; never normalize or rewrite existing data.
+        connection.exec_driver_sql('CREATE UNIQUE INDEX IF NOT EXISTS auth_car_code_trim_unique ON cars (trim(code))')
     if dialect == 'sqlite':
         body = '''
           INSERT INTO auth_driver_epochs(car_code, epoch) VALUES (OLD.code, 1)
@@ -203,6 +208,16 @@ def _binding_valid(session, car_code, driver_name, chat_id):
         {'car': car_code, 'driver': driver_name, 'chat': str(chat_id)}).first())
 
 
+def _driver_code_unambiguous(session, car_code):
+    """Deny ambiguous legacy trim aliases; never rewrite vehicles or ledgers."""
+    if not isinstance(car_code, str) or not car_code or car_code != car_code.strip():
+        return False
+    table = Car.__table__
+    alias = session.execute(select(table.c.code).where(
+        func.trim(table.c.code) == car_code, table.c.code != car_code).limit(1)).first()
+    return alias is None
+
+
 def lock_driver_financial_car(session, principal, car_code):
     """Revalidate the admitted driver while holding the assignment's row lock.
 
@@ -215,7 +230,7 @@ def lock_driver_financial_car(session, principal, car_code):
             or principal.car_code != car_code):
         return None
     current = lock_driver_assignment(session, car_code)
-    if current is None:
+    if current is None or not _driver_code_unambiguous(session, car_code):
         return None
     # Read table values afresh: a cached ORM auth row is not a revalidation.
     table = AuthSession.__table__
@@ -242,7 +257,8 @@ def issue_driver_login(session, car, chat_id):
         raise ValueError('Verified binding required')
     # Read persisted assignment, not arbitrary caller-supplied object fields.
     current = lock_driver_assignment(session, car.code)
-    if not current or current.driver != car.driver or not _binding_valid(session, current.code, current.driver, chat_id):
+    if (not current or not _driver_code_unambiguous(session, car.code)
+            or current.driver != car.driver or not _binding_valid(session, current.code, current.driver, chat_id)):
         raise ValueError('Verified current Telegram binding required')
     raw = secrets.token_urlsafe(32)
     session.add(DriverTicket(token_hash=_hash(raw), car_code=current.code,
@@ -273,6 +289,8 @@ def authenticate_request():
         if not row or row.revoked_at is not None or row.expires_at <= time.time():
             return None
         if row.kind == 'driver':
+            if not _driver_code_unambiguous(session, row.car_code):
+                return None
             driver = session.scalar(select(Car.driver).where(Car.code == row.car_code))
             if (not driver or driver != row.driver_name or _epoch(session, row.car_code) != row.epoch
                     or not _binding_valid(session, row.car_code, row.driver_name, row.chat_id)):
@@ -295,6 +313,8 @@ def _same_origin(require_proof=False):
                 parsed.password or parsed.path or parsed.query or parsed.fragment):
             return False
     else:
+        if not current_app.testing:
+            return False
         expected = request.host_url.rstrip('/')
     origin = request.headers.get('Origin')
     fetch_site = request.headers.get('Sec-Fetch-Site')
@@ -414,7 +434,8 @@ document.getElementById('confirm').onclick = async () => {
             now = time.time()
             if ticket.expires_at <= now:
                 return jsonify(error='invalid ticket'), 401
-            if (not current or current.driver != ticket.driver_name or _epoch(session, ticket.car_code) != ticket.epoch
+            if (not current or not _driver_code_unambiguous(session, ticket.car_code)
+                    or current.driver != ticket.driver_name or _epoch(session, ticket.car_code) != ticket.epoch
                     or not _binding_valid(session, ticket.car_code, ticket.driver_name, ticket.chat_id)):
                 return jsonify(error='invalid ticket'), 401
             used = session.execute(update(DriverTicket).where(

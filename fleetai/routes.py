@@ -8222,9 +8222,14 @@ DRIVER_CONTRACT_ADMIN_HTML = r'''<!doctype html><html lang="ru"><head><meta char
 
 @bp.route("/api/vehicle-license/<code>/status", methods=["GET"])
 def api_vehicle_license_status(code):
+    from .auth import lock_driver_financial_car
     session = Session()
     try:
-        car = find_car(session, code)
+        principal = getattr(g, 'principal', None)
+        driver_access = bool(principal and principal.kind == 'driver')
+        car = lock_driver_financial_car(session, principal, code) if driver_access else find_car(session, code)
+        if driver_access and car is None:
+            return jsonify({"ok": False, "message": "Сессия водителя больше не действительна"}), 401
         if not car:
             return jsonify({"ok": False, "message": "Машина не найдена"}), 404
         row = _vehicle_license_row(session, car.code)
@@ -8234,7 +8239,8 @@ def api_vehicle_license_status(code):
             "has_license": bool(row),
             "filename": row["license_filename"] if row else "",
             "uploaded_at": (
-                row["uploaded_at"].isoformat()
+                (row["uploaded_at"].isoformat() if hasattr(row["uploaded_at"], 'isoformat')
+                 else str(row["uploaded_at"]).replace(' ', 'T', 1))
                 if row and row.get("uploaded_at")
                 else ""
             ),
@@ -8299,9 +8305,14 @@ def api_vehicle_license_upload(code):
 
 @bp.route("/api/vehicle-license/<code>", methods=["GET"])
 def api_vehicle_license_download(code):
+    from .auth import lock_driver_financial_car
     session = Session()
     try:
-        car = find_car(session, code)
+        principal = getattr(g, 'principal', None)
+        driver_access = bool(principal and principal.kind == 'driver')
+        car = lock_driver_financial_car(session, principal, code) if driver_access else find_car(session, code)
+        if driver_access and car is None:
+            return jsonify({"ok": False, "message": "Сессия водителя больше не действительна"}), 401
         if not car:
             return jsonify({"ok": False, "message": "Машина не найдена"}), 404
         row = _vehicle_license_row(session, car.code)
@@ -10166,6 +10177,7 @@ def _apply_driver_bank_payment(session, car, payment):
 @bp.route("/api/driver-mvp/<code>/bank-payment", methods=["POST"])
 def api_driver_create_bank_payment(code):
     from .tbank import create_payment
+    from .auth import lock_driver_financial_car
 
     data = request.get_json(silent=True) or {}
     try:
@@ -10178,7 +10190,11 @@ def api_driver_create_bank_payment(code):
 
     session = Session()
     try:
-        car = find_car(session, code)
+        principal = getattr(g, 'principal', None)
+        driver_access = bool(principal and principal.kind == 'driver')
+        car = lock_driver_financial_car(session, principal, code) if driver_access else find_car(session, code)
+        if driver_access and car is None:
+            return jsonify({"ok": False, "message": "Сессия водителя больше не действительна"}), 401
         if not car:
             return jsonify({"ok": False, "message": "Машина не найдена"}), 404
 

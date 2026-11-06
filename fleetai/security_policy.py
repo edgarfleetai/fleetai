@@ -6,7 +6,8 @@ Owner/driver legacy behavior remains intact behind authentication and CSRF.
 import hmac
 import os
 
-from flask import Response, g, jsonify, redirect, request, url_for
+from urllib.parse import urlsplit
+from flask import Response, current_app, g, jsonify, redirect, request, url_for
 
 READONLY_PREFIX = '/api/integrations/hermes/v1/'
 SERVICE_ENDPOINTS = frozenset({
@@ -176,6 +177,13 @@ def register_policy(app):
         response.headers.setdefault('X-Content-Type-Options', 'nosniff')
         response.headers.setdefault('Referrer-Policy', 'no-referrer')
         response.headers.setdefault('X-Frame-Options', 'SAMEORIGIN')
+        configured = current_app.config.get('PUBLIC_BASE_URL') or os.getenv('FLEETAI_PUBLIC_BASE_URL')
+        if configured:
+            origin = urlsplit(str(configured).rstrip('/'))
+            if (origin.scheme == 'https' and origin.netloc and not origin.username
+                    and not origin.password and not origin.path and not origin.query and not origin.fragment):
+                # Canonical configuration, not spoofable X-Forwarded-Proto.
+                response.headers.setdefault('Strict-Transport-Security', 'max-age=31536000')
         if request.path.startswith(('/api/', '/auth/', '/driver')):
             response.headers['Cache-Control'] = 'no-store'
         principal = getattr(g, 'principal', None)
