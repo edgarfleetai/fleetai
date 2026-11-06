@@ -1,0 +1,33 @@
+name: Agent fast checks
+
+on:
+  push:
+    branches:
+      - 'security/**'
+      - 'feature/**'
+      - 'development'
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: agent-fast-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  python-syntax:
+    name: Python syntax and whitespace
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Compile application source without importing or connecting to DB
+        run: python -m compileall -q app.py fleetai
+      - name: Check patch whitespace
+        if: github.event_name == 'pull_request'
+        run: git diff --check ${{ github.event.pull_request.base.sha }} ${{ github.event.pull_request.head.sha }}
