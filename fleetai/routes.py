@@ -232,10 +232,29 @@ def send_telegram_document_to_chat(chat_id, file_bytes, filename, caption=""):
         return False
 
 
+def driver_login_url(session, car, chat_id):
+    """Issue a short-lived login only to the verified current private binding."""
+    from urllib.parse import quote, urlsplit
+    from .auth import issue_driver_login
+    chat_id = str(chat_id).strip()
+    if not chat_id.isdigit() or int(chat_id) <= 0:
+        raise ValueError('Driver login links require a private Telegram chat')
+    base = str(current_app.config.get('PUBLIC_BASE_URL') or
+               os.getenv('FLEETAI_PUBLIC_BASE_URL') or '').rstrip('/')
+    parsed = urlsplit(base)
+    if parsed.scheme != 'https' or not parsed.netloc or parsed.username or parsed.password or parsed.query or parsed.fragment or parsed.path:
+        raise ValueError('PUBLIC_BASE_URL must be an HTTPS origin')
+    ticket = issue_driver_login(session, car, chat_id)
+    session.commit()
+    return base + '/auth/driver#token=' + quote(ticket, safe='')
+
+
 def send_driver_welcome(chat_id, car):
-    """Приветствие + рабочие кнопки водителя."""
-    base_url = request.url_root.rstrip("/")
+    """Приветствие + одноразовый вход для привязанного водителя."""
     code = normalize_code(car.code)
+    with Session() as auth_session:
+        login_car = find_car(auth_session, code)
+        portal_url = driver_login_url(auth_session, login_car, chat_id)
     text_value = (
         "🍀 <b>Добро пожаловать в Клевер Парк</b>\n\n"
         f"Вы закреплены за автомобилем <b>{code}</b>.\n"
@@ -246,7 +265,7 @@ def send_driver_welcome(chat_id, car):
     return send_telegram_to_chat_with_keyboard(
         chat_id, text_value,
         [
-            [{"text": "👤 Личный кабинет", "url": f"{base_url}/driver?code={code}"}],
+            [{"text": "👤 Личный кабинет", "url": portal_url}],
             [{"text": "📄 Получить лицензию", "callback_data": f"license:{code}"}],
         ],
     )
@@ -265,7 +284,7 @@ def _ensure_vehicle_documents_table(session):
 
 
 def _vehicle_license_row(session, car_code):
-    _ensure_vehicle_documents_table(session)
+    # The table is created at startup; ordinary PDF navigation is SELECT-only.
     return session.execute(
         sql_text("""
             SELECT car_code, license_filename, license_mime_type,
@@ -7951,8 +7970,7 @@ def _send_signed_contract_and_license(session,row):
     if car:
         license_sent=_send_vehicle_license_to_chat(session,car,chat_id)
 
-    base_url=request.url_root.rstrip("/")
-    portal_url=f"{base_url}/driver?code={normalize_code(row['car_code'])}"
+    portal_url=driver_login_url(session,car,chat_id) if car else '/auth/driver'
     if license_sent:
         final_text="✅ Оформление завершено.\n\nДоговор подписан, лицензия автомобиля отправлена. Личный кабинет доступен по кнопке ниже."
     else:
@@ -8553,7 +8571,7 @@ def _send_driver_balance_alert(session, car, force=False):
         detail = "Пожалуйста, обратите внимание на баланс."
 
     days_left = max(balance // max(daily, 1), 0)
-    portal_url = request.url_root.rstrip("/") + f"/driver?code={code}"
+    portal_url = driver_login_url(session, car, binding['telegram_chat_id'])
 
     message = (
         f"{title}\n\n"
@@ -8928,6 +8946,27 @@ def api_telegram_webhook():
     text_value = str(message.get("text") or "").strip()
     chat = message.get("chat") or {}
     sender = message.get("from") or {}
+
+    command = text_value.split(None, 1)[0].split('@', 1)[0].lower() if text_value else ''
+    if command in {'/login', '/cabinet'}:
+        chat_id = str(chat.get('id') or '').strip()
+        if chat.get('type') != 'private' or str(sender.get('id') or '') != chat_id:
+            return jsonify({'ok': True})
+        session = Session()
+        try:
+            binding = session.execute(sql_text(
+                'SELECT car_code, driver_name FROM driver_telegram_bindings '
+                'WHERE telegram_chat_id = :chat ORDER BY linked_at DESC LIMIT 1'
+            ), {'chat': chat_id}).mappings().first()
+            car = find_car(session, binding['car_code']) if binding else None
+            if not car or (car.driver or '').strip() != (binding['driver_name'] or '').strip():
+                send_telegram_to_chat(chat_id, 'Текущая привязка не подтверждена. Обратитесь к диспетчеру.')
+                return jsonify({'ok': True})
+            login_url = driver_login_url(session, car, chat_id)
+            send_telegram_to_chat(chat_id, 'Одноразовый вход в кабинет (ссылка действует 5 минут):\n' + login_url)
+            return jsonify({'ok': True})
+        finally:
+            session.close()
 
     # Recovery of a previously signed contract requires proof of possession
     # of its original private signing link, never a guess based on car/name.
@@ -9993,6 +10032,15 @@ def api_driver_assignment_save():
                 date=now,
             ))
 
+        # Explicit assignment is a new access epoch even for an identical name.
+        from .auth import revoke_driver_access
+        revoke_driver_access(session, car.code)
+        session.execute(sql_text(
+            'DELETE FROM driver_telegram_bindings WHERE TRIM(car_code) = :code'
+        ), {'code': normalize_code(car.code)})
+        session.execute(sql_text(
+            'DELETE FROM driver_telegram_links WHERE TRIM(car_code) = :code'
+        ), {'code': normalize_code(car.code)})
         car.driver = new_driver
         car.daily_rent = daily_rent
         car.weekly_payment = daily_rent * 7
@@ -10007,13 +10055,6 @@ def api_driver_assignment_save():
             comment=f"V7_START:{start_date.isoformat()}",
             date=now,
         ))
-
-        # Old Telegram account must never receive the new driver's alerts.
-        if driver_changed:
-            session.execute(sql_text("""
-                DELETE FROM driver_telegram_bindings
-                WHERE TRIM(car_code) = :car_code
-            """), {"car_code": normalize_code(car.code)})
 
         _set_auto_rent_enabled(session, car.code, True)
         session.commit()
@@ -12049,7 +12090,7 @@ def tbank_webhook():
     data = request.get_json(silent=True) or {}
 
     try:
-        print("T-BANK WEBHOOK:", data, flush=True)
+        current_app.logger.info('T-Bank notification received')
 
         # 1. Проверяем подпись T-Банка
         if not verify_notification(data):

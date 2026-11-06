@@ -1,0 +1,8 @@
+{
+  "name": "fleetai-security-tests",
+  "private": true,
+  "description": "Development-only browser and isolated PostgreSQL-WASM security checks",
+  "devDependencies": {
+    "@electric-sql/pglite": "0.5.15"
+  }
+}

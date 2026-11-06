@@ -1,0 +1,98 @@
+{
+  "passed": true,
+  "security_concerns": [],
+  "logic_errors": [],
+  "suggestions": [
+    {
+      "id": "SUG-BINDING-EPOCH",
+      "classification": "nonblocking; baseline binding semantics / prior suggestion, not an explicit assignment requirement",
+      "file_lines": "fleetai/auth.py:178-182,225-229; fleetai/routes.py:9093-9200",
+      "suggestion": "При неизменном car.driver удаление Telegram binding временно закрывает доступ, но восстановление того же car/name/chat может снова сделать прежнюю неотозванную сессию действительной. Если требуется необратимый logout при любом rebinding, добавить отдельную generation binding или явный revoke при каждой перепривязке и тест обратной привязки того же chat. Это не нерешённый blocker предыдущей ревизии. Явное назначение через api_driver_assignment_save уже меняет epoch даже для того же имени; изменение driver, ABA и удаление автомобиля покрыты новым механизмом. Старое погашение Telegram link остаётся SELECT used_at + безусловный UPDATE, а не новым атомарным consume driver ticket."
+    },
+    {
+      "id": "SUG-ADDITIONAL-REGRESSIONS",
+      "classification": "nonblocking; test coverage improvement",
+      "file_lines": "tests/test_security_edge_cases.py:5-18,31-43; tests/test_review_regressions.py:35-57; tests/test_security_defaults.py:28-45",
+      "suggestion": "Расширить регрессии: реальная гонка двух bootstrap CLI с разными username вместо только проверки ограничения БД; driver PDF-навигация своей/чужой машины; proxy-origin для consume и обычного CSRF POST, а не только login; ожидание настоящего assignment row lock вместо симуляции скачка времени. Текущая реализация соответствующих защит статически корректна; отсутствие этих дополнительных тестов само по себе не блокирует локальный этап."
+    },
+    {
+      "id": "BASELINE-FINANCE",
+      "classification": "baseline risks; not repaired or certified by this branch",
+      "file_lines": "fleetai/routes.py:1226-1254,10175-10180,12146-12234; fleetai/finance_readonly.py:153-157,178-200,203-243",
+      "suggestion": "Не считать исправленными legacy balance-or-fallback при сохранённом нуле, side-effect GET аренды, car-level смешение назначений, неполную provenance и немаркированные тестовые записи. Новый API эти ограничения явно помечает, не складывает пересекающиеся feeds и не вызывает legacy financial writers. Последовательная идемпотентность старого банковского webhook не доказывает конкурентную exactly-once проводку: прежняя marker SELECT-before-insert схема не имеет новой защиты от такой гонки."
+    },
+    {
+      "id": "BASELINE-OPERATIONS",
+      "classification": "baseline operational risks; outside local review approval",
+      "file_lines": "fleetai/tbank.py:126-136; fleetai/security_policy.py:84-88; fleetai/db.py:98-131; fleetai/auth.py:263-285",
+      "suggestion": "Банковские SuccessURL/FailURL по-прежнему указывают на production — это неизменённый baseline, не fallback новой magic-link функции; не использовать реальный acquiring в изолированном TEST. Query-secret cron совместимость сохранена, поэтому нужны редактирование query в логах и предпочтение header auth. Non-TEST startup по-прежнему seed_cars; для staging только отдельная синтетическая БД. Rate limiting использует REMOTE_ADDR без доверия forwarding headers: на ingress с общим proxy IP проверить влияние общего IP bucket, не устранять это слепым доверием X-Forwarded-For."
+    },
+    {
+      "id": "SUG-CONFIG-FAILFAST",
+      "classification": "nonblocking; deployment configuration hardening",
+      "file_lines": "fleetai/auth.py:237-253; fleetai/routes.py:235-250; fleetai/security_policy.py:78-88,125-131",
+      "suggestion": "Можно перенести валидацию канонического HTTPS PUBLIC_BASE_URL и ASCII service secrets в startup для ранней диагностируемой ошибки. Сейчас неверные secrets отклоняются без исключения, неверный configured origin закрывает origin-проверки, magic URL требует явный HTTPS origin и не имеет production fallback. Без PUBLIC_BASE_URL _same_origin использует request.host_url: это допустимо для прямого локального HTTPS, но не является проверенной конфигурацией внешнего proxy deployment."
+    }
+  ],
+  "staging_ready": false,
+  "staging_gates": [
+    {
+      "id": "GATE-EVIDENCE",
+      "requirement": "Привязать окончательный полный локальный suite log к точным source/test hashes этой ревизии. В этой независимой read-only проверке suite не запускался; числа 108/116 и план 117 из делегированного контекста не являются независимо повторённым результатом. AST всех Python файлов и git diff --check выполнены успешно."
+    },
+    {
+      "id": "GATE-ISOLATION-CONFIG",
+      "requirement": "До внешнего TEST deployment подтвердить отдельные приложение и БД с синтетическими данными, отсутствие production bank/TG/cron credentials и отключённые реальные внешние действия/cron/автокоманды. Указать точный reviewed SHA/хэши и канонический PUBLIC_BASE_URL=https://<test-host> без path/query/userinfo; настроить отдельный FINANCE_READONLY_DATABASE_URL. Не публиковать и не копировать production данные/секреты."
+    },
+    {
+      "id": "GATE-NATIVE-POSTGRES",
+      "requirement": "Если staging выбирает PostgreSQL, в отдельно разрешённой disposable native PostgreSQL среде выполнить реальный SQLAlchemy/psycopg startup: fresh и legacy cars без driver, повторный startup, два worker startup с advisory_xact_lock, rollback при обязательной ошибке миграции, наличие итоговых колонок/таблиц/triggers. Проверить row-lock consume/reassignment/expiry, один победитель consume, ABA и rollback revocation. tests/test_postgres_wasm.py выполняет emitted PostgreSQL schema/triggers и READ ONLY в ephemeral PGlite WASM, но не db.init_db через psycopg, native concurrency или Render. Это gate следующего этапа, не blocker локального code review."
+    },
+    {
+      "id": "GATE-READONLY-ROLE",
+      "requirement": "Проверить в выбранной staging БД отдельного SELECT-only пользователя без DML/DDL, membership/owner/BYPASSRLS/опасных function grants; доказать отказ INSERT/UPDATE/DELETE/DDL вне и внутри read-only transaction. Через реальный pool проверить SET TRANSACTION READ ONLY, rollback/error cleanup и отсутствие доступа к writer DSN для finance feed. Текущий код требует отдельный DSN вне TESTING, но по строке DSN не может удостоверить реальные права пользователя."
+    },
+    {
+      "id": "GATE-BROWSER-PROXY",
+      "requirement": "На отдельном HTTPS TEST host проверить полный owner login/logout и driver fragment-confirm-consume, __Host secure cookie, Origin/Fetch Metadata, реальные TLS termination/Host и поддельные forwarding headers; отрицательные missing/cross-site preauth и CSRF случаи. Проверить fetch shim с настоящим браузером, обычную PDF навигацию owner/своего driver и отказ чужому driver, истечение/revoke/смену назначения, finance bearer-only GET/HEAD/OPTIONS и отсутствие cookie fallback. Node Request harness не заменяет browser/proxy smoke."
+    },
+    {
+      "id": "GATE-LEGACY-SANDBOX",
+      "requirement": "В отдельно разрешённом sandbox проверить текущие cron methods/auth, Telegram webhook secret и private binding/login, capability contract save/call-confirm/sign/PDF/delivery и банковский signed CONFIRMED webhook с синтетическим sandbox payment, неподтверждённым/изменённым payload и повтором. Не запускать реальные платежи/уведомления; отдельно учесть production bank return URLs. Пройти старую UI-навигацию и fetch GET после CSRF default-deny; проверить логи на отсутствие cookies/tickets/credentials."
+    },
+    {
+      "id": "GATE-ROLLOUT",
+      "requirement": "Перед любым последующим rollout отдельно утвердить backup/restore, migration rollback plan, версии зависимостей и ограничения ingress, выдачу/хранение/revoke owner и Hermes credential, мониторинг отказов и соответствие deployed artifact reviewed hashes. Готовность Render и production этой ревизией не доказана и не заявляется."
+    }
+  ],
+  "reviewed_file_hashes": {
+    "fleetai/__init__.py": "483c83448d33fd4981256f75e248ec06848d30ffaf0db1ca24ddf1175fb0aa09",
+    "fleetai/auth.py": "809f0c11d5c23fb1f00431262b27cb8c384f7eaf48065dc6d521fddbb0d959e5",
+    "fleetai/auth_models.py": "0bc0f347b39dc95b8fda9f209d2bee364c4d6e0e48e03536e47fdabff64716dc",
+    "fleetai/db.py": "f864990850bb1e30ca269ff6aabe204c11ae315919c0801d05c0ed110b1344dd",
+    "fleetai/finance.py": "795930f6bbe92184ef8a1b9e1309325001ccc130fe87fac1ac61b59aab2a569c",
+    "fleetai/finance_readonly.py": "fb87bd54d07883f889b4714693fca4f163a018ea197210199823951185ca157b",
+    "fleetai/models.py": "a53ed11187c8396b060cb6ba771438ce7ec1b29df4fdb6fbe4627ffc4af8f459",
+    "fleetai/parser.py": "fcbec2f1e0d48e3c83ae658e535c23431defad934710c2d8ce473950f6f51ffb",
+    "fleetai/parts_catalog.py": "2c52fbe75b0e7f290bb0d6255dd42123883833b397e2911055faf58c54c811b4",
+    "fleetai/routes.py": "ecfc8e3dba2e54d67581ea5b6161641caf0b8bc41cc5cac655bb6446e4abefba",
+    "fleetai/security_policy.py": "ea3018dfffd521dd42c56fd8c9f1f4463ecc6cfaffb4b6758d4d010ec3fc744e",
+    "fleetai/tbank.py": "d3620031432f65b486f4fdd03b0b5bfa9e150389c36c8669148b986a10077be1",
+    "fleetai/utils.py": "f12a8d58ccab936bc265a150654a05ce48396a27da82985bef7f4373bf36f176",
+    "fleetai/views.py": "d39fb4a5e7d5fbb00c18b1db839188ca59baa4d8c84e5fe8fb9a2e2112cb37f4",
+    "tests/conftest.py": "109d24cdc8d5e487147935467cfaf60d640387c86566d71a72bccf5bf9ef59cd",
+    "tests/test_auth_core.py": "b5a06adbf29ef1458599624477409c577abb4368a99452769d6e1295b68d378b",
+    "tests/test_browser_client.py": "323645f24756fcaf37ebe6858298f2467b0ef2da67f4731b730fc8cf7a189b7b",
+    "tests/test_finance_readonly.py": "db396e25f32266e6eaccb1c1392400843bcaeba6cc5879b259d948032635d7f1",
+    "tests/test_legacy_boundaries.py": "0afb90e2288c4bc5857728cf8e016da2431c44723a88c630a87b28145b7199b6",
+    "tests/test_postgres_wasm.py": "1edf67bb05ba2a0b0e799b12a7e8bb7569475923726f8ddaa1858c9f53059cd6",
+    "tests/test_review_regressions.py": "924e6c2dbf0284671a92a368c155331d3e0db0864c836f836dca4cabf3ffd29f",
+    "tests/test_security_defaults.py": "26280fa7b50deb5e1a84952d0a56b4262a3b3d766d5749c4429c7fe0a74a3e14",
+    "tests/test_security_edge_cases.py": "e2c3d3569898072cfbd346e904334ac9bc1944337e3f793a06b77c91053181bc",
+    "tests/test_security_integration.py": "e289e451ee0f671b87d14fd5a6812007dd89d6a8701142a6b58165acce0024a2",
+    "package.json": "b1b8fa1ecb2c73d7a6dc4d51fc1e6c7e19ccb0292a9e5047cc90217ce024846f",
+    "package-lock.json": "f52031b57203df10d82e220d054ae282742cb124f5d8ea227cfd687bb1b1dd85",
+    "requirements-dev.txt": "a5eb725dd6588c489f6cdbdad3a73b9a21249979f8e394fb4cbf9015822caf38"
+  },
+  "summary": "ПРОЙДЕНО для локального независимого статического security re-review: новых или оставшихся блокирующих security/logic ошибок в проверяемой ветке не обнаружено; security_concerns и logic_errors пусты. Все blockers independent-review-1.json сверены с текущим кодом: SEC-1 закрыт explicit api_wialon_665_block_preview и default-CSRF для неизвестных API GET/HEAD (security_policy.py:32-49,167-171; inspected SAFE navigation callgraph, включая finance.calculate_period_for_car, не содержит persisted writes); SEC-2 закрыт ASCII/length/constant-time secrets_match (security_policy.py:78-88,125-131). LOG-1 закрыт каноническим настроенным HTTPS origin без доверия произвольным forwarding headers (auth.py:237-253; test_security_edge_cases.py:5-18); staging обязан явно установить PUBLIC_BASE_URL. LOG-2 закрыт CHECK id=1, фиксированным Owner(id=1) и IntegrityError rollback/catch (auth_models.py:37-42; auth.py:409-430). LOG-3 закрыт bank_confirmed=null (finance_readonly.py:189-200; test_finance_readonly.py:114-135). LOG-4 закрыт отсутствием metadata after_create trigger hook и упорядоченным create_all -> strict idempotent migrations -> trigger install в одной PostgreSQL transaction под advisory_xact_lock (db.py:33-97; auth.py:135-171). LOG-5 закрыт startup vehicle_documents metadata и SELECT-only GET без ленивого DDL; обычная авторизованная навигация разрешена, driver car boundary сохраняется (auth_models.py:28-34; routes.py:286-297,8224-8243,8301-8317; security_policy.py:22-29,45-49,155-171). Дополнительно проверены: обязательный Origin либо Sec-Fetch-Site=same-origin на preauth POST и явные negative header-removal tests (auth.py:237-253,309-310,347-350; conftest.py:12-19; test_security_defaults.py:20-25); повторное время после assignment lock (auth.py:357-373); TESTING factory .test-data/:memory: guard и seed=False (fleetai/__init__.py:10-33); явный HTTPS magic URL без production fallback (routes.py:235-250); opaque hashed server sessions, expiry/revoke/epoch/binding, single-use ticket, assignment ABA, singleton owner, scope-only hashed/revocable finance credential, отсутствие cookie fallback при Authorization, deny legacy/service/contracts bearer и driver cross-car restriction (auth.py:39-78,93-132,185-234,347-400; security_policy.py:104-171). Финансовые чтения используют Core SELECT на отдельном обязательном вне TESTING datasource и DB read-only boundary без legacy calls (finance_readonly.py:18-68,142-270). Bank signature/CONFIRMED handler и capability contracts сохранены; Telegram требует отдельный webhook secret, /login — проверенный private binding. Полный tracked diff к 053144753b64e2b30c8cbeb2d102aed76b692da8 прочитан; новые source модули и все tests прочитаны, неизменённые baseline Python модули сверены с base, все fleetai/*.py и tests/*.py синтаксически разобраны AST, опасные eval/exec вызовы в новых модулях не найдены, git diff --check успешен. Все требуемые файлы захэшированы SHA-256; хэши являются границей этой ревизии, не доказательством полного аудита неизменённого legacy. Приложение/тесты не импортировались и не запускались; network/DB/production/секреты не использовались, source не редактировался, commits/push/deploy не выполнялись. Единственная запись: .test-data/independent-review-final.json. staging_ready=false: перечисленные отдельные staging gates ещё не подтверждены; Render readiness не доказана."
+}
