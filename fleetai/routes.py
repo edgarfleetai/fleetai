@@ -13,7 +13,7 @@ from urllib.parse import unquote
 
 from datetime import datetime, date, timedelta
 
-from flask import make_response, Blueprint, request, jsonify, render_template_string, send_file, current_app
+from flask import make_response, Blueprint, request, jsonify, render_template_string, send_file, current_app, g
 from sqlalchemy import func, text as sql_text
 
 from reportlab.lib import colors
@@ -10084,8 +10084,8 @@ def cron_daily_driver_rent():
     finally:
         session.close()
 
-def driver_wallet_snapshot(session, car):
-    _sync_daily_rent(session, car)
+def driver_wallet_snapshot(session, car, *, commit=True):
+    _sync_daily_rent(session, car, commit=commit)
     code = normalize_code(car.code)
     wallet_total = session.query(func.coalesce(func.sum(DriverWalletTransaction.amount), 0)).filter(func.trim(DriverWalletTransaction.car_code) == code).scalar() or 0
     calc = calculate_driver_payment(session, car)
@@ -10105,12 +10105,25 @@ def driver_wallet_snapshot(session, car):
 
 @bp.route("/api/driver-mvp/<code>")
 def api_driver_mvp(code):
+    from .auth import lock_driver_financial_car
     session = Session()
     try:
-        car = find_car(session, code)
+        principal = getattr(g, 'principal', None)
+        driver_read = bool(principal and principal.kind == 'driver')
+        car = lock_driver_financial_car(session, principal, code) if driver_read else find_car(session, code)
+        if driver_read and car is None:
+            return jsonify({"ok": False, "message": "Сессия водителя больше не действительна"}), 401
         if not car: return jsonify({"ok": False, "message": "Машина не найдена"}), 404
-        return jsonify({"ok": True, "car": {"code": car.code, "brand": car.brand or "", "model": car.model or "", "plate": car.plate or "", "driver": car.driver or "", "daily_rent": effective_daily_rent(car)}, **driver_wallet_snapshot(session, car), "blocking": driver_blocking_preview(session, car)})
-    finally: session.close()
+        response = jsonify({"ok": True, "car": {"code": car.code, "brand": car.brand or "", "model": car.model or "", "plate": car.plate or "", "driver": car.driver or "", "daily_rent": effective_daily_rent(car)}, **driver_wallet_snapshot(session, car, commit=not driver_read), "blocking": driver_blocking_preview(session, car, commit=not driver_read)})
+        if driver_read:
+            # jsonify has already materialized all fields; only now release the lock.
+            session.commit()
+        return response
+    except Exception:
+        session.rollback()
+        raise
+    finally:
+        session.close()
 
 def _apply_driver_bank_payment(session, car, payment):
     """Post a confirmed bank payment exactly once."""
@@ -10418,9 +10431,9 @@ def api_driver_mvp_clear_test_debt(code):
     finally:
         session.close()
 
-def driver_blocking_preview(session, car):
+def driver_blocking_preview(session, car, *, commit=True):
     """Read-only decision preview. V5 never sends a Wialon command automatically."""
-    snap = driver_wallet_snapshot(session, car)
+    snap = driver_wallet_snapshot(session, car, commit=commit)
     unpaid = max(-int(snap.get("balance", 0) or 0), 0)
     threshold = int(os.getenv("DRIVER_BLOCK_DEBT_THRESHOLD", "1") or 1)
     would_block = unpaid >= threshold
@@ -10439,12 +10452,23 @@ def api_driver_blocking_preview(code):
     allowed = os.getenv("DRIVER_MVP_CAR", "665")
     if normalize_code(code) != normalize_code(allowed):
         return jsonify({"ok": False, "message": "MVP включён только для тестовой машины"}), 403
+    from .auth import lock_driver_financial_car
     session = Session()
     try:
-        car = find_car(session, code)
+        principal = getattr(g, 'principal', None)
+        driver_read = bool(principal and principal.kind == 'driver')
+        car = lock_driver_financial_car(session, principal, code) if driver_read else find_car(session, code)
+        if driver_read and car is None:
+            return jsonify({"ok": False, "message": "Сессия водителя больше не действительна"}), 401
         if not car:
             return jsonify({"ok": False, "message": "Машина не найдена"}), 404
-        return jsonify({"ok": True, "car_code": car.code, **driver_blocking_preview(session, car)})
+        response = jsonify({"ok": True, "car_code": car.code, **driver_blocking_preview(session, car, commit=not driver_read)})
+        if driver_read:
+            session.commit()
+        return response
+    except Exception:
+        session.rollback()
+        raise
     finally:
         session.close()
 

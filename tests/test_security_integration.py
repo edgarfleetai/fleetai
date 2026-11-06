@@ -198,7 +198,30 @@ def test_legacy_rent_and_period_read_handlers_are_unchanged():
             assert len(commits) == 2
             for node in commits:
                 node.value = ast.parse('session.commit() if commit else session.flush()').body[0].value
-        return {node.name:ast.dump(node, include_attributes=False) for node in tree.body if isinstance(node,ast.FunctionDef) and node.name in names}
+        signatures = {}
+        for node in tree.body:
+            if not isinstance(node, ast.FunctionDef) or node.name not in names:
+                continue
+            if node.name == 'api_driver_mvp':
+                # Its auth/transaction boundary intentionally changes. Preserve
+                # the complete financial response expression, not the old race.
+                payloads = [call for call in ast.walk(node)
+                            if isinstance(call, ast.Call) and isinstance(call.func, ast.Name)
+                            and call.func.id == 'jsonify' and call.args
+                            and isinstance(call.args[0], ast.Dict)
+                            and any(isinstance(key, ast.Constant) and key.value == 'car'
+                                    for key in call.args[0].keys)]
+                assert len(payloads) == 1
+                payload = payloads[0]
+                for call in ast.walk(payload):
+                    if (isinstance(call, ast.Call) and isinstance(call.func, ast.Name)
+                            and call.func.id in {'driver_wallet_snapshot','driver_blocking_preview'}):
+                        assert all(keyword.arg == 'commit' for keyword in call.keywords)
+                        call.keywords = []
+                signatures[node.name] = ast.dump(payload, include_attributes=False)
+            else:
+                signatures[node.name] = ast.dump(node, include_attributes=False)
+        return signatures
     assert functions(old, allow_assignment_transaction=True) == functions(new)
     assert len(functions(old)) == len(names)
 

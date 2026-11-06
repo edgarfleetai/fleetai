@@ -203,6 +203,35 @@ def _binding_valid(session, car_code, driver_name, chat_id):
         {'car': car_code, 'driver': driver_name, 'chat': str(chat_id)}).first())
 
 
+def lock_driver_financial_car(session, principal, car_code):
+    """Revalidate the admitted driver while holding the assignment's row lock.
+
+    The caller owns this transaction and MUST retain it through materializing
+    the complete response. In particular, legacy rent sync must flush, not
+    commit. Assignment, explicit revocation and binding changes use this same
+    persisted-car lock, so they cannot overtake the authorized snapshot.
+    """
+    if (not principal or principal.kind != 'driver' or not principal.session_hash
+            or principal.car_code != car_code):
+        return None
+    current = lock_driver_assignment(session, car_code)
+    if current is None:
+        return None
+    # Read table values afresh: a cached ORM auth row is not a revalidation.
+    table = AuthSession.__table__
+    row = session.execute(select(table).where(
+        table.c.token_hash == principal.session_hash)).mappings().first()
+    if (not row or row['kind'] != 'driver' or row['revoked_at'] is not None
+            or row['expires_at'] <= time.time() or row['car_code'] != current.code
+            or not current.driver or row['driver_name'] != current.driver
+            or row['epoch'] != _epoch(session, current.code)
+            or not _binding_valid(session, current.code, current.driver, row['chat_id'])):
+        return None
+    # Never switch back to the legacy trimmed-key lookup after locking an exact key.
+    return session.scalar(select(Car).where(Car.code == current.code)
+                          .execution_options(populate_existing=True))
+
+
 def issue_driver_login(session, car, chat_id):
     """Issue <=5-minute ticket only for a persisted current car/chat binding.
 
