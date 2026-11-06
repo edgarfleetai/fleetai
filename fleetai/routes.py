@@ -8436,9 +8436,18 @@ def api_driver_telegram_link():
 
     session = Session()
     try:
+        from .auth import lock_driver_assignment
+        if session.get_bind().dialect.name == 'postgresql':
+            session.execute(sql_text('SELECT pg_advisory_xact_lock(684593121)'))
+        locked = lock_driver_assignment(session, car_code)
         car = find_car(session, car_code)
         if not car:
             return jsonify({"ok": False, "message": "Машина не найдена"}), 404
+        # Enrollment/redemption must use the same exact persisted key. Legacy
+        # trimmed lookup is not authority to mint an unlocked, unusable link.
+        if locked is None or car.code != car_code or locked.code != car.code:
+            return jsonify({"ok": False, "message": "Код машины неканоничен или назначение недоступно"}), 409
+        session.refresh(car)
         if not (car.driver or "").strip():
             return jsonify({
                 "ok": False,
@@ -8454,7 +8463,7 @@ def api_driver_telegram_link():
 
         token = uuid.uuid4().hex
         now = moscow_now().replace(tzinfo=None)
-        expires = now + timedelta(days=7)
+        expires = now + timedelta(minutes=15)
 
         next_id = session.execute(
             sql_text("SELECT COALESCE(MAX(id), 0) + 1 FROM driver_telegram_links")
@@ -8605,7 +8614,7 @@ def _send_driver_balance_alert(session, car, force=False):
 
 
 
-def _ensure_auto_rent_settings(session):
+def _ensure_auto_rent_settings(session, *, commit=True):
     """Persistent list of cars enabled for automatic daily rent."""
     session.execute(sql_text("""
         CREATE TABLE IF NOT EXISTS auto_rent_vehicle_settings (
@@ -8628,11 +8637,11 @@ def _ensure_auto_rent_settings(session):
                     VALUES (:code, 1, :updated_at)
                     ON CONFLICT (car_code) DO NOTHING
                 """), {"code": code, "updated_at": now})
-        session.commit()
+        session.commit() if commit else session.flush()
 
 
-def _set_auto_rent_enabled(session, car_code, enabled=True):
-    _ensure_auto_rent_settings(session)
+def _set_auto_rent_enabled(session, car_code, enabled=True, *, commit=True):
+    _ensure_auto_rent_settings(session, commit=commit)
     code = normalize_code(car_code)
     session.execute(sql_text("""
         INSERT INTO auto_rent_vehicle_settings (car_code, enabled, updated_at)
@@ -9100,101 +9109,15 @@ def api_telegram_webhook():
 
     session = Session()
     try:
-        now = moscow_now().replace(tzinfo=None)
-        link = session.execute(
-            sql_text("""
-                SELECT id, car_code, driver_name, expires_at, used_at
-                FROM driver_telegram_links
-                WHERE link_token = :link_token
-                LIMIT 1
-            """),
-            {"link_token": link_token},
-        ).mappings().first()
-
-        if not link:
-            send_telegram_to_chat(
-                chat_id,
-                "Ссылка привязки недействительна. Попросите диспетчера создать новую.",
-            )
-            return jsonify({"ok": True})
-
-        if link.get("used_at"):
-            send_telegram_to_chat(
-                chat_id,
-                "Эта ссылка уже использована. Попросите диспетчера создать новую.",
-            )
-            return jsonify({"ok": True})
-
-        expires_at = link.get("expires_at")
-        if expires_at and expires_at < now:
-            send_telegram_to_chat(
-                chat_id,
-                "Срок действия ссылки истёк. Попросите диспетчера создать новую.",
-            )
-            return jsonify({"ok": True})
-
-        car = find_car(session, link["car_code"])
-        if not car or (car.driver or "").strip() != (link["driver_name"] or "").strip():
-            send_telegram_to_chat(
-                chat_id,
-                "Водитель на этой машине изменился. Попросите новую ссылку.",
-            )
-            return jsonify({"ok": True})
-
-        username = str(sender.get("username") or "").strip()
-        first_name = str(sender.get("first_name") or "").strip()
-
-        # Одна машина = одна актуальная Telegram-привязка.
-        session.execute(
-            sql_text("""
-                DELETE FROM driver_telegram_bindings
-                WHERE TRIM(car_code) = :car_code
-            """),
-            {"car_code": normalize_code(car.code)},
-        )
-
-        # Один Telegram-аккаунт не должен случайно остаться на двух машинах.
-        session.execute(
-            sql_text("""
-                DELETE FROM driver_telegram_bindings
-                WHERE telegram_chat_id = :chat_id
-            """),
-            {"chat_id": chat_id},
-        )
-
-        next_binding_id = session.execute(
-            sql_text("SELECT COALESCE(MAX(id), 0) + 1 FROM driver_telegram_bindings")
-        ).scalar()
-
-        session.execute(
-            sql_text("""
-                INSERT INTO driver_telegram_bindings
-                    (id, car_code, driver_name, telegram_chat_id,
-                     telegram_username, telegram_first_name, linked_at,
-                     last_alert_level)
-                VALUES
-                    (:id, :car_code, :driver_name, :chat_id,
-                     :username, :first_name, :linked_at, '')
-            """),
-            {
-                "id": int(next_binding_id or 1),
-                "car_code": normalize_code(car.code),
-                "driver_name": (car.driver or "").strip(),
-                "chat_id": chat_id,
-                "username": username,
-                "first_name": first_name,
-                "linked_at": now,
-            },
-        )
-
-        session.execute(
-            sql_text("""
-                UPDATE driver_telegram_links
-                SET used_at = :used_at
-                WHERE id = :id
-            """),
-            {"used_at": now, "id": link["id"]},
-        )
+        from .driver_binding import redeem_binding_link
+        if chat.get('type') != 'private' or str(sender.get('id') or '') != chat_id:
+            return jsonify({'ok': True})
+        car, binding_error = redeem_binding_link(session, link_token, chat_id,
+            str(sender.get('username') or '').strip(), str(sender.get('first_name') or '').strip())
+        if binding_error:
+            session.rollback()
+            send_telegram_to_chat(chat_id, binding_error)
+            return jsonify({'ok': True})
         session.commit()
 
         _send_driver_contract_step(session, car, chat_id)
@@ -9202,7 +9125,7 @@ def api_telegram_webhook():
 
     except Exception as error:
         session.rollback()
-        print(f"Ошибка Telegram webhook: {error}")
+        current_app.logger.error('Telegram webhook failed (%s)', type(error).__name__)
         return jsonify({"ok": False}), 500
     finally:
         session.close()
@@ -9605,7 +9528,7 @@ def _driver_wallet_credit_after_fee(paid_amount, payment_source):
     return int(round(paid_amount * 0.96)), 4, "Банковская карта"
 
 
-def _sync_daily_rent(session, car):
+def _sync_daily_rent(session, car, *, commit=True):
     """
     Начисляет суточную аренду один раз за каждый календарный день.
     Дни простоя не списываются. Повторный запуск безопасен.
@@ -9636,7 +9559,7 @@ def _sync_daily_rent(session, car):
             comment=f"V7_START:{today.isoformat()}",
             date=moscow_now().replace(tzinfo=None),
         ))
-        session.commit()
+        session.commit() if commit else session.flush()
         return {"charged": 0, "skipped_downtime": 0}
 
     start = None
@@ -9706,7 +9629,7 @@ def _sync_daily_rent(session, car):
 
         day += timedelta(days=1)
 
-    session.commit()
+    session.commit() if commit else session.flush()
     return {"charged": charged, "skipped_downtime": skipped_downtime}
 
 
@@ -9985,14 +9908,21 @@ def api_driver_assignment_save():
 
     session = Session()
     try:
+        # Resolve only the persisted key before locking; assignment and wallet
+        # state must be read afresh inside the shared transaction lock.
+        from .auth import lock_driver_assignment
+        persisted_code = session.query(Car.code).filter(func.trim(Car.code) == code).scalar()
+        if persisted_code is None or lock_driver_assignment(session, persisted_code) is None:
+            return jsonify({"ok": False, "message": f"Машина {code} не найдена"}), 404
         car = find_car(session, code)
         if not car:
             return jsonify({"ok": False, "message": f"Машина {code} не найдена"}), 404
+        session.refresh(car)
 
         # Bring the old driver's rent up to date before closing their wallet period.
         old_driver = (car.driver or "").strip()
         if old_driver and int(effective_daily_rent(car) or 0) > 0:
-            _sync_daily_rent(session, car)
+            _sync_daily_rent(session, car, commit=False)
 
         current_balance = int(
             session.query(func.coalesce(func.sum(DriverWalletTransaction.amount), 0))
@@ -10056,7 +9986,7 @@ def api_driver_assignment_save():
             date=now,
         ))
 
-        _set_auto_rent_enabled(session, car.code, True)
+        _set_auto_rent_enabled(session, car.code, True, commit=False)
         session.commit()
 
         final_balance = int(
@@ -10161,6 +10091,8 @@ def driver_wallet_snapshot(session, car):
     calc = calculate_driver_payment(session, car)
     rental_due = int(calc.get("amount_due", 0) or 0)
     debt_rows = driver_debt_summary(session, car.driver or "") if car.driver else []
+    # A display name is not an identity or authorization boundary across cars.
+    debt_rows = [row for row in debt_rows if normalize_code(row.get('car_code') or '') == code]
     separate_debt = sum(int(row.get("balance", 0) or 0) for row in debt_rows)
     total_due = rental_due + separate_debt
     txs = session.query(DriverWalletTransaction).filter(func.trim(DriverWalletTransaction.car_code) == code).order_by(DriverWalletTransaction.id.desc()).limit(30).all()

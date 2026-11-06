@@ -180,7 +180,12 @@ def payments(params):
     table = DriverDebtPayment.__table__ if debt_feed else Operation.__table__
     conditions = [table.c.amount > 0]
     if debt_feed:
-        conditions.append(exclude_test(table.c.comment))
+        parent = DriverDebt.__table__
+        marked_parent = select(1).where(parent.c.id == table.c.debt_id,
+            ~exclude_test(parent.c.reason, parent.c.comment)).exists()
+        # Explicitly marked parent debts cannot leak through an unmarked payment.
+        # Orphan payments remain visible, unverified and reconciliation-required.
+        conditions.extend([exclude_test(table.c.comment), ~marked_parent])
     else:
         conditions.extend([table.c.type == "income", table.c.category == "Аренда",
                            exclude_test(table.c.raw_message, table.c.description)])

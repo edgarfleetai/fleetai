@@ -90,7 +90,22 @@ def _upsert(session, model, values, updates):
         index_elements=list(model.__table__.primary_key.columns), set_=updates))
 
 
-def revoke_driver_access(session, car_code):
+def lock_driver_assignment(session, car_code):
+    """Shared serialization point for assignment, binding and session issuance.
+
+    PostgreSQL uses the persisted car row. SQLite test databases reserve their
+    writer transaction before any subsequent reads; no production lock is used.
+    """
+    if session.get_bind().dialect.name == 'sqlite':
+        connection = session.connection()
+        if not connection.connection.driver_connection.in_transaction:
+            connection.exec_driver_sql('BEGIN IMMEDIATE')
+    table = Car.__table__
+    return session.execute(select(table.c.code, table.c.driver).where(
+        table.c.code == car_code).with_for_update()).first()
+
+
+def revoke_driver_access(session, car_code, *, keep_link_id=None):
     """Increment assignment epoch and revoke all sessions/tickets atomically.
 
     No commit: part of caller transaction. Deletes Telegram bindings and pending
@@ -98,13 +113,19 @@ def revoke_driver_access(session, car_code):
     DB triggers do this automatically for persisted cars.driver changes,
     including raw SQL/bulk updates and ABA.
     """
+    lock_driver_assignment(session, car_code)
     _upsert(session, DriverEpoch, {'car_code': car_code, 'epoch': 1},
             {'epoch': DriverEpoch.epoch + 1})
     now = time.time()
     session.execute(update(AuthSession).where(AuthSession.kind == 'driver', AuthSession.car_code == car_code).values(revoked_at=now))
     session.execute(update(DriverTicket).where(DriverTicket.car_code == car_code).values(revoked_at=now))
     session.execute(text('DELETE FROM driver_telegram_bindings WHERE car_code=:code'), {'code': car_code})
-    session.execute(text('DELETE FROM driver_telegram_links WHERE car_code=:code'), {'code': car_code})
+    if keep_link_id is None:
+        session.execute(text('DELETE FROM driver_telegram_links WHERE car_code=:code'), {'code': car_code})
+    else:
+        # A verified, atomically claimed enrollment link is retained as used.
+        session.execute(text('DELETE FROM driver_telegram_links WHERE car_code=:code AND id<>:keep'),
+                        {'code': car_code, 'keep': keep_link_id})
 
 
 @event.listens_for(Car.driver, 'set', active_history=True)
@@ -191,7 +212,7 @@ def issue_driver_login(session, car, chat_id):
     if not car or not car.code or not chat_id:
         raise ValueError('Verified binding required')
     # Read persisted assignment, not arbitrary caller-supplied object fields.
-    current = session.execute(select(Car.code, Car.driver).where(Car.code == car.code).with_for_update()).first()
+    current = lock_driver_assignment(session, car.code)
     if not current or current.driver != car.driver or not _binding_valid(session, current.code, current.driver, chat_id):
         raise ValueError('Verified current Telegram binding required')
     raw = secrets.token_urlsafe(32)
@@ -359,7 +380,7 @@ document.getElementById('confirm').onclick = async () => {
             ticket = session.get(DriverTicket, _hash(raw))
             if not ticket or ticket.consumed_at is not None or ticket.revoked_at is not None or ticket.expires_at <= now:
                 return jsonify(error='invalid ticket'), 401
-            current = session.execute(select(Car.code, Car.driver).where(Car.code == ticket.car_code).with_for_update()).first()
+            current = lock_driver_assignment(session, ticket.car_code)
             # Assignment locking may have waited past the link's expiry.
             now = time.time()
             if ticket.expires_at <= now:

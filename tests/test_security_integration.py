@@ -185,9 +185,21 @@ def test_legacy_rent_and_period_read_handlers_are_unchanged():
     old = subprocess.run(['git','show','053144753b64e2b30c8cbeb2d102aed76b692da8:fleetai/routes.py'], cwd=root, check=True, capture_output=True, text=True).stdout
     new = (root/'fleetai/routes.py').read_text()
     names = {'_sync_daily_rent','calculate_driver_payment','calculate_rental_interval','api_summary','api_cars','api_cars_monthly_finance','api_car','api_driver_mvp'}
-    def functions(text):
-        return {node.name:ast.dump(node, include_attributes=False) for node in ast.parse(text).body if isinstance(node,ast.FunctionDef) and node.name in names}
-    assert functions(old) == functions(new)
+    def functions(text, *, allow_assignment_transaction=False):
+        tree = ast.parse(text)
+        if allow_assignment_transaction:
+            rent = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == '_sync_daily_rent')
+            # Only the optional transaction boundary is permitted to differ.
+            assert not rent.args.kwonlyargs
+            rent.args.kwonlyargs.append(ast.arg(arg='commit'))
+            rent.args.kw_defaults.append(ast.Constant(value=True))
+            commits = [node for node in ast.walk(rent) if isinstance(node, ast.Expr)
+                       and ast.dump(node.value) == ast.dump(ast.parse('session.commit()').body[0].value)]
+            assert len(commits) == 2
+            for node in commits:
+                node.value = ast.parse('session.commit() if commit else session.flush()').body[0].value
+        return {node.name:ast.dump(node, include_attributes=False) for node in tree.body if isinstance(node,ast.FunctionDef) and node.name in names}
+    assert functions(old, allow_assignment_transaction=True) == functions(new)
     assert len(functions(old)) == len(names)
 
 

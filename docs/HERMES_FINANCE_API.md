@@ -72,6 +72,8 @@ Wallet-only и старые `rent_payment` учитываются как ест�
 
 Отдельный `DriverDebtPayment.amount>0`, `id="debt_payment:<PK>"`, дополнительный `debt_id="debt:<PK>"`; остальные поля и оговорки такие же. Дата фильтра — `date`. Это позволяет читать платежи фиксированных долгов, которые путь `api_driver_debt_payment` пишет без Operation/Income.
 
+Исключаются платежи с собственным тестовым комментарием, а также платежи, чей существующий родительский DriverDebt помечен в reason/comment как тестовый. Обычный комментарий платежа не отменяет маркировку долга. Платежи без существующего родительского долга сохраняются как unverified/reconciliation_required: отсутствие родителя не доказывает ни тестовое происхождение, ни банковское подтверждение.
+
 Между долгами и Operation нет универсального надёжного linkage: объединённого `source=all` нет (`400`). `not_additive_with_operations=true` для debt-feed. Нельзя сложить два feed и назвать результат суммой всех поступлений: пересечения неизвестны.
 
 Общие метаданные платежей: `feed`, `excluded_representations=[income,driver_wallet_transactions,driver_bank_payments]`, `completeness="selected_ledger_only"`, `cross_ledger_reconciliation="not_available"`. Возвраты/отрицательные корректировки не являются этим feed; orphan Income, wallet-only поступления и другие категории дохода НЕ представлены и не выдаются за полную банковскую выписку. Повторы между разными Operation PK не дедуплицируются предположениями.
