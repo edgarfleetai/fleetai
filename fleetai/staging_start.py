@@ -57,9 +57,10 @@ def validate_environment(env=None):
     host = env.get('FLEETAI_STAGING_DB_HOST', '')
     database = env.get('FLEETAI_STAGING_DB_NAME', '')
     if (env.get('FLEETAI_STAGING_DB_CONFIRMED') != '1'
-            or not re.fullmatch(r'dpg-[a-z0-9]+-[a-z](?:\.[a-z0-9.-]+\.render\.com)?', host)
+            or not (re.fullmatch(r'dpg-[a-z0-9]+-[a-z](?:\.[a-z0-9.-]+\.render\.com)?', host)
+                    or re.fullmatch(r'ep-[a-z0-9-]+(?:-pooler)?\.c-[0-9]+\.[a-z0-9-]+\.aws\.neon\.tech', host))
             or not re.fullmatch(r'[a-z][a-z0-9_]{0,62}', database)):
-        raise StagingConfigurationError('Operator-confirmed isolated Render database required')
+        raise StagingConfigurationError('Operator-confirmed isolated staging database required')
     raw = env.get('DATABASE_URL', '')
     writer = _database_identity(raw, host, database)
     readonly = env.get('FINANCE_READONLY_DATABASE_URL')
