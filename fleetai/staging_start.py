@@ -74,9 +74,12 @@ def validate_environment(env=None):
             raise StagingConfigurationError('Debug/testing modes forbidden on staging')
     if env.get('FLASK_ENV', 'production') != 'production':
         raise StagingConfigurationError('Development mode forbidden on staging')
-    if any(value and (key.startswith('PG') or key == 'GUNICORN_CMD_ARGS')
-           for key, value in env.items()):
-        raise StagingConfigurationError('Implicit connection/server overrides forbidden on staging')
+    # The database URL and Gunicorn arguments are explicit below. Ignore inherited
+    # libpq/Gunicorn environment overrides rather than allowing them to affect
+    # connections or worker startup. This also handles Render-provided PG* vars.
+    for key in tuple(env):
+        if key.startswith('PG') or key == 'GUNICORN_CMD_ARGS':
+            env.pop(key, None)
     if any(value and (key.startswith(('TBANK_', 'TELEGRAM_', 'SMSRU_', 'WIALON_'))
                       or key == 'CRON_SECRET') for key, value in env.items()):
         raise StagingConfigurationError('External integration credentials forbidden on staging')
