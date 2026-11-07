@@ -318,9 +318,23 @@ def _same_origin(require_proof=False):
         expected = request.host_url.rstrip('/')
     origin = request.headers.get('Origin')
     fetch_site = request.headers.get('Sec-Fetch-Site')
-    if origin is None and require_proof:
-        return fetch_site == 'same-origin'
-    return fetch_site != 'cross-site' and (origin is None or origin == expected)
+    if fetch_site == 'cross-site' or (origin is not None and origin != expected):
+        return False
+    if origin is not None:
+        return True
+    if not require_proof:
+        return True
+    if fetch_site == 'same-origin':
+        return True
+    # Some browsers omit Fetch Metadata on ordinary HTML form posts.
+    # Accept an exact same-origin HTTPS Referer as alternate browser proof.
+    referer = request.headers.get('Referer', '')
+    if not referer:
+        return False
+    parsed_referer = urlsplit(referer)
+    return (parsed_referer.scheme == 'https' and
+            parsed_referer.netloc == urlsplit(expected).netloc and
+            not parsed_referer.username and not parsed_referer.password)
 
 
 def require_csrf(principal):
