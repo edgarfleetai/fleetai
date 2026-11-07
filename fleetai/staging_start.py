@@ -31,8 +31,11 @@ def _database_identity(raw, expected_host, expected_database):
                 or url.hostname != expected_host or url.port not in {None, 5432}
                 or url.path != '/' + expected_database or url.fragment
                 or not url.username or not url.password
-                or len(query) != 1 or query[0][0] != 'sslmode'
-                or query[0][1] not in {'require', 'verify-full'}):
+                or len(query) not in {1, 2}
+                or dict(query).get('sslmode') not in {'require', 'verify-full'}
+                or len(dict(query)) != len(query)
+                or any(k not in {'sslmode', 'channel_binding'} for k, _ in query)
+                or ('channel_binding' in dict(query) and dict(query)['channel_binding'] != 'require')):
             raise ValueError
         return unquote(url.username)
     except (ValueError, TypeError):
