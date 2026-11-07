@@ -412,8 +412,15 @@ def init_auth(app):
     @bp.route('/login', methods=['GET', 'POST'])
     def login():
         if request.method == 'GET':
-            return '<!doctype html><title>Owner login</title><form method="post"><input name="username" autocomplete="username" required><input name="password" type="password" autocomplete="current-password" required><button>Sign in</button></form>'
-        if not _same_origin(require_proof=True):
+            proof = secrets.token_urlsafe(32)
+            response = current_app.make_response('<!doctype html><title>Owner login</title><form method="post"><input name="username" autocomplete="username" required><input name="password" type="password" autocomplete="current-password" required><input type="hidden" name="login_proof" value="' + proof + '"><button>Sign in</button></form>')
+            response.set_cookie('__Host-fleetai_login_proof', proof, secure=True, httponly=True, samesite='Strict', path='/', max_age=600)
+            return response
+        cookie_proof = request.cookies.get('__Host-fleetai_login_proof', '')
+        form_proof = request.form.get('login_proof', '')
+        if (not cookie_proof or len(cookie_proof) > 256 or
+                not secrets.compare_digest(cookie_proof, form_proof) or
+                not _same_origin()):
             return jsonify(error='forbidden'), 403
         username = request.form.get('username', '').strip().casefold()
         password = request.form.get('password', '')
