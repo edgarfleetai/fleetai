@@ -137,3 +137,20 @@ def test_security_headers(dash):
     r = dash.test_client().get('/login', base_url=BASE)
     assert "frame-ancestors 'none'" in r.headers['Content-Security-Policy']
     assert r.headers['X-Frame-Options'] == 'DENY'
+
+
+def test_dashboard_page_script_parses(tmp_path):
+    """A syntax error in the single-page script leaves the dashboard blank."""
+    import shutil
+    import subprocess
+    from pathlib import Path
+    node = shutil.which('node')
+    if not node:
+        pytest.skip('node is not installed')
+    html = (Path(__file__).resolve().parents[1] / 'dashboard' / 'static' / 'index.html').read_text(encoding='utf-8')
+    script = '\n'.join(re.findall(r'<script>(.*?)</script>', html, re.S))
+    assert script.strip()
+    js = tmp_path / 'page.js'
+    js.write_text(script, encoding='utf-8')
+    result = subprocess.run([node, '--check', str(js)], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr[-2000:]

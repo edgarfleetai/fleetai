@@ -819,7 +819,7 @@ function palette(){openLayer(`<div class="modal palette" role="dialog" aria-moda
   $("#pq").addEventListener("keydown",e=>{if(e.key==="ArrowDown"){idx=Math.min(idx+1,res.length-1);res=draw();e.preventDefault();}if(e.key==="ArrowUp"){idx=Math.max(idx-1,0);res=draw();e.preventDefault();}if(e.key==="Enter"&&res[idx])res[idx].go();});}
 
 /* ===== events ===== */
-const SOON={task:"Создание задачи — в FleetAI\",repair:"Планирование ремонта — в FleetAI\",addcar:"Добавление автомобиля — в FleetAI\",driver:"Регистрация водителя — в FleetAI\",tg:"Отправка договора в Telegram — в FleetAI\",ai:"AI-ассистент — после основных разделов"};
+const SOON={task:"Создание задачи — в FleetAI",repair:"Планирование ремонта — в FleetAI",addcar:"Добавление автомобиля — в FleetAI",driver:"Регистрация водителя — в FleetAI",tg:"Отправка договора в Telegram — в FleetAI",ai:"AI-ассистент — после основных разделов"};
 document.addEventListener("click",e=>{const t=e.target;
   if(t.closest("[data-close]")){closeLayer();return;}
   if(t.closest("[data-back]")){payModal(draft.kind);return;}
@@ -829,7 +829,7 @@ document.addEventListener("click",e=>{const t=e.target;
   const mz=t.closest("[data-mz]");if(mz){const m=mz.dataset.mz;m==="fit"?fitAll():zoomAt(m==="in"?1/1.4:1.4);return;}
   const mk=t.closest("[data-mk]");if(mk){monSel=mk.dataset.mk;VIEWS.monitor();return;}
   const iv=t.closest("[data-inv]");if(iv){invSel=iv.dataset.inv;VIEWS.investors();return;}
-  const ia=t.closest("[data-inv-act]");if(ia){const a=ia.dataset.invAct;a==="close"?invCloseModal():a==="payout"?invPayModal():toast("Отчёт PDF с расшифровкой операций — в FleetAI\");return;}
+  const ia=t.closest("[data-inv-act]");if(ia){const a=ia.dataset.invAct;a==="close"?invCloseModal():a==="payout"?invPayModal():toast("Отчёт PDF с расшифровкой операций — в FleetAI");return;}
   const rg=t.closest("[data-range]");if(rg){range=+rg.dataset.range;VIEWS.home();return;}
   const ct=t.closest("[data-ctab]");if(ct){carDrawer(ct.dataset.cid,ct.dataset.ctab);return;}
   const drv=t.closest("[data-drv]");if(drv){drvDrawer(drv.dataset.drv);return;}
