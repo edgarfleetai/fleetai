@@ -365,7 +365,7 @@ const K=r=>Math.round(r*100);
 const TODAY=new Date();
 const owners={park:["Парк","ПК"],ilya:["Илья","ИЛ"],ravshan:["Равшан","РВ"],mark:["Марк","МК"]};
 let drivers=[];
-const ST={rented:["Сдана","t-ok","var(--ok)"],free:["Свободна","t-info","var(--info)"],repair:["Ремонт","t-warn","var(--warn)"],notready:["Не готова","t-bad","var(--bad)"]};
+const ST={rented:["Сдана","t-ok","var(--ok)"],free:["Свободна","t-info","var(--info)"],repair:["Ремонт","t-warn","var(--warn)"],notready:["Не готова","t-bad","var(--bad)"],nodata:["Нет в базе","t-mute","var(--faint)"]};
 let cars=[];
 const T={rent_accrual:"Начисление аренды",rent_payment:"Оплата аренды",partial:"Частичная оплата",deposit:"Депозит",deposit_return:"Возврат депозита",repair:"Ремонт",parts:"Запчасти",tires:"Шиномонтаж",fine:"Штраф",correction:"Корректировка",refund:"Возврат средств",payout:"Выплата инвестору",other_in:"Прочее поступление",other_out:"Прочий расход"};
 const M={tbank:"T-Bank",cash:"Наличные",transfer:"Перевод",system:"Система"};
@@ -397,7 +397,7 @@ function toast(m){const t=document.createElement("div");t.className="toast";t.se
 const hstat=(i,v,l,extra="")=>`<div class="hstat"><span class="ic">${ico(i)}</span><div><b class="num">${v}${extra}</b><small>${l}</small></div></div>`;
 
 function kpis(){const by=st=>cars.filter(c=>c.status===st).length;
-  return {total:cars.length,rented:by("rented"),free:by("free"),repair:by("repair"),notready:by("notready"),drivers:drivers.filter(d=>d.stage==="rent").length,
+  return {total:cars.length,rented:by("rented"),free:by("free"),repair:by("repair"),notready:by("notready"),nodata:by("nodata"),drivers:drivers.filter(d=>d.stage==="rent").length,
   overdue:cars.filter(c=>c.balance<0).length,debt:sum(cars.filter(c=>c.balance<0),c=>-c.balance),
   inc30:sum(daily.slice(-30),x=>x),inc30prev:sum(daily.slice(-60,-30),x=>x),
   planned:sum(repairs.filter(r=>r.st!=="done"),r=>r.plan)+K(52400)};}
@@ -464,7 +464,7 @@ addEventListener("resize",()=>movePill(true));
 
 /* ===== views ===== */
 const VIEWS={};
-VIEWS.home=function(){const k=kpis();const segs=[["rented",k.rented],["free",k.free],["repair",k.repair],["notready",k.notready]];
+VIEWS.home=function(){const k=kpis();const segs=[["rented",k.rented],["free",k.free],["repair",k.repair],["notready",k.notready],["nodata",k.nodata]].filter(s=>s[1]||s[0]!=="nodata");
   const withT=cars.filter(c=>WUNITS.some(u=>u.car===c.id)).length;
   const attn=[...cars.filter(c=>c.status!=="rented").map(c=>({c,cls:c.status==="repair"?"warn":"info",k:ST[c.status][0],s:c.status_raw?("В базе: «"+c.status_raw+"»"):"",f:c.driver?c.driver_name:"без водителя"})),
     ...cars.filter(c=>c.flag).map(c=>({c,cls:"warn",k:"Сверка данных",s:c.flag,f:"нужно решение владельца"}))].slice(0,8);
@@ -499,7 +499,7 @@ VIEWS.cars=function(){const k=kpis();const counts=st=>cars.filter(c=>st==="all"|
   <div class="phead"><h1><span>Автомобили</span></h1>${hstat("car",k.total,"в парке")}${hstat("check",k.rented,"сданы")}${hstat("wrench",k.repair+k.notready,"ремонт и не готовы")}
     </div>
   <div class="board-bar"><label class="searchbox">${ico("search",15)}<input id="carQ" placeholder="Номер, модель, водитель, инвестор" value="${esc(carQuery)}" aria-label="Фильтр автомобилей"></label>
-    <div class="seg" role="group" aria-label="Статус">${["all","rented","free","repair","notready"].map(st=>`<button class="${carFilter===st?"on":""}" data-cf="${st}">${st==="all"?"Все":ST[st][0]} ${counts(st)}</button>`).join("")}</div>
+    <div class="seg" role="group" aria-label="Статус">${["all","rented","free","repair","notready","nodata"].filter(st=>st!=="nodata"||counts("nodata")).map(st=>`<button class="${carFilter===st?"on":""}" data-cf="${st}">${st==="all"?"Все":ST[st][0]} ${counts(st)}</button>`).join("")}</div>
     <div class="seg" style="margin-left:auto" role="group" aria-label="Вид"><button class="${carView==="grid"?"on":""}" data-cv="grid">Плитки</button><button class="${carView==="list"?"on":""}" data-cv="list">Таблица</button></div></div>
   ${!list.length?`<section class="glass"><div class="empty"><h2>Ничего не найдено</h2><span>Измените фильтр или запрос.</span><button class="btn" data-cf="all" data-reset="1">Сбросить</button></div></section>`
   :carView==="grid"?`<div class="cgrid">${list.map(c=>{const d=drvById(c.driver);return `<button class="ccard" data-car="${c.id}"><div class="top">${plate(c)}<span style="color:var(--muted);font-size:12px" class="num">${esc(c.plate)}</span>${stTag(c.status)}</div>

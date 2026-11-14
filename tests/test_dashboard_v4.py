@@ -85,13 +85,14 @@ def test_owner_sees_real_fleet(dash):
     assert page.status_code == 200 and b'/api/v4/fleet' in page.data
     data = c.get('/api/v4/fleet', base_url=BASE).get_json()
     cars = {x['code']: x for x in data['cars']}
-    assert set(cars) == {'621', '636', '686'}   # 119 is the old record of today's 665: hidden
+    assert set(cars) == {'267', '621', '636', '686'}   # 119 hidden (now 665); 267 not in DB yet
+    assert cars['267']['status'] == 'nodata' and cars['267']['in_db'] is False and cars['267']['plate'] == 'Х267СО716'
     assert cars['621']['status'] == 'rented' and cars['621']['owner'] == 'ilya'
     assert cars['621']['rate'] == '1 857 ₽/сут' and cars['621']['deposit'] == 1_000_000
     assert cars['636']['status'] == 'repair'
     assert cars['686']['owner'] == 'mark' and 'исправить тип' in cars['686']['flag']
     assert all(x['balance'] is None for x in data['cars'])   # wallet not connected: no invented numbers
-    assert [d['name'] for d in data['drivers']] == ['Сергей В.', 'Тимур']
+    assert sorted(d['name'] for d in data['drivers']) == ['Сергей В.', 'Тимур']
 
 
 def test_positions_matched_to_cars(dash):
@@ -100,7 +101,7 @@ def test_positions_matched_to_cars(dash):
     data = c.get('/api/v4/positions', base_url=BASE).get_json()
     units = {u['id']: u for u in data['units']}
     assert units[50496]['car_code'] == '621'
-    assert units[50484]['car_code'] is None   # Х167СО: no such car in the database
+    assert units[50484]['car_code'] == '267'   # Wialon typo Х167СО716 -> 267
 
 
 def test_dashboard_never_writes(dash):
