@@ -318,6 +318,11 @@ def _same_origin(require_proof=False):
         expected = request.host_url.rstrip('/')
     origin = request.headers.get('Origin')
     fetch_site = request.headers.get('Sec-Fetch-Site')
+    # Browsers serialize Origin as "null" when the page's Referrer-Policy is
+    # no-referrer (or a privacy extension forces it). Trust it only when the
+    # browser itself attests a same-origin request via Fetch Metadata.
+    if origin == 'null' and fetch_site == 'same-origin':
+        origin = None
     if fetch_site == 'cross-site' or (origin is not None and origin != expected):
         return False
     if origin is not None:
@@ -405,7 +410,7 @@ def init_auth(app):
     @bp.after_request
     def protect(response):
         response.headers['Cache-Control'] = 'no-store'
-        response.headers['Referrer-Policy'] = 'no-referrer'
+        response.headers['Referrer-Policy'] = 'same-origin'
         response.headers['X-Content-Type-Options'] = 'nosniff'
         return response
 
