@@ -175,7 +175,7 @@ def register_policy(app):
     @app.after_request
     def protect_responses(response):
         response.headers.setdefault('X-Content-Type-Options', 'nosniff')
-        response.headers.setdefault('Referrer-Policy', 'no-referrer')
+        response.headers.setdefault('Referrer-Policy', 'same-origin')
         response.headers.setdefault('X-Frame-Options', 'SAMEORIGIN')
         configured = current_app.config.get('PUBLIC_BASE_URL') or os.getenv('FLEETAI_PUBLIC_BASE_URL')
         if configured:
