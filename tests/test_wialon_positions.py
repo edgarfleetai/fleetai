@@ -95,3 +95,13 @@ def test_monitor_page_owner_only_and_uses_read_only_api(secure_app):
     assert page.status_code == 200 and '/api/wialon/positions' in text
     assert '/auth/client.js' in text  # CSRF header is added to the page fetch
     assert 'send_cmd' not in text and '/command' not in text
+
+
+def test_engine_block_is_disabled_even_for_owner(secure_app, monkeypatch):
+    from fleetai import routes
+    sent = []
+    monkeypatch.setattr(routes, '_send_665_engine_command', lambda kind: sent.append(kind) or {})
+    client, headers = owner_client(secure_app)
+    response = client.post('/api/wialon/665/command', base_url='https://localhost', headers=headers,
+                           json={'action': 'block', 'safety_confirmation': 'PARKED_ENGINE_OFF_665'})
+    assert response.status_code == 403 and sent == []

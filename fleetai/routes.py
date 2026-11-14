@@ -12010,11 +12010,14 @@ def api_wialon_665_command():
     if action not in ("block", "unblock"):
         return jsonify({"ok": False, "message": "action должен быть block или unblock"}), 400
 
-    if action == "block" and data.get("safety_confirmation") != "PARKED_ENGINE_OFF_665":
+    if action == "block":
+        # Remote engine blocking is disabled until a hardware safety review and
+        # a separate owner decision. Only unblock (release) remains available.
         return jsonify({
             "ok": False,
-            "message": "Блокировка не отправлена: подтвердите, что 665 припаркована и двигатель выключен."
-        }), 409
+            "commands_sent": False,
+            "message": "Блокировка двигателя отключена. Команда не отправлена."
+        }), 403
 
     command_type = "block_engine" if action == "block" else "unblock_engine"
 

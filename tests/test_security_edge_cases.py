@@ -41,4 +41,3 @@ def test_database_enforces_single_owner_even_if_bootstrap_races(secure_app):
             session.commit()
         session.rollback()
         assert session.query(Owner).count() == 1
-
