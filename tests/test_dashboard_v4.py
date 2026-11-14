@@ -154,3 +154,16 @@ def test_dashboard_page_script_parses(tmp_path):
     js.write_text(script, encoding='utf-8')
     result = subprocess.run([node, '--check', str(js)], capture_output=True, text=True)
     assert result.returncode == 0, result.stderr[-2000:]
+
+
+def test_267_in_database_is_personal_use(dash):
+    eng = create_engine(dash.engine_url)
+    with eng.begin() as c:
+        c.execute(text("""INSERT INTO cars (code, brand, model, plate, status, driver, owner_type, investor_name,
+            investor_percent, weekly_payment, daily_rent, driver_deposit, current_mileage)
+            VALUES ('267','Kia','Rio','Х267СО716','Работает','','own','',0,0,0,0,0)"""))
+    c = dash.test_client()
+    login(c)
+    cars = {x['code']: x for x in c.get('/api/v4/fleet', base_url=BASE).get_json()['cars']}
+    assert cars['267']['status'] == 'personal' and cars['267'].get('in_db', True) is True
+    assert cars['267']['plates'] == ['С665ХК716', 'Х267СО716']

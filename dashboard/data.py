@@ -19,7 +19,9 @@ KNOWN_NOTES = {
 
 
 # Earlier plates of the same physical car (owner, 2026-11-14).
-PLATE_HISTORY = {"665": ["В119ЕН716"]}
+PLATE_HISTORY = {"665": ["В119ЕН716"], "267": ["С665ХК716"]}
+# Cars the owner drives himself (not rented out).
+PERSONAL_USE = {"267"}
 
 
 def make_engine(url):
@@ -75,6 +77,8 @@ def map_car(row):
     else:
         terms, rate = "—", "—"
     status = car_status(row["status"], driver)
+    if code in PERSONAL_USE and not driver:
+        status = "personal"
     plate = (row["plate"] or "").strip().upper() or code
     return {
         "id": "V-" + code, "code": code, "plate": plate,
