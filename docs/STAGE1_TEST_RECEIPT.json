@@ -1,0 +1,43 @@
+{
+  "tests": {
+    "tests": 117,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "junit_sha256": "2f0a94ea1280e2126aeb6e8a1e9bb9c7bf4333a4975f89e75ba6af91d3900b24",
+  "review_passed": true,
+  "reviewed_source_test_hashes_match": true,
+  "reviewed_file_count": 27,
+  "source_hashes": {
+    "fleetai/__init__.py": "483c83448d33fd4981256f75e248ec06848d30ffaf0db1ca24ddf1175fb0aa09",
+    "fleetai/auth.py": "809f0c11d5c23fb1f00431262b27cb8c384f7eaf48065dc6d521fddbb0d959e5",
+    "fleetai/auth_models.py": "0bc0f347b39dc95b8fda9f209d2bee364c4d6e0e48e03536e47fdabff64716dc",
+    "fleetai/db.py": "f864990850bb1e30ca269ff6aabe204c11ae315919c0801d05c0ed110b1344dd",
+    "fleetai/finance.py": "795930f6bbe92184ef8a1b9e1309325001ccc130fe87fac1ac61b59aab2a569c",
+    "fleetai/finance_readonly.py": "fb87bd54d07883f889b4714693fca4f163a018ea197210199823951185ca157b",
+    "fleetai/models.py": "a53ed11187c8396b060cb6ba771438ce7ec1b29df4fdb6fbe4627ffc4af8f459",
+    "fleetai/parser.py": "fcbec2f1e0d48e3c83ae658e535c23431defad934710c2d8ce473950f6f51ffb",
+    "fleetai/parts_catalog.py": "2c52fbe75b0e7f290bb0d6255dd42123883833b397e2911055faf58c54c811b4",
+    "fleetai/routes.py": "ecfc8e3dba2e54d67581ea5b6161641caf0b8bc41cc5cac655bb6446e4abefba",
+    "fleetai/security_policy.py": "ea3018dfffd521dd42c56fd8c9f1f4463ecc6cfaffb4b6758d4d010ec3fc744e",
+    "fleetai/tbank.py": "d3620031432f65b486f4fdd03b0b5bfa9e150389c36c8669148b986a10077be1",
+    "fleetai/utils.py": "f12a8d58ccab936bc265a150654a05ce48396a27da82985bef7f4373bf36f176",
+    "fleetai/views.py": "d39fb4a5e7d5fbb00c18b1db839188ca59baa4d8c84e5fe8fb9a2e2112cb37f4",
+    "tests/conftest.py": "109d24cdc8d5e487147935467cfaf60d640387c86566d71a72bccf5bf9ef59cd",
+    "tests/test_auth_core.py": "b5a06adbf29ef1458599624477409c577abb4368a99452769d6e1295b68d378b",
+    "tests/test_browser_client.py": "323645f24756fcaf37ebe6858298f2467b0ef2da67f4731b730fc8cf7a189b7b",
+    "tests/test_finance_readonly.py": "db396e25f32266e6eaccb1c1392400843bcaeba6cc5879b259d948032635d7f1",
+    "tests/test_legacy_boundaries.py": "0afb90e2288c4bc5857728cf8e016da2431c44723a88c630a87b28145b7199b6",
+    "tests/test_postgres_wasm.py": "1edf67bb05ba2a0b0e799b12a7e8bb7569475923726f8ddaa1858c9f53059cd6",
+    "tests/test_review_regressions.py": "924e6c2dbf0284671a92a368c155331d3e0db0864c836f836dca4cabf3ffd29f",
+    "tests/test_security_defaults.py": "26280fa7b50deb5e1a84952d0a56b4262a3b3d766d5749c4429c7fe0a74a3e14",
+    "tests/test_security_edge_cases.py": "e2c3d3569898072cfbd346e904334ac9bc1944337e3f793a06b77c91053181bc",
+    "tests/test_security_integration.py": "e289e451ee0f671b87d14fd5a6812007dd89d6a8701142a6b58165acce0024a2",
+    "package.json": "b1b8fa1ecb2c73d7a6dc4d51fc1e6c7e19ccb0292a9e5047cc90217ce024846f",
+    "package-lock.json": "f52031b57203df10d82e220d054ae282742cb124f5d8ea227cfd687bb1b1dd85",
+    "requirements-dev.txt": "a5eb725dd6588c489f6cdbdad3a73b9a21249979f8e394fb4cbf9015822caf38"
+  },
+  "staging_ready": false,
+  "evidence_gate": "closed: actual full suite and exact reviewed source/test hashes matched"
+}

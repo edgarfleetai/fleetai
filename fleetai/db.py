@@ -1,5 +1,6 @@
 import os
-from sqlalchemy import create_engine, text as sql_text
+import re
+from sqlalchemy import create_engine, inspect, text as sql_text
 from sqlalchemy.orm import declarative_base, sessionmaker
 
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///fleet.db")
@@ -14,7 +15,25 @@ Session = sessionmaker(bind=engine)
 Base = declarative_base()
 
 
-def run_migrations():
+def configure_database(url):
+    """Bind the existing session factory; used by explicitly isolated app tests."""
+    global engine, DATABASE_URL
+    if not isinstance(url, str) or not url:
+        raise ValueError('An explicit database URL is required')
+    if url.startswith('postgres://'):
+        url = url.replace('postgres://', 'postgresql+psycopg://', 1)
+    elif url.startswith('postgresql://'):
+        url = url.replace('postgresql://', 'postgresql+psycopg://', 1)
+    engine.dispose()
+    DATABASE_URL = url
+    engine = create_engine(url, future=True, pool_pre_ping=True)
+    Session.configure(bind=engine)
+
+
+def run_migrations(connection=None):
+    if connection is None:
+        with engine.begin() as conn:
+            return run_migrations(conn)
     migrations = [
         "ALTER TABLE cars ADD COLUMN owner_type VARCHAR DEFAULT 'own'",
         "ALTER TABLE cars ADD COLUMN investor_name VARCHAR DEFAULT ''",
@@ -56,18 +75,28 @@ def run_migrations():
     ]
 
     for sql in migrations:
-        try:
-            with engine.begin() as conn:
-                conn.execute(sql_text(sql))
-        except Exception:
-            pass
+        alter = re.match(r'ALTER TABLE (\w+) ADD COLUMN (\w+) ', sql)
+        if alter:
+            table, column = alter.groups()
+            if column in {c['name'] for c in inspect(connection).get_columns(table)}:
+                continue
+        # Missing permissions or an unsupported schema must stop initialization,
+        # not leave the application serving partially protected data.
+        connection.execute(sql_text(sql))
 
 
-def init_db():
+def init_db(seed=True):
     from .models import Base
-    Base.metadata.create_all(engine)
-    run_migrations()
-    seed_cars()
+    from .auth import _install_assignment_triggers
+    with engine.begin() as connection:
+        if connection.dialect.name == 'postgresql':
+            # Serialize schema startup across multiple web workers.
+            connection.execute(sql_text('SELECT pg_advisory_xact_lock(684593120)'))
+        Base.metadata.create_all(connection)
+        run_migrations(connection)
+        _install_assignment_triggers(Base.metadata, connection)
+    if seed:
+        seed_cars()
 
 
 def seed_cars():

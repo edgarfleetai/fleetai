@@ -1,0 +1,52 @@
+{
+  "source_delegation": "deleg_1540dcf5",
+  "base_commit": "1aba8195f62a207d6d6221472941e00cb685deae",
+  "normalized_summary": true,
+  "passed": true,
+  "security_concerns": [],
+  "logic_errors": [],
+  "business_logic_changed": false,
+  "staging_ready_at_static_review": false,
+  "reason_execution_conditions_were_pending": "Reviewer performed static read-only analysis; final test receipts and source binding are independently verified by parent in SECURITY_ACCEPTANCE_RESULTS.json.",
+  "summary": "Блокирующих дефектов в проверенном security diff не обнаружено. Повторная driver session/epoch/binding проверяется после общей блокировки точного автомобиля до документа или банковского вызова. Документ материализуется до закрытия транзакции, wallet JSON сохраняет блокировку через вложенные rent sync. Trim-индекс атомарно запрещает aliases и не переписывает данные. Вне TESTING Origin требует явной HTTPS-конфигурации; forwarded headers не дают авторизации. Hermes ограничен отдельными SELECT-путями. Начисления, комиссии, зачисления, подписи и договорная логика не изменены.",
+  "nonblocking_coverage_gaps": [
+    "Отдельные PostgreSQL-сценарии обоих порядков именно для document и bank-initiation endpoints отсутствуют; их stale-driver проверки есть в SQLite, общий helper/lock проверены native PostgreSQL и статически.",
+    "HTTPS harness не исполняет JavaScript реального браузера и не подтверждает настройки внешнего ingress или роли ещё не развёрнутого стенда.",
+    "Отказ upgrade при существующих trim-дубликатах проверен SQLite; native PostgreSQL проверяет индекс и конкурентный запрет новых aliases.",
+    "Native transport guard является Python-level defense in depth, не OS sandbox; дополнительный переносимый connect_ex selfcheck остаётся улучшением harness."
+  ],
+  "staging_conditions": [
+    "Успешные receipts штатного pytest, native PostgreSQL и полного HTTPS ACCEPTANCE для проверенных хэшей.",
+    "43 native теста без пропусков, пять реальных lock waits, source freeze, остановка кластера, удаление runtime/password files.",
+    "Восемь HTTPS сценариев, ноль неожиданных boundary attempts, остановка серверов и удаление ключей.",
+    "Перед commit/push сопоставить все 93 файла с frozen manifest; только указанная feature-ветка.",
+    "На отдельном синтетическом стенде настроить canonical HTTPS origin, закрытый backend и выделенную SELECT-only роль. Production/Render/main не разрешены."
+  ],
+  "reviewed_file_hashes": {
+    "AGENTS.md": "6deed483d04d76d6af516dc76002b7cd852ba22983f6299658e98d9a96e6f7c3",
+    "docs/AGENT_FINANCE_REVIEW.md": "c66475ecba5d2f1f7ff8cbd55d472724a5ce0045e7b2f6fddcaaacf5165e77f2",
+    "docs/STAGING_SECURITY_ACCEPTANCE.md": "43d31987bfd01fa04c53e2b9becb51ec52303e04b5ac144afbdb80299648b941",
+    "docs/NATIVE_SECURITY_CHECKS.md": "752b1b34049b5a54a5b136e0c3b21540a9843b88e9a00c5e1d25f62657e4f9b7",
+    "docs/HTTPS_SECURITY_CHECKS.md": "2871e7e00e77076b19692ccb8e03e19f2a43a753bc9d05e73cc09226421bfb9d",
+    "app.py": "55156c187c1fb9c7b877d116ac9d0f80573ed77683ca28a0a98330e62a396b2c",
+    "parser.py": "c6f5fdf09cc7240a4d7a562b64791dc3eaf95719a01d0167d5795a7f26653d33",
+    "fleetai/__init__.py": "483c83448d33fd4981256f75e248ec06848d30ffaf0db1ca24ddf1175fb0aa09",
+    "fleetai/auth.py": "d6b3262b04bb93696673862a9ee396478b2f8b11734be3591cffe67abfc14fc5",
+    "fleetai/security_policy.py": "e461b998da6a6699c14a87173f30354b95af4639065200bd333fcc29e4f2c760",
+    "fleetai/routes.py": "c5b6d51c828482b02a9a77e352413e3d35962c5453401667af2f9cfbbc188b69",
+    "fleetai/db.py": "f864990850bb1e30ca269ff6aabe204c11ae315919c0801d05c0ed110b1344dd",
+    "fleetai/utils.py": "f12a8d58ccab936bc265a150654a05ce48396a27da82985bef7f4373bf36f176",
+    "fleetai/driver_binding.py": "d91a21dd75b07bc951e49915f3b600ed81b44bfbaa3166df0c7e24fbeeb06d4a",
+    "fleetai/finance_readonly.py": "fba63af928319e24785809b999079245f3514eebb65357d413f7b681720af39e",
+    "tests/conftest.py": "109d24cdc8d5e487147935467cfaf60d640387c86566d71a72bccf5bf9ef59cd",
+    "tests/test_security_hardening.py": "5894e4e7f6f740741a15f8ac66953ba3dada335cb1d8764aba74c5ac92c43238",
+    "tests/test_driver_financial_race.py": "fb30cad42aa61b8470ce549b9ef7836de6095a4771adb9b4ea8935aa8f0fd3d9",
+    "tests/test_security_integration.py": "bff80d779c2025577f531f6cff2235823ac33767be1e1bcda29967d27252759d",
+    "security_checks/native/run_native.py": "8a461ddc199545af43f370f181c9ff68f7076c544256a56a8f05e68ced13c844",
+    "security_checks/native/isolation.py": "c42c1186462b92feb48f4b7e21fc1527d7c6a18649c0217de8f8331f769f9150",
+    "security_checks/native/native_cases.py": "e5cd0e0bb6cc96df111700bfb5e1bd672c351224d3d891722fc40b0136d566b9",
+    "security_checks/native/native_fixtures.py": "2a833f3a64966085d0b6cfaa8babc85a3a6e0c8e3ad31285d63b9e818e391a38",
+    "security_checks/native/pytest.ini": "5ee8b28a405db70ffb8445c72e4f310448ed86d760299ac6928445ca7ff23df0",
+    "security_checks/https/run.py": "5f38b08d0edc606d0ee3f6992d69e9e6ab994343206ef4f1dd7d93815ae95fd4"
+  }
+}

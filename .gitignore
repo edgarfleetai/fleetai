@@ -1,0 +1,11 @@
+.venv-security/
+node_modules/
+.test-data/
+.pytest_cache/
+__pycache__/
+*.py[cod]
+.env
+.env.*
+*.db
+*.sqlite
+*.sqlite3

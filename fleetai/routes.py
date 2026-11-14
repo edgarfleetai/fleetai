@@ -13,7 +13,7 @@ from urllib.parse import unquote
 
 from datetime import datetime, date, timedelta
 
-from flask import make_response, Blueprint, request, jsonify, render_template_string, send_file, current_app
+from flask import make_response, Blueprint, request, jsonify, render_template_string, send_file, current_app, g
 from sqlalchemy import func, text as sql_text
 
 from reportlab.lib import colors
@@ -232,10 +232,29 @@ def send_telegram_document_to_chat(chat_id, file_bytes, filename, caption=""):
         return False
 
 
+def driver_login_url(session, car, chat_id):
+    """Issue a short-lived login only to the verified current private binding."""
+    from urllib.parse import quote, urlsplit
+    from .auth import issue_driver_login
+    chat_id = str(chat_id).strip()
+    if not chat_id.isdigit() or int(chat_id) <= 0:
+        raise ValueError('Driver login links require a private Telegram chat')
+    base = str(current_app.config.get('PUBLIC_BASE_URL') or
+               os.getenv('FLEETAI_PUBLIC_BASE_URL') or '').rstrip('/')
+    parsed = urlsplit(base)
+    if parsed.scheme != 'https' or not parsed.netloc or parsed.username or parsed.password or parsed.query or parsed.fragment or parsed.path:
+        raise ValueError('PUBLIC_BASE_URL must be an HTTPS origin')
+    ticket = issue_driver_login(session, car, chat_id)
+    session.commit()
+    return base + '/auth/driver#token=' + quote(ticket, safe='')
+
+
 def send_driver_welcome(chat_id, car):
-    """Приветствие + рабочие кнопки водителя."""
-    base_url = request.url_root.rstrip("/")
+    """Приветствие + одноразовый вход для привязанного водителя."""
     code = normalize_code(car.code)
+    with Session() as auth_session:
+        login_car = find_car(auth_session, code)
+        portal_url = driver_login_url(auth_session, login_car, chat_id)
     text_value = (
         "🍀 <b>Добро пожаловать в Клевер Парк</b>\n\n"
         f"Вы закреплены за автомобилем <b>{code}</b>.\n"
@@ -246,7 +265,7 @@ def send_driver_welcome(chat_id, car):
     return send_telegram_to_chat_with_keyboard(
         chat_id, text_value,
         [
-            [{"text": "👤 Личный кабинет", "url": f"{base_url}/driver?code={code}"}],
+            [{"text": "👤 Личный кабинет", "url": portal_url}],
             [{"text": "📄 Получить лицензию", "callback_data": f"license:{code}"}],
         ],
     )
@@ -265,7 +284,7 @@ def _ensure_vehicle_documents_table(session):
 
 
 def _vehicle_license_row(session, car_code):
-    _ensure_vehicle_documents_table(session)
+    # The table is created at startup; ordinary PDF navigation is SELECT-only.
     return session.execute(
         sql_text("""
             SELECT car_code, license_filename, license_mime_type,
@@ -7951,8 +7970,7 @@ def _send_signed_contract_and_license(session,row):
     if car:
         license_sent=_send_vehicle_license_to_chat(session,car,chat_id)
 
-    base_url=request.url_root.rstrip("/")
-    portal_url=f"{base_url}/driver?code={normalize_code(row['car_code'])}"
+    portal_url=driver_login_url(session,car,chat_id) if car else '/auth/driver'
     if license_sent:
         final_text="✅ Оформление завершено.\n\nДоговор подписан, лицензия автомобиля отправлена. Личный кабинет доступен по кнопке ниже."
     else:
@@ -8204,9 +8222,14 @@ DRIVER_CONTRACT_ADMIN_HTML = r'''<!doctype html><html lang="ru"><head><meta char
 
 @bp.route("/api/vehicle-license/<code>/status", methods=["GET"])
 def api_vehicle_license_status(code):
+    from .auth import lock_driver_financial_car
     session = Session()
     try:
-        car = find_car(session, code)
+        principal = getattr(g, 'principal', None)
+        driver_access = bool(principal and principal.kind == 'driver')
+        car = lock_driver_financial_car(session, principal, code) if driver_access else find_car(session, code)
+        if driver_access and car is None:
+            return jsonify({"ok": False, "message": "Сессия водителя больше не действительна"}), 401
         if not car:
             return jsonify({"ok": False, "message": "Машина не найдена"}), 404
         row = _vehicle_license_row(session, car.code)
@@ -8216,7 +8239,8 @@ def api_vehicle_license_status(code):
             "has_license": bool(row),
             "filename": row["license_filename"] if row else "",
             "uploaded_at": (
-                row["uploaded_at"].isoformat()
+                (row["uploaded_at"].isoformat() if hasattr(row["uploaded_at"], 'isoformat')
+                 else str(row["uploaded_at"]).replace(' ', 'T', 1))
                 if row and row.get("uploaded_at")
                 else ""
             ),
@@ -8281,9 +8305,14 @@ def api_vehicle_license_upload(code):
 
 @bp.route("/api/vehicle-license/<code>", methods=["GET"])
 def api_vehicle_license_download(code):
+    from .auth import lock_driver_financial_car
     session = Session()
     try:
-        car = find_car(session, code)
+        principal = getattr(g, 'principal', None)
+        driver_access = bool(principal and principal.kind == 'driver')
+        car = lock_driver_financial_car(session, principal, code) if driver_access else find_car(session, code)
+        if driver_access and car is None:
+            return jsonify({"ok": False, "message": "Сессия водителя больше не действительна"}), 401
         if not car:
             return jsonify({"ok": False, "message": "Машина не найдена"}), 404
         row = _vehicle_license_row(session, car.code)
@@ -8418,9 +8447,18 @@ def api_driver_telegram_link():
 
     session = Session()
     try:
+        from .auth import lock_driver_assignment
+        if session.get_bind().dialect.name == 'postgresql':
+            session.execute(sql_text('SELECT pg_advisory_xact_lock(684593121)'))
+        locked = lock_driver_assignment(session, car_code)
         car = find_car(session, car_code)
         if not car:
             return jsonify({"ok": False, "message": "Машина не найдена"}), 404
+        # Enrollment/redemption must use the same exact persisted key. Legacy
+        # trimmed lookup is not authority to mint an unlocked, unusable link.
+        if locked is None or car.code != car_code or locked.code != car.code:
+            return jsonify({"ok": False, "message": "Код машины неканоничен или назначение недоступно"}), 409
+        session.refresh(car)
         if not (car.driver or "").strip():
             return jsonify({
                 "ok": False,
@@ -8436,7 +8474,7 @@ def api_driver_telegram_link():
 
         token = uuid.uuid4().hex
         now = moscow_now().replace(tzinfo=None)
-        expires = now + timedelta(days=7)
+        expires = now + timedelta(minutes=15)
 
         next_id = session.execute(
             sql_text("SELECT COALESCE(MAX(id), 0) + 1 FROM driver_telegram_links")
@@ -8553,7 +8591,7 @@ def _send_driver_balance_alert(session, car, force=False):
         detail = "Пожалуйста, обратите внимание на баланс."
 
     days_left = max(balance // max(daily, 1), 0)
-    portal_url = request.url_root.rstrip("/") + f"/driver?code={code}"
+    portal_url = driver_login_url(session, car, binding['telegram_chat_id'])
 
     message = (
         f"{title}\n\n"
@@ -8587,7 +8625,7 @@ def _send_driver_balance_alert(session, car, force=False):
 
 
 
-def _ensure_auto_rent_settings(session):
+def _ensure_auto_rent_settings(session, *, commit=True):
     """Persistent list of cars enabled for automatic daily rent."""
     session.execute(sql_text("""
         CREATE TABLE IF NOT EXISTS auto_rent_vehicle_settings (
@@ -8610,11 +8648,11 @@ def _ensure_auto_rent_settings(session):
                     VALUES (:code, 1, :updated_at)
                     ON CONFLICT (car_code) DO NOTHING
                 """), {"code": code, "updated_at": now})
-        session.commit()
+        session.commit() if commit else session.flush()
 
 
-def _set_auto_rent_enabled(session, car_code, enabled=True):
-    _ensure_auto_rent_settings(session)
+def _set_auto_rent_enabled(session, car_code, enabled=True, *, commit=True):
+    _ensure_auto_rent_settings(session, commit=commit)
     code = normalize_code(car_code)
     session.execute(sql_text("""
         INSERT INTO auto_rent_vehicle_settings (car_code, enabled, updated_at)
@@ -8929,6 +8967,27 @@ def api_telegram_webhook():
     chat = message.get("chat") or {}
     sender = message.get("from") or {}
 
+    command = text_value.split(None, 1)[0].split('@', 1)[0].lower() if text_value else ''
+    if command in {'/login', '/cabinet'}:
+        chat_id = str(chat.get('id') or '').strip()
+        if chat.get('type') != 'private' or str(sender.get('id') or '') != chat_id:
+            return jsonify({'ok': True})
+        session = Session()
+        try:
+            binding = session.execute(sql_text(
+                'SELECT car_code, driver_name FROM driver_telegram_bindings '
+                'WHERE telegram_chat_id = :chat ORDER BY linked_at DESC LIMIT 1'
+            ), {'chat': chat_id}).mappings().first()
+            car = find_car(session, binding['car_code']) if binding else None
+            if not car or (car.driver or '').strip() != (binding['driver_name'] or '').strip():
+                send_telegram_to_chat(chat_id, 'Текущая привязка не подтверждена. Обратитесь к диспетчеру.')
+                return jsonify({'ok': True})
+            login_url = driver_login_url(session, car, chat_id)
+            send_telegram_to_chat(chat_id, 'Одноразовый вход в кабинет (ссылка действует 5 минут):\n' + login_url)
+            return jsonify({'ok': True})
+        finally:
+            session.close()
+
     # Recovery of a previously signed contract requires proof of possession
     # of its original private signing link, never a guess based on car/name.
     if text_value.startswith("/recover "):
@@ -9061,101 +9120,15 @@ def api_telegram_webhook():
 
     session = Session()
     try:
-        now = moscow_now().replace(tzinfo=None)
-        link = session.execute(
-            sql_text("""
-                SELECT id, car_code, driver_name, expires_at, used_at
-                FROM driver_telegram_links
-                WHERE link_token = :link_token
-                LIMIT 1
-            """),
-            {"link_token": link_token},
-        ).mappings().first()
-
-        if not link:
-            send_telegram_to_chat(
-                chat_id,
-                "Ссылка привязки недействительна. Попросите диспетчера создать новую.",
-            )
-            return jsonify({"ok": True})
-
-        if link.get("used_at"):
-            send_telegram_to_chat(
-                chat_id,
-                "Эта ссылка уже использована. Попросите диспетчера создать новую.",
-            )
-            return jsonify({"ok": True})
-
-        expires_at = link.get("expires_at")
-        if expires_at and expires_at < now:
-            send_telegram_to_chat(
-                chat_id,
-                "Срок действия ссылки истёк. Попросите диспетчера создать новую.",
-            )
-            return jsonify({"ok": True})
-
-        car = find_car(session, link["car_code"])
-        if not car or (car.driver or "").strip() != (link["driver_name"] or "").strip():
-            send_telegram_to_chat(
-                chat_id,
-                "Водитель на этой машине изменился. Попросите новую ссылку.",
-            )
-            return jsonify({"ok": True})
-
-        username = str(sender.get("username") or "").strip()
-        first_name = str(sender.get("first_name") or "").strip()
-
-        # Одна машина = одна актуальная Telegram-привязка.
-        session.execute(
-            sql_text("""
-                DELETE FROM driver_telegram_bindings
-                WHERE TRIM(car_code) = :car_code
-            """),
-            {"car_code": normalize_code(car.code)},
-        )
-
-        # Один Telegram-аккаунт не должен случайно остаться на двух машинах.
-        session.execute(
-            sql_text("""
-                DELETE FROM driver_telegram_bindings
-                WHERE telegram_chat_id = :chat_id
-            """),
-            {"chat_id": chat_id},
-        )
-
-        next_binding_id = session.execute(
-            sql_text("SELECT COALESCE(MAX(id), 0) + 1 FROM driver_telegram_bindings")
-        ).scalar()
-
-        session.execute(
-            sql_text("""
-                INSERT INTO driver_telegram_bindings
-                    (id, car_code, driver_name, telegram_chat_id,
-                     telegram_username, telegram_first_name, linked_at,
-                     last_alert_level)
-                VALUES
-                    (:id, :car_code, :driver_name, :chat_id,
-                     :username, :first_name, :linked_at, '')
-            """),
-            {
-                "id": int(next_binding_id or 1),
-                "car_code": normalize_code(car.code),
-                "driver_name": (car.driver or "").strip(),
-                "chat_id": chat_id,
-                "username": username,
-                "first_name": first_name,
-                "linked_at": now,
-            },
-        )
-
-        session.execute(
-            sql_text("""
-                UPDATE driver_telegram_links
-                SET used_at = :used_at
-                WHERE id = :id
-            """),
-            {"used_at": now, "id": link["id"]},
-        )
+        from .driver_binding import redeem_binding_link
+        if chat.get('type') != 'private' or str(sender.get('id') or '') != chat_id:
+            return jsonify({'ok': True})
+        car, binding_error = redeem_binding_link(session, link_token, chat_id,
+            str(sender.get('username') or '').strip(), str(sender.get('first_name') or '').strip())
+        if binding_error:
+            session.rollback()
+            send_telegram_to_chat(chat_id, binding_error)
+            return jsonify({'ok': True})
         session.commit()
 
         _send_driver_contract_step(session, car, chat_id)
@@ -9163,7 +9136,7 @@ def api_telegram_webhook():
 
     except Exception as error:
         session.rollback()
-        print(f"Ошибка Telegram webhook: {error}")
+        current_app.logger.error('Telegram webhook failed (%s)', type(error).__name__)
         return jsonify({"ok": False}), 500
     finally:
         session.close()
@@ -9566,7 +9539,7 @@ def _driver_wallet_credit_after_fee(paid_amount, payment_source):
     return int(round(paid_amount * 0.96)), 4, "Банковская карта"
 
 
-def _sync_daily_rent(session, car):
+def _sync_daily_rent(session, car, *, commit=True):
     """
     Начисляет суточную аренду один раз за каждый календарный день.
     Дни простоя не списываются. Повторный запуск безопасен.
@@ -9597,7 +9570,7 @@ def _sync_daily_rent(session, car):
             comment=f"V7_START:{today.isoformat()}",
             date=moscow_now().replace(tzinfo=None),
         ))
-        session.commit()
+        session.commit() if commit else session.flush()
         return {"charged": 0, "skipped_downtime": 0}
 
     start = None
@@ -9667,7 +9640,7 @@ def _sync_daily_rent(session, car):
 
         day += timedelta(days=1)
 
-    session.commit()
+    session.commit() if commit else session.flush()
     return {"charged": charged, "skipped_downtime": skipped_downtime}
 
 
@@ -9946,14 +9919,21 @@ def api_driver_assignment_save():
 
     session = Session()
     try:
+        # Resolve only the persisted key before locking; assignment and wallet
+        # state must be read afresh inside the shared transaction lock.
+        from .auth import lock_driver_assignment
+        persisted_code = session.query(Car.code).filter(func.trim(Car.code) == code).scalar()
+        if persisted_code is None or lock_driver_assignment(session, persisted_code) is None:
+            return jsonify({"ok": False, "message": f"Машина {code} не найдена"}), 404
         car = find_car(session, code)
         if not car:
             return jsonify({"ok": False, "message": f"Машина {code} не найдена"}), 404
+        session.refresh(car)
 
         # Bring the old driver's rent up to date before closing their wallet period.
         old_driver = (car.driver or "").strip()
         if old_driver and int(effective_daily_rent(car) or 0) > 0:
-            _sync_daily_rent(session, car)
+            _sync_daily_rent(session, car, commit=False)
 
         current_balance = int(
             session.query(func.coalesce(func.sum(DriverWalletTransaction.amount), 0))
@@ -9993,6 +9973,15 @@ def api_driver_assignment_save():
                 date=now,
             ))
 
+        # Explicit assignment is a new access epoch even for an identical name.
+        from .auth import revoke_driver_access
+        revoke_driver_access(session, car.code)
+        session.execute(sql_text(
+            'DELETE FROM driver_telegram_bindings WHERE TRIM(car_code) = :code'
+        ), {'code': normalize_code(car.code)})
+        session.execute(sql_text(
+            'DELETE FROM driver_telegram_links WHERE TRIM(car_code) = :code'
+        ), {'code': normalize_code(car.code)})
         car.driver = new_driver
         car.daily_rent = daily_rent
         car.weekly_payment = daily_rent * 7
@@ -10008,14 +9997,7 @@ def api_driver_assignment_save():
             date=now,
         ))
 
-        # Old Telegram account must never receive the new driver's alerts.
-        if driver_changed:
-            session.execute(sql_text("""
-                DELETE FROM driver_telegram_bindings
-                WHERE TRIM(car_code) = :car_code
-            """), {"car_code": normalize_code(car.code)})
-
-        _set_auto_rent_enabled(session, car.code, True)
+        _set_auto_rent_enabled(session, car.code, True, commit=False)
         session.commit()
 
         final_balance = int(
@@ -10113,13 +10095,15 @@ def cron_daily_driver_rent():
     finally:
         session.close()
 
-def driver_wallet_snapshot(session, car):
-    _sync_daily_rent(session, car)
+def driver_wallet_snapshot(session, car, *, commit=True):
+    _sync_daily_rent(session, car, commit=commit)
     code = normalize_code(car.code)
     wallet_total = session.query(func.coalesce(func.sum(DriverWalletTransaction.amount), 0)).filter(func.trim(DriverWalletTransaction.car_code) == code).scalar() or 0
     calc = calculate_driver_payment(session, car)
     rental_due = int(calc.get("amount_due", 0) or 0)
     debt_rows = driver_debt_summary(session, car.driver or "") if car.driver else []
+    # A display name is not an identity or authorization boundary across cars.
+    debt_rows = [row for row in debt_rows if normalize_code(row.get('car_code') or '') == code]
     separate_debt = sum(int(row.get("balance", 0) or 0) for row in debt_rows)
     total_due = rental_due + separate_debt
     txs = session.query(DriverWalletTransaction).filter(func.trim(DriverWalletTransaction.car_code) == code).order_by(DriverWalletTransaction.id.desc()).limit(30).all()
@@ -10132,12 +10116,25 @@ def driver_wallet_snapshot(session, car):
 
 @bp.route("/api/driver-mvp/<code>")
 def api_driver_mvp(code):
+    from .auth import lock_driver_financial_car
     session = Session()
     try:
-        car = find_car(session, code)
+        principal = getattr(g, 'principal', None)
+        driver_read = bool(principal and principal.kind == 'driver')
+        car = lock_driver_financial_car(session, principal, code) if driver_read else find_car(session, code)
+        if driver_read and car is None:
+            return jsonify({"ok": False, "message": "Сессия водителя больше не действительна"}), 401
         if not car: return jsonify({"ok": False, "message": "Машина не найдена"}), 404
-        return jsonify({"ok": True, "car": {"code": car.code, "brand": car.brand or "", "model": car.model or "", "plate": car.plate or "", "driver": car.driver or "", "daily_rent": effective_daily_rent(car)}, **driver_wallet_snapshot(session, car), "blocking": driver_blocking_preview(session, car)})
-    finally: session.close()
+        response = jsonify({"ok": True, "car": {"code": car.code, "brand": car.brand or "", "model": car.model or "", "plate": car.plate or "", "driver": car.driver or "", "daily_rent": effective_daily_rent(car)}, **driver_wallet_snapshot(session, car, commit=not driver_read), "blocking": driver_blocking_preview(session, car, commit=not driver_read)})
+        if driver_read:
+            # jsonify has already materialized all fields; only now release the lock.
+            session.commit()
+        return response
+    except Exception:
+        session.rollback()
+        raise
+    finally:
+        session.close()
 
 def _apply_driver_bank_payment(session, car, payment):
     """Post a confirmed bank payment exactly once."""
@@ -10180,6 +10177,7 @@ def _apply_driver_bank_payment(session, car, payment):
 @bp.route("/api/driver-mvp/<code>/bank-payment", methods=["POST"])
 def api_driver_create_bank_payment(code):
     from .tbank import create_payment
+    from .auth import lock_driver_financial_car
 
     data = request.get_json(silent=True) or {}
     try:
@@ -10192,7 +10190,11 @@ def api_driver_create_bank_payment(code):
 
     session = Session()
     try:
-        car = find_car(session, code)
+        principal = getattr(g, 'principal', None)
+        driver_access = bool(principal and principal.kind == 'driver')
+        car = lock_driver_financial_car(session, principal, code) if driver_access else find_car(session, code)
+        if driver_access and car is None:
+            return jsonify({"ok": False, "message": "Сессия водителя больше не действительна"}), 401
         if not car:
             return jsonify({"ok": False, "message": "Машина не найдена"}), 404
 
@@ -10445,9 +10447,9 @@ def api_driver_mvp_clear_test_debt(code):
     finally:
         session.close()
 
-def driver_blocking_preview(session, car):
+def driver_blocking_preview(session, car, *, commit=True):
     """Read-only decision preview. V5 never sends a Wialon command automatically."""
-    snap = driver_wallet_snapshot(session, car)
+    snap = driver_wallet_snapshot(session, car, commit=commit)
     unpaid = max(-int(snap.get("balance", 0) or 0), 0)
     threshold = int(os.getenv("DRIVER_BLOCK_DEBT_THRESHOLD", "1") or 1)
     would_block = unpaid >= threshold
@@ -10466,12 +10468,23 @@ def api_driver_blocking_preview(code):
     allowed = os.getenv("DRIVER_MVP_CAR", "665")
     if normalize_code(code) != normalize_code(allowed):
         return jsonify({"ok": False, "message": "MVP включён только для тестовой машины"}), 403
+    from .auth import lock_driver_financial_car
     session = Session()
     try:
-        car = find_car(session, code)
+        principal = getattr(g, 'principal', None)
+        driver_read = bool(principal and principal.kind == 'driver')
+        car = lock_driver_financial_car(session, principal, code) if driver_read else find_car(session, code)
+        if driver_read and car is None:
+            return jsonify({"ok": False, "message": "Сессия водителя больше не действительна"}), 401
         if not car:
             return jsonify({"ok": False, "message": "Машина не найдена"}), 404
-        return jsonify({"ok": True, "car_code": car.code, **driver_blocking_preview(session, car)})
+        response = jsonify({"ok": True, "car_code": car.code, **driver_blocking_preview(session, car, commit=not driver_read)})
+        if driver_read:
+            session.commit()
+        return response
+    except Exception:
+        session.rollback()
+        raise
     finally:
         session.close()
 
@@ -10564,6 +10577,61 @@ def api_wialon_units():
         return jsonify({"ok": False, "stage": "http", "message": str(exc)}), 502
     except Exception as exc:
         return jsonify({"ok": False, "stage": "internal", "message": str(exc)}), 500
+
+def _wialon_positions_from_items(items):
+    """Pure: Wialon avl_unit items (flags 1|1024) -> last known positions."""
+    out = []
+    for item in items or []:
+        pos = item.get("pos") or {}
+        lat, lon = pos.get("y"), pos.get("x")
+        has_pos = isinstance(lat, (int, float)) and isinstance(lon, (int, float))
+        out.append({
+            "id": item.get("id"),
+            "name": item.get("nm", ""),
+            "lat": lat if has_pos else None,
+            "lon": lon if has_pos else None,
+            "speed_kmh": pos.get("s") if has_pos else None,
+            "course": pos.get("c") if has_pos else None,
+            "time": pos.get("t") if has_pos else None,
+        })
+    return out
+
+
+@bp.route("/api/wialon/positions", methods=["GET"])
+def api_wialon_positions():
+    """READ ONLY: last known position of every visible unit.
+
+    No database access and no vehicle commands. Car locations are private:
+    security_policy requires an owner session (and CSRF) for every /api/ GET.
+    """
+    token = (os.environ.get("WIALON_TOKEN") or "").strip()
+    if not token:
+        return jsonify({"ok": False, "read_only": True, "message": "WIALON_TOKEN не задан"}), 500
+    try:
+        login = _wialon_call("token/login", {"token": token})
+        sid = login.get("eid") if isinstance(login, dict) and login.get("error") is None else None
+        if not sid:
+            return jsonify({"ok": False, "read_only": True, "stage": "login"}), 502
+        found = _wialon_call("core/search_items", {
+            "spec": {"itemsType": "avl_unit", "propName": "sys_name", "propValueMask": "*",
+                     "sortType": "sys_name", "propType": "property", "or_logic": False},
+            "force": 1, "flags": 1 | 1024, "from": 0, "to": 0,
+        }, sid=sid)
+        if not isinstance(found, dict) or found.get("error") is not None:
+            return jsonify({"ok": False, "read_only": True, "stage": "search", "wialon_error": (found or {}).get("error")}), 502
+        units = _wialon_positions_from_items(found.get("items"))
+        return jsonify({"ok": True, "read_only": True, "commands_sent": False, "count": len(units), "units": units})
+    except requests.RequestException as exc:
+        return jsonify({"ok": False, "read_only": True, "stage": "http", "message": str(exc)}), 502
+
+@bp.route("/monitor", methods=["GET"])
+def fleet_monitor_page():
+    """Owner-only live map. Data comes from the read-only /api/wialon/positions."""
+    from .monitor_page import MONITOR_HTML
+    response = make_response(MONITOR_HTML)
+    response.mimetype = "text/html"
+    return response
+
 
 # --- Wialon manual control pilot for unit 665 (V4) ---
 WIALON_665_UNIT_ID = int(os.environ.get("WIALON_665_UNIT_ID", "49896"))
@@ -11942,11 +12010,14 @@ def api_wialon_665_command():
     if action not in ("block", "unblock"):
         return jsonify({"ok": False, "message": "action должен быть block или unblock"}), 400
 
-    if action == "block" and data.get("safety_confirmation") != "PARKED_ENGINE_OFF_665":
+    if action == "block":
+        # Remote engine blocking is disabled until a hardware safety review and
+        # a separate owner decision. Only unblock (release) remains available.
         return jsonify({
             "ok": False,
-            "message": "Блокировка не отправлена: подтвердите, что 665 припаркована и двигатель выключен."
-        }), 409
+            "commands_sent": False,
+            "message": "Блокировка двигателя отключена. Команда не отправлена."
+        }), 403
 
     command_type = "block_engine" if action == "block" else "unblock_engine"
 
@@ -12049,7 +12120,7 @@ def tbank_webhook():
     data = request.get_json(silent=True) or {}
 
     try:
-        print("T-BANK WEBHOOK:", data, flush=True)
+        current_app.logger.info('T-Bank notification received')
 
         # 1. Проверяем подпись T-Банка
         if not verify_notification(data):
