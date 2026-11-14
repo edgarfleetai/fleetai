@@ -28,7 +28,11 @@ Telegram, cron и договоров.
 
 ## Развёртывание (делает владелец)
 
-### 1. Роль только для чтения в Neon
+**Выбрано владельцем 14.11.2026 — простой путь:** `DASHBOARD_DATABASE_URL` = тот же `DATABASE_URL`, что у `fleetai-1`.
+Защита от записи в этом случае одна — сессия `default_transaction_read_only=on` и отсутствие записывающего SQL
+в коде (тест). Отдельную роль (раздел 1) можно добавить позже, заменив только эту переменную.
+
+### 1. (Необязательно) Роль только для чтения в Neon
 Neon Console → проект → **SQL Editor** → ветка production (`import-2026-08-05T15:17:33.988Z`).
 Пароль придумать заранее (или сгенерировать командой из `docs/RELEASE_LOGIN_AND_MONITOR.md`):
 ```sql
@@ -44,12 +48,13 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO dashboard_ro
 Строка подключения: как у основной, но с пользователем `dashboard_ro` и его паролем.
 
 ### 2. Новый сервис в Render
-**New → Web Service** → репозиторий `edgarfleetai/fleetai`, ветка `main`.
+**New → Web Service** → репозиторий `edgarfleetai/fleetai`, ветка `feature/dashboard-v4`
+(после слияния PR — переключить на `main`; так production-сервис `fleetai-1` не передеплоивается ради дашборда).
 - Build Command: `pip install -r requirements.txt`
 - Start Command: `gunicorn dashboard.app:app --workers 1 --bind 0.0.0.0:$PORT`
 - Health Check Path: `/healthz`
 - Environment:
-  - `DASHBOARD_DATABASE_URL` — строка подключения роли `dashboard_ro`
+  - `DASHBOARD_DATABASE_URL` — значение `DATABASE_URL` из `fleetai-1` (или строка роли `dashboard_ro`)
   - `DASHBOARD_SECRET_KEY` — случайная строка 32+ символов
   - `DASHBOARD_PUBLIC_URL` — адрес сервиса, например `https://fleetai-dashboard.onrender.com`
   - `WIALON_TOKEN` — тот же, что у FleetAI
