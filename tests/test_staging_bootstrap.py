@@ -183,18 +183,26 @@ def test_launcher_prepares_once_scrubs_secrets_and_executes_only_gunicorn(secure
     assert args[args.index('--workers') + 1] == '1'
 
 
+def test_preflight_rejects_implicit_connection_override_in_database_url(staging_env):
+    staging_env['DATABASE_URL'] = 'postgresql://synthetic_writer:***@dpg-syntheticonly-a/fleetai_staging_synthetic?sslmode=require&host='
+    staging = staging_module()
+    with pytest.raises(staging.StagingConfigurationError):
+        staging.validate_environment(staging_env)
+
+
 @pytest.mark.parametrize('extra', [
-    {'DATABASE_URL': 'postgresql://synthetic_writer:***@dpg-syntheticonly-a/fleetai_staging_synthetic?sslmode=require&host='},
     {'PGHOSTADDR': '192.0.2.1'},
     {'PGSERVICE': 'another_database'},
     {'PGOPTIONS': '-csearch_path=another_schema'},
     {'GUNICORN_CMD_ARGS': '--reload'},
 ])
-def test_preflight_rejects_implicit_connection_and_server_overrides(staging_env, extra):
+def test_preflight_neutralizes_inherited_libpq_and_gunicorn_overrides(staging_env, extra):
+    # Since 134d650 inherited PG*/GUNICORN_CMD_ARGS (e.g. Render-provided) are
+    # removed rather than rejected, so they cannot affect connections or workers.
     staging_env.update(extra)
     staging = staging_module()
-    with pytest.raises(staging.StagingConfigurationError):
-        staging.validate_environment(staging_env)
+    staging.validate_environment(staging_env)
+    assert not any(key in staging_env for key in extra)
 
 
 def test_finance_reader_cannot_hide_writer_identity_with_url_encoding(staging_env):

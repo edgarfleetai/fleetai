@@ -1,5 +1,6 @@
 """Test bootstrap: isolate SQLAlchemy and reject all real external transports."""
 import os
+import re
 from pathlib import Path
 import socket
 import tempfile
@@ -14,6 +15,23 @@ class SameOriginTestBrowser(FlaskClient):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.environ_base['HTTP_SEC_FETCH_SITE'] = 'same-origin'
+
+    def post(self, *args, **kwargs):
+        """Like a real browser, open the owner login form before submitting it.
+
+        The form issues a one-time proof (hidden field + __Host- cookie) since
+        commit 35da716. Tests that need to omit it pass login_proof=None.
+        """
+        path = str(args[0] if args else kwargs.get('path', ''))
+        data = kwargs.get('data')
+        if path.split('?')[0] == '/auth/login' and isinstance(data, dict) and 'login_proof' not in data:
+            form = self.get('/auth/login', base_url=kwargs.get('base_url', 'https://localhost'),
+                            headers={k: v for k, v in (kwargs.get('headers') or {}).items() if k == 'Host'})
+            match = re.search(r'name="login_proof" value="([^"]+)"', form.get_data(as_text=True))
+            kwargs['data'] = dict(data, login_proof=match.group(1) if match else '')
+        elif isinstance(data, dict) and data.get('login_proof', '') is None:
+            kwargs['data'] = {k: v for k, v in data.items() if k != 'login_proof'}
+        return super().post(*args, **kwargs)
 
 
 Flask.test_client_class = SameOriginTestBrowser

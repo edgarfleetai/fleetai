@@ -10578,6 +10578,61 @@ def api_wialon_units():
     except Exception as exc:
         return jsonify({"ok": False, "stage": "internal", "message": str(exc)}), 500
 
+def _wialon_positions_from_items(items):
+    """Pure: Wialon avl_unit items (flags 1|1024) -> last known positions."""
+    out = []
+    for item in items or []:
+        pos = item.get("pos") or {}
+        lat, lon = pos.get("y"), pos.get("x")
+        has_pos = isinstance(lat, (int, float)) and isinstance(lon, (int, float))
+        out.append({
+            "id": item.get("id"),
+            "name": item.get("nm", ""),
+            "lat": lat if has_pos else None,
+            "lon": lon if has_pos else None,
+            "speed_kmh": pos.get("s") if has_pos else None,
+            "course": pos.get("c") if has_pos else None,
+            "time": pos.get("t") if has_pos else None,
+        })
+    return out
+
+
+@bp.route("/api/wialon/positions", methods=["GET"])
+def api_wialon_positions():
+    """READ ONLY: last known position of every visible unit.
+
+    No database access and no vehicle commands. Car locations are private:
+    security_policy requires an owner session (and CSRF) for every /api/ GET.
+    """
+    token = (os.environ.get("WIALON_TOKEN") or "").strip()
+    if not token:
+        return jsonify({"ok": False, "read_only": True, "message": "WIALON_TOKEN не задан"}), 500
+    try:
+        login = _wialon_call("token/login", {"token": token})
+        sid = login.get("eid") if isinstance(login, dict) and login.get("error") is None else None
+        if not sid:
+            return jsonify({"ok": False, "read_only": True, "stage": "login"}), 502
+        found = _wialon_call("core/search_items", {
+            "spec": {"itemsType": "avl_unit", "propName": "sys_name", "propValueMask": "*",
+                     "sortType": "sys_name", "propType": "property", "or_logic": False},
+            "force": 1, "flags": 1 | 1024, "from": 0, "to": 0,
+        }, sid=sid)
+        if not isinstance(found, dict) or found.get("error") is not None:
+            return jsonify({"ok": False, "read_only": True, "stage": "search", "wialon_error": (found or {}).get("error")}), 502
+        units = _wialon_positions_from_items(found.get("items"))
+        return jsonify({"ok": True, "read_only": True, "commands_sent": False, "count": len(units), "units": units})
+    except requests.RequestException as exc:
+        return jsonify({"ok": False, "read_only": True, "stage": "http", "message": str(exc)}), 502
+
+@bp.route("/monitor", methods=["GET"])
+def fleet_monitor_page():
+    """Owner-only live map. Data comes from the read-only /api/wialon/positions."""
+    from .monitor_page import MONITOR_HTML
+    response = make_response(MONITOR_HTML)
+    response.mimetype = "text/html"
+    return response
+
+
 # --- Wialon manual control pilot for unit 665 (V4) ---
 WIALON_665_UNIT_ID = int(os.environ.get("WIALON_665_UNIT_ID", "49896"))
 

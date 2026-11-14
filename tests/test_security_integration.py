@@ -182,8 +182,8 @@ def test_legacy_rent_and_period_read_handlers_are_unchanged():
     from pathlib import Path
     import subprocess
     root = Path(__file__).resolve().parents[1]
-    old = subprocess.run(['git','show','053144753b64e2b30c8cbeb2d102aed76b692da8:fleetai/routes.py'], cwd=root, check=True, capture_output=True, text=True).stdout
-    new = (root/'fleetai/routes.py').read_text()
+    old = subprocess.run(['git','show','053144753b64e2b30c8cbeb2d102aed76b692da8:fleetai/routes.py'], cwd=root, check=True, capture_output=True, text=True, encoding='utf-8').stdout
+    new = (root/'fleetai/routes.py').read_text(encoding='utf-8')
     names = {'_sync_daily_rent','calculate_driver_payment','calculate_rental_interval','api_summary','api_cars','api_cars_monthly_finance','api_car','api_driver_mvp'}
     def functions(text, *, allow_assignment_transaction=False):
         tree = ast.parse(text)
