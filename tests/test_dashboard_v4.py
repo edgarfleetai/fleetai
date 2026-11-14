@@ -85,11 +85,10 @@ def test_owner_sees_real_fleet(dash):
     assert page.status_code == 200 and b'/api/v4/fleet' in page.data
     data = c.get('/api/v4/fleet', base_url=BASE).get_json()
     cars = {x['code']: x for x in data['cars']}
-    assert set(cars) == {'119', '621', '636', '686'}
+    assert set(cars) == {'621', '636', '686'}   # 119 is the old record of today's 665: hidden
     assert cars['621']['status'] == 'rented' and cars['621']['owner'] == 'ilya'
     assert cars['621']['rate'] == '1 857 ₽/сут' and cars['621']['deposit'] == 1_000_000
     assert cars['636']['status'] == 'repair'
-    assert cars['119']['status'] == 'free' and cars['119']['flag']
     assert cars['686']['owner'] == 'mark' and 'исправить тип' in cars['686']['flag']
     assert all(x['balance'] is None for x in data['cars'])   # wallet not connected: no invented numbers
     assert [d['name'] for d in data['drivers']] == ['Сергей В.', 'Тимур']

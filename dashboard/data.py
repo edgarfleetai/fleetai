@@ -13,10 +13,13 @@ INVESTORS = (("илья", "ilya"), ("равшан", "ravshan"), ("марк", "ma
 # Findings confirmed by the owner or by comparing Wialon with the database
 # (docs/current-system-audit.md). Shown as "Сверка" notes; never applied to data.
 KNOWN_NOTES = {
-    "119": "По словам владельца, это нынешняя 665. Записи 119 и 665 в базе нужно объединить без потери истории.",
-    "665": "Бывшая 119. Прежняя 665 теперь ездит как 267 (Х267СО716) — её в базе FleetAI нет.",
+    "665": "Бывшая 119. В базе осталась старая запись 119 — в дашборде она скрыта, объединить в базе. Прежняя 665 теперь ездит как 267 (Х267СО716) — её в базе FleetAI нет.",
     "621": "В Wialon номер «А621СУ», в базе «т621су» — одна из записей с ошибкой.",
 }
+
+
+# Earlier plates of the same physical car (owner, 2026-11-14).
+PLATE_HISTORY = {"665": ["В119ЕН716"]}
 
 
 def make_engine(url):
@@ -84,7 +87,7 @@ def map_car(row):
         "deposit": int(row["driver_deposit"] or 0) * 100,   # kopecks
         "balance": None,                                     # wallet is not connected yet
         "mileage": int(row["current_mileage"] or 0),
-        "plates": [plate], "flag": " ".join(notes) or None,
+        "plates": PLATE_HISTORY.get(code, []) + [plate], "flag": " ".join(notes) or None,
         "why": None if status != "notready" else (row["status"] or "Не готова"),
     }
 
@@ -96,10 +99,15 @@ CARS_SQL = text("""
 """)
 
 
+# Old database records of cars that now drive under another code (owner, 2026-11-14).
+# They are hidden from the fleet and counts; the database itself is not changed.
+RETIRED_CODES = {"119": "665"}
+
+
 def load_fleet(engine):
     with engine.connect() as conn:
         rows = conn.execute(CARS_SQL).mappings().all()
-    cars = [map_car(r) for r in rows]
+    cars = [map_car(r) for r in rows if str(r["code"]).strip() not in RETIRED_CODES]
     drivers = [{"id": c["driver"], "name": c["driver_name"], "phone": "", "tg": False,
                 "stage": "rent", "car": c["id"]} for c in cars if c["driver"]]
     return {"cars": cars, "drivers": drivers}
