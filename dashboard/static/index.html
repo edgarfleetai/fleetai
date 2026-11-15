@@ -788,7 +788,7 @@ VIEWS.investors=async function(){shell("Инвесторы");try{await needFin()
   if(!onView("investors"))return;
   const r=FIN.cars;
   const card=key=>{const rows=r.filter(x=>x.owner===key);if(!rows.length)return"";
-    const ded=x=>x.recurring_booked?0:x.gps+x.garage;
+    const ded=x=>x.recurring_booked||x.owner_type!=="investor"?0:x.gps+x.garage;
     const sumk=k=>sum(rows,x=>x[k]),dedT=sum(rows,ded),due=sumk("period_due");
     const old=sumk("previous_park_debt_to_investor")-sumk("previous_investor_debt");
     const issues=rows.flatMap(x=>{const out=[];if(x.owner_type!=="investor")out.push(`${x.code}: в базе машина записана как своя — доля инвестору не начисляется. Нужно исправить тип в базе.`);
