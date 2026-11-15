@@ -78,26 +78,42 @@ def create_app(config=None):
     cache, cache_lock = {}, threading.Lock()
     CACHE_SECONDS = 150  # warm loop refreshes every ~65 s; writes clear it at once
 
-    def cached(key, fn):
-        """Heavy read-only calculations are reused for a minute; any write clears them."""
-        now = time.time()
+    key_locks = {}
+
+    def key_lock(key):
+        with cache_lock:
+            return key_locks.setdefault(key, threading.Lock())
+
+    def fresh(key):
         with cache_lock:
             hit = cache.get(key)
-            if hit and now - hit[0] < CACHE_SECONDS:
-                return hit[1]
-        value = fn()
-        with cache_lock:
-            cache[key] = (time.time(), value)
-        return value
+            return hit[1] if hit and time.time() - hit[0] < CACHE_SECONDS else None
+
+    def cached(key, fn):
+        """Heavy read-only calculations are reused; one calculation per key at a
+        time — a request waits for the one already running instead of starting
+        a second (two at once used to exceed the 30 s worker timeout)."""
+        value = fresh(key)
+        if value is not None:
+            return value
+        with key_lock(key):
+            value = fresh(key)
+            if value is not None:
+                return value
+            value = fn()
+            with cache_lock:
+                cache[key] = (time.time(), value)
+            return value
 
     def clear_cache():
         with cache_lock:
             cache.clear()
 
     def refresh(key, fn):
-        value = fn()
-        with cache_lock:
-            cache[key] = (time.time(), value)
+        with key_lock(key):
+            value = fn()
+            with cache_lock:
+                cache[key] = (time.time(), value)
 
     def warm_loop():
         """Keep the heavy pages pre-calculated so the home page opens at once."""
