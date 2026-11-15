@@ -20,7 +20,7 @@ from urllib.parse import urlsplit
 from flask import Flask, abort, jsonify, redirect, request, send_file, session
 from werkzeug.security import check_password_hash
 
-from . import actions, data, finance, ops, rent, wialon
+from . import actions, board, data, finance, ops, rent, wialon
 
 STATIC = Path(__file__).resolve().parent / "static"
 SESSION_HOURS = 8
@@ -291,6 +291,45 @@ def create_app(config=None):
                                      views=app.config.get("ACTION_VIEWS"))
         clear_cache()
         return jsonify(result), status
+
+    @app.post("/api/v4/op/<int:op_id>/<what>")
+    def change_operation(op_id, what):
+        write_guard()
+        body = request.get_json(silent=True) or {}
+        key = str(body.get("key") or "")[:64]
+        if len(key) < 16 or what not in ("delete", "edit"):
+            return jsonify(ok=False, message="Неверный запрос"), 400
+        views = app.config.get("ACTION_VIEWS")
+        if what == "delete":
+            status, result = actions.delete_operation(app, engine, op_id, key, views=views)
+        else:
+            status, result = actions.edit_operation(app, engine, op_id, body.get("data") or {}, key,
+                                                    views=views, save=ops_save)
+        clear_cache()
+        return jsonify(result), status
+
+    @app.get("/api/v4/board")
+    def board_list():
+        api_owner()
+        return jsonify(cards=board.list_cards(engine))
+
+    @app.post("/api/v4/board")
+    @app.post("/api/v4/board/<int:card_id>")
+    @app.post("/api/v4/board/<int:card_id>/<what>")
+    def board_change(card_id=None, what=None):
+        write_guard()
+        data = (request.get_json(silent=True) or {}).get("data") or {}
+        try:
+            if card_id is None:
+                new_id = board.create_card(data)
+                return jsonify(ok=True, id=new_id, message="Водитель добавлен")
+            if what == "delete":
+                n = board.delete_card(card_id)
+                return jsonify(ok=bool(n), message="Карточка удалена" if n else "Карточка не найдена"), (200 if n else 404)
+            n = board.update_card(card_id, data)
+            return jsonify(ok=bool(n), message="Сохранено" if n else "Карточка не найдена"), (200 if n else 404)
+        except ValueError as error:
+            return jsonify(ok=False, message=str(error)), 400
 
     @app.errorhandler(403)
     def forbidden(_):

@@ -281,6 +281,7 @@ td.r,th.r{text-align:right}
 .mk:focus-visible .ring{stroke:var(--fg);stroke-width:2}
 .maplegend{position:absolute;left:10px;bottom:10px;display:flex;gap:6px;flex-wrap:wrap}
 .maplegend .lg{background:var(--glass-2);backdrop-filter:blur(8px)}
+.board .card{user-select:none;-webkit-user-select:none}.card.drag{opacity:.35}
 .cmdbar{display:flex;flex-wrap:wrap;align-items:center;gap:10px;padding:8px 8px 8px 16px;border-radius:18px}.cmdbar .ic{color:var(--lime);display:flex}.cmdbar input{flex:1 1 240px;min-width:0;border:0;background:transparent;color:var(--fg);font:inherit;font-size:15px;padding:8px 0;outline:none}.cmdbar input::placeholder{color:var(--faint)}.cmdpv{flex-basis:100%;padding:8px 8px 4px 0}
 .mapcities{position:absolute;left:56px;top:10px;right:200px;display:flex;gap:6px;flex-wrap:wrap}.mapcities .chip{font:inherit;font-size:12px;padding:5px 11px;border-radius:99px;border:1px solid var(--stroke-2);background:var(--glass-2);color:var(--muted);backdrop-filter:blur(8px);cursor:pointer}.mapcities .chip.on{background:var(--lime);color:#111;border-color:transparent}
 #msvg.z1 .l-minor,#msvg.z0 .l-mid,#msvg.z0 .l-green,#msvg.z0 .l-rail{display:none}#msvg.z0 .l-major{stroke-width:1.3}#msvg.z1 .l-major{stroke-width:2}
@@ -535,14 +536,7 @@ const DCOLS=[["new","Заявка","var(--c1)","var(--s3)"],["check","Прове
 function board(cols,items,colOf,card,kind){return `<div class="board">${cols.map(([k,l,c,dot])=>{const its=items.filter(i=>colOf(i)===k);return `<div class="col" data-col="${k}" data-kind="${kind}"><div class="colh"><i class="dotx" style="background:${dot}"></i><div><b>${l}</b> <span class="cnt">${its.length}</span>${kind==="drv"&&k==="rent"?`<span class="sum">${rub(sum(its,d=>Math.min(carById(d.car).balance,0)))} долг</span>`:""}${kind==="rep"?`<span class="sum">${rubK(sum(its,r=>r.fact||r.plan))}</span>`:""}</div><button class="ibtn add" style="width:28px;height:28px" data-act="${kind==="drv"?"driver":"repair"}" aria-label="Добавить">${ico("plus",14)}</button></div>
   ${its.map(i=>card(i,c)).join("")||'<div class="emptycol">Перетащите карточку сюда</div>'}</div>`;}).join("")}</div>`;}
 let drvQ="";
-VIEWS.drivers=function(){const list=drivers.filter(d=>!drvQ||(d.name+d.phone).toLowerCase().includes(drvQ.toLowerCase()));
-  $("#page").innerHTML=`
-  <div class="phead"><h1><span>Путь</span><span>водителя</span></h1>${hstat("user",drivers.filter(d=>d.stage==="rent").length,"в аренде")}${hstat("clock",drivers.filter(d=>["new","check","contract","deposit"].includes(d.stage)).length,"в оформлении")}${hstat("alert",cars.filter(c=>c.balance<0).length,"с долгом")}
-    <div class="acts"><button class="btn lime" data-act="driver">${ico("plus",15)} Водитель</button></div></div>
-  <div class="board-bar"><label class="searchbox">${ico("search",15)}<input id="dq" placeholder="Имя или телефон" value="${esc(drvQ)}" aria-label="Поиск водителя"></label><span class="note" style="padding:6px 12px">Долг и кошелёк ведутся по аренде: при смене водителя чужой долг не переходит</span></div>
-  ${board(DCOLS,list,d=>d.stage,(d,c)=>{const car=carById(d.car||d.plan);return `<button class="card" draggable="true" data-drv="${d.id}" data-id="${d.id}" style="--cbg:linear-gradient(160deg,${c},var(--glass-2) 80%)"><div class="k">${car?(d.car?"Машина":"Планируется")+" "+esc(car.code):"Без машины"}<span class="dots">${ico("dots",15)}</span></div><div class="n">${esc(d.name)}</div><div class="s num">${esc(d.phone)}</div>
-    <div class="f"><span class="amt num ${car&&d.car&&car.balance<0?"out":""}">${car&&d.car?rub(car.balance,true):d.stage==="deposit"?"депозит 10 000 ₽":"—"}</span><span class="mini"><span class="avatar" style="width:22px;height:22px;font-size:9.5px;background:var(--glass-3);color:var(--fg)">${initials(d.name)}</span>${d.tg?`<span class="avatar" style="width:22px;height:22px;font-size:9px;margin-left:-6px;background:#5aa9e6;color:#04121d" title="Telegram привязан">TG</span>`:""}</span></div></button>`;},"drv")}`;
-  $("#dq").addEventListener("input",e=>{drvQ=e.target.value;const p=e.target.selectionStart;VIEWS.drivers();const n=$("#dq");n.focus();n.setSelectionRange(p,p);});wireDnD();};
+
 const RCOLS=[["planned","Запланировано","var(--c1)","var(--s3)"],["work","В работе","var(--c3)","var(--s2)"],["confirm","Ожидает подтверждения","var(--c2)","var(--s4)"],["done","Выполнено","var(--c5)","var(--s1)"]];
 VIEWS._proto_repairs=function(){
   $("#page").innerHTML=`
@@ -551,13 +545,7 @@ VIEWS._proto_repairs=function(){
   <div class="note">«Нужно заменить колодки за 2 000 ₽» создаёт задачу с плановой суммой. Расход появляется в финансах только после подтверждения фактической стоимости.</div>
   ${board(RCOLS,repairs,r=>r.st,(r,c)=>{const car=carById(r.car);return `<button class="card" draggable="true" data-car="${car.id}" data-id="${r.id}" style="--cbg:linear-gradient(160deg,${c},var(--glass-2) 80%)"><div class="k">${esc(r.date)} · ${esc(r.who)}<span class="dots">${ico("dots",15)}</span></div><div class="n">${esc(r.title)}</div><div class="s">${esc(car.code)} · ${esc(car.model)}</div>
     <div class="f"><span class="amt num">${r.fact?rub(r.fact):rub(r.plan)}</span><span style="display:flex;gap:6px;align-items:center">${r.fact?(r.fact!==r.plan?tag("план "+rub(r.plan),"t-mute"):tag("факт","t-ok")):tag("план","t-info")}<span class="mini">${oav(car.owner)}</span></span></div></button>`;},"rep")}`;wireDnD();};
-function wireDnD(){let dragId=null;
-  document.querySelectorAll(".card[draggable]").forEach(c=>{c.addEventListener("dragstart",e=>{dragId=c.dataset.id;c.classList.add("drag");e.dataTransfer.effectAllowed="move";try{e.dataTransfer.setData("text/plain",dragId);}catch(_){}});c.addEventListener("dragend",()=>c.classList.remove("drag"));});
-  document.querySelectorAll(".col").forEach(col=>{col.addEventListener("dragover",e=>{e.preventDefault();col.classList.add("over");});col.addEventListener("dragleave",()=>col.classList.remove("over"));
-    col.addEventListener("drop",e=>{e.preventDefault();col.classList.remove("over");if(!dragId)return;const to=col.dataset.col,kind=col.dataset.kind;
-      if(kind==="drv"){const d=drvById(dragId);if(d.stage===to)return;if(to==="rent"&&!d.car){toast("Сначала назначьте машину и внесите депозит");return;}d.stage=to;VIEWS.drivers();toast(`${d.name}: этап «${DCOLS.find(x=>x[0]===to)[1]}» · записано в историю`);}
-      else{const r=repairs.find(x=>x.id===dragId);if(r.st===to)return;if(to==="done"&&!r.fact){r.st="confirm";VIEWS.repairs();toast("Укажите фактическую стоимость — ремонт ждёт подтверждения");return;}r.st=to;VIEWS.repairs();toast(`${r.title}: «${RCOLS.find(x=>x[0]===to)[1]}»`);}
-      dragId=null;});});}
+
 
 let lf={type:"",car:"",status:"",method:"",period:"30"};
 function ledgerTable(rows,compact){
@@ -799,8 +787,8 @@ VIEWS.finance=async function(){shell("Финансы");try{await needFin();if(!J
   <section class="panel glass"><header><h2>Журнал операций</h2><span class="sub">последние ${JRN.days} дней · ${ops.length}</span>
     <div class="r" style="display:flex;gap:8px;flex-wrap:wrap"><div class="seg" role="group" aria-label="Тип">${[["","Все"],["in","Доходы"],["out","Расходы"],["info","Прочее"]].map(([k,l])=>`<button class="${jf.dir===k?"on":""}" data-jdir="${k}">${l}</button>`).join("")}</div>
     <select id="jcar" aria-label="Машина" style="font:inherit;color:var(--fg);background:var(--glass-2);border:1px solid var(--stroke-2);border-radius:99px;padding:6px 10px"><option value="">Все машины</option>${codes.map(c=>`<option ${jf.car===c?"selected":""}>${esc(c)}</option>`).join("")}</select></div></header>
-    <div class="tbl-wrap"><table><thead><tr><th>Дата</th><th>Машина</th><th>Операция</th><th>Категория</th><th>Описание</th><th class="r">Сумма</th></tr></thead><tbody>
-    ${ops.slice(0,300).map(o=>`<tr><td class="num">${d2(o.date)}</td><td>${esc(o.car||"—")}${o.car_raw&&o.car_raw!==o.car?` <span class="tag t-mute">${esc(o.car_raw)}</span>`:""}</td><td>${esc(o.label)}</td><td>${esc(o.category)}</td><td style="max-width:360px;white-space:normal;color:var(--muted)">${esc(o.description)}</td><td class="r">${o.dir==="info"?(o.amount?money(o.amount,""):"—"):money(o.dir==="out"?-o.amount:o.amount,o.dir==="in"?"in":"")}</td></tr>`).join("")||`<tr><td colspan="6" style="color:var(--muted)">Операций нет</td></tr>`}
+    <div class="tbl-wrap"><table><thead><tr><th>Дата</th><th>Машина</th><th>Операция</th><th>Категория</th><th>Описание</th><th class="r">Сумма</th><th></th></tr></thead><tbody>
+    ${ops.slice(0,300).map(o=>`<tr><td class="num">${d2(o.date)}</td><td>${esc(o.car||"—")}${o.car_raw&&o.car_raw!==o.car?` <span class="tag t-mute">${esc(o.car_raw)}</span>`:""}</td><td>${esc(o.label)}</td><td>${esc(o.category)}</td><td style="max-width:360px;white-space:normal;color:var(--muted)">${esc(o.description)}</td><td class="r">${o.dir==="info"?(o.amount?money(o.amount,""):"—"):money(o.dir==="out"?-o.amount:o.amount,o.dir==="in"?"in":"")}</td><td class="r" style="white-space:nowrap"><button class="ibtn" style="width:30px;height:30px" data-ope="${o.id}" data-opw="edit" aria-label="Исправить" title="Исправить">✎</button> <button class="ibtn" style="width:30px;height:30px" data-ope="${o.id}" data-opw="delete" aria-label="Удалить" title="Удалить">✕</button></td></tr>`).join("")||`<tr><td colspan="7" style="color:var(--muted)">Операций нет</td></tr>`}
     </tbody></table></div></section>
   <section class="panel glass"><div class="pbody" style="padding-top:16px"><div class="note">Доходы, расходы и доли считаются той же функцией, что и в старом FleetAI (расчётный период с 16-го по 15-е), поэтому цифры совпадают. Записи старой машины 119 показаны под 665.</div></div></section>`;
   $("#jcar").addEventListener("change",e=>{jf.car=e.target.value;VIEWS.finance();});};
@@ -973,10 +961,91 @@ async function actGo(){if(!ACT||ACT.busy)return;const a=ACTS[ACT.name];
   const payload=Object.assign({},ACT.data,(ACT.c.code&&ACT.name!=="add_car")?{car_code:ACT.c.code}:{});
   try{const {data:b}=await opPost("/api/v4/act/"+ACT.name,{key:ACT.key,data:payload});
     ACT.res=b;$("#actPv").innerHTML=`<div class="note ${b.ok?"":"warn"}">${b.ok?"✓":"✕"} ${esc(b.message||(b.ok?"Готово":"Ошибка"))}</div>`;
-    if(b.ok){FIN=null;JRN=null;REP=null;RENT=null;try{const f=await getJSON("/api/v4/fleet");cars=f.cars;drivers=f.drivers;}catch(_){}$("#actGo").textContent="Готово";OPD.res=[{ok:true}];}
+    if(b.ok){if(ACT.boardId){try{await opPost(`/api/v4/board/${ACT.boardId}/delete`,{data:{}});}catch(_){}await boardLoad(true);}FIN=null;JRN=null;REP=null;RENT=null;try{const f=await getJSON("/api/v4/fleet");cars=f.cars;drivers=f.drivers;}catch(_){}$("#actGo").textContent="Готово";OPD.res=[{ok:true}];}
     else{ACT.data=null;$("#actGo").textContent="Далее";}}
   catch(e){$("#actPv").innerHTML=`<div class="note warn">${esc(e.message)}</div>`;ACT.data=null;$("#actGo").textContent="Далее";}
   ACT.busy=false;}
+/* ===== Исправление и удаление операций журнала ===== */
+let OPE=null;
+function opeFind(id){return JRN&&JRN.operations.find(o=>String(o.id)===String(id));}
+function opeSummary(o){return `<b>${esc(o.label)}</b> · ${esc(o.car||"—")} · ${rub(o.amount)} · ${d2(o.date)}${o.description?`<div style="color:var(--muted);font-size:12.5px">${esc(o.description)}</div>`:""}`;}
+function opeModal(id,what){const o=opeFind(id);if(!o)return;
+  OPE={id:o.id,what,key:(crypto.randomUUID?crypto.randomUUID():String(Date.now())+Math.random().toString(36).slice(2)),busy:false,done:false};
+  const raw=String(o.raw||"").replace(/\s*\[[A-Z_]+:[^\]]*\]\s*/g," ").trim();
+  let body;
+  if(what==="delete")body=`<div class="note">${opeSummary(o)}</div><div class="note warn">Удалить эту запись? Отменить удаление нельзя.${o.topup?" Это пополнение кошелька: на ту же сумму уменьшится и кошелёк водителя.":""}</div>`;
+  else if(o.edit==="topup")body=`<div class="note">${opeSummary(o)}</div><div style="display:grid;grid-template-columns:1fr 1fr;gap:8px"><label class="field">Правильная сумма, ₽<input class="inp" id="opeAmt" inputmode="numeric" value="${Math.round(o.amount/100)}"></label><label class="field">Способ<select class="inp" id="opePay"><option value="cash">Наличные</option><option value="transfer">Перевод</option><option value="other">Другое</option></select></label></div><div style="font-size:12.5px;color:var(--muted)">Старое пополнение отменится (и в кошельке), новое запишется с правильной суммой.</div>`;
+  else body=`<div class="note">${opeSummary(o)}</div><label class="field">Исправленная команда<textarea class="inp" id="opeMsg" rows="2">${esc(raw)}</textarea></label>${o.edit==="inplace"?`<label class="field">Дата<input class="inp" id="opeDate" type="date" value="${esc(String(o.date).slice(0,10))}"></label>`:`<div style="font-size:12.5px;color:var(--muted)">Сохранится исправленная запись, старая удалится.</div>`}`;
+  openLayer(`<div class="modal" role="dialog" aria-modal="true" aria-labelledby="opeT" style="width:min(520px,calc(100% - 32px))"><header style="padding:18px 20px 0"><h1 id="opeT" style="font-size:22px">${what==="delete"?"Удалить операцию":"Исправить операцию"} #${esc(o.id)}</h1></header><div class="mb">${body}<div id="opeRes"></div>
+    <div style="display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap"><button class="btn" data-close>Закрыть</button><button class="btn ${what==="delete"?"":"lime"}" id="opeGo" style="${what==="delete"?"background:var(--bad);border-color:var(--bad);color:#fff":""}">${what==="delete"?"Удалить":"Сохранить"}</button></div></div></div>`);
+  $("#opeGo").addEventListener("click",opeGo);}
+async function opeGo(){if(!OPE||OPE.busy)return;if(OPE.done){closeLayer();return;}
+  const o=opeFind(OPE.id),data={};
+  if(OPE.what==="edit"){if(o.edit==="topup"){data.amount=($("#opeAmt").value||"").replace(/\D/g,"");data.payment_method=$("#opePay").value;}else{data.message=$("#opeMsg").value.trim();const d=$("#opeDate");if(d)data.date=d.value;}}
+  OPE.busy=true;$("#opeGo").textContent="Сохраняю…";
+  try{const {data:b}=await opPost(`/api/v4/op/${OPE.id}/${OPE.what}`,{key:OPE.key,data});
+    $("#opeRes").innerHTML=`<div class="note ${b.ok?"":"warn"}">${b.ok?"✓":"✕"} ${esc(b.message||(b.ok?"Готово":"Ошибка"))}</div>`;
+    if(b.ok){OPE.done=true;$("#opeGo").textContent="Готово";FIN=null;JRN=null;REP=null;RENT=null;OPD.res=[{ok:true}];}else $("#opeGo").textContent=OPE.what==="delete"?"Удалить":"Сохранить";}
+  catch(e){$("#opeRes").innerHTML=`<div class="note warn">${esc(e.message)}</div>`;$("#opeGo").textContent="Повторить";}
+  OPE.busy=false;}
+/* ===== Путь водителя: кандидаты хранятся в dashboard_driver_board, арендаторы — из машин ===== */
+let BOARD=null,BM=null;
+async function boardLoad(force){if(!BOARD||force){try{BOARD=(await getJSON("/api/v4/board")).cards;}catch(_){BOARD=BOARD||[];}}return BOARD;}
+function drvItems(){const rented=cars.filter(c=>c.driver).map(c=>({id:"R-"+c.code,kind:"rent",name:c.driver_name,stage:"rent",car:c.id,code:c.code,phone:"",note:""}));
+  const cand=(BOARD||[]).map(b=>({id:"B-"+b.id,bid:b.id,kind:"board",name:b.name,stage:b.stage,car:b.car_code?"V-"+b.car_code:"",code:b.car_code,phone:b.phone,note:b.note}));
+  return rented.concat(cand);}
+VIEWS.drivers=async function(){if(!BOARD){$("#page").innerHTML=`<div class="phead"><h1><span>Путь</span><span>водителя</span></h1></div><section class="panel glass"><div class="empty"><h2>Загрузка…</h2></div></section>`;await boardLoad();if(!onView("drivers"))return;}
+  const all=drvItems(),list=all.filter(d=>!drvQ||(d.name+d.phone+(d.code||"")).toLowerCase().includes(drvQ.toLowerCase()));
+  const card=(d,c)=>{const car=d.car&&carById(d.car);return `<div class="card" role="button" tabindex="0" draggable="true" data-id="${esc(d.id)}" ${d.kind==="rent"?`data-car="${esc(d.car)}"`:`data-bcard="${d.bid}"`} style="--cbg:linear-gradient(160deg,${c},var(--glass-2) 80%);cursor:grab"><div class="k">${car?(d.kind==="rent"?"Машина ":"Планируется ")+esc(car.code):"Без машины"}</div><div class="n">${esc(d.name||"—")}</div>${d.phone||d.note?`<div class="s" style="white-space:normal">${esc([d.phone,d.note].filter(Boolean).join(" · "))}</div>`:""}</div>`;};
+  $("#page").innerHTML=`
+  <div class="phead"><h1><span>Путь</span><span>водителя</span></h1>${hstat("user",all.filter(d=>d.stage==="rent").length,"в аренде")}${hstat("clock",all.filter(d=>["new","check","contract","deposit"].includes(d.stage)).length,"в оформлении")}
+    <div class="acts"><button class="btn lime" data-act="driver">${ico("plus",15)} Водитель</button></div></div>
+  <div class="board-bar"><label class="searchbox">${ico("search",15)}<input id="dq" placeholder="Имя, телефон или машина" value="${esc(drvQ)}" aria-label="Поиск водителя"></label><span class="note" style="padding:6px 12px">Перетаскивайте карточки между этапами. Перенос в «В аренде» назначает водителя на машину.</span></div>
+  ${board(DCOLS,list,d=>d.stage,card,"drv")}`;
+  $("#dq").addEventListener("input",e=>{drvQ=e.target.value;const p=e.target.selectionStart;VIEWS.drivers();const n=$("#dq");n.focus();n.setSelectionRange(p,p);});wireDnD();};
+function wireDnD(){
+  // Pointer-based drag: works with a mouse, a finger and a pen (HTML5 drag-and-drop does not work on touch screens).
+  let st=null;
+  const colAt=(x,y)=>{const el=document.elementFromPoint(x,y);return el&&el.closest(".col");};
+  const clear=()=>document.querySelectorAll(".col.over").forEach(c=>c.classList.remove("over"));
+  document.querySelectorAll(".card[draggable]").forEach(card=>{
+    card.setAttribute("draggable","false");card.style.touchAction="none";
+    card.addEventListener("pointerdown",e=>{if(e.button!==0)return;st={card,id:card.dataset.id,x:e.clientX,y:e.clientY,ghost:null,moved:false,pid:e.pointerId};});
+  });
+  const move=e=>{if(!st||e.pointerId!==st.pid)return;const dx=e.clientX-st.x,dy=e.clientY-st.y;
+    if(!st.moved){if(Math.hypot(dx,dy)<6)return;st.moved=true;const r=st.card.getBoundingClientRect();const g=st.card.cloneNode(true);
+      Object.assign(g.style,{position:"fixed",left:r.left+"px",top:r.top+"px",width:r.width+"px",zIndex:60,pointerEvents:"none",opacity:".92",transform:"rotate(2deg)",boxShadow:"var(--shadow)"});
+      document.body.appendChild(g);st.ghost=g;st.ox=r.left;st.oy=r.top;st.card.classList.add("drag");}
+    e.preventDefault();st.ghost.style.left=(st.ox+dx)+"px";st.ghost.style.top=(st.oy+dy)+"px";clear();const c=colAt(e.clientX,e.clientY);if(c)c.classList.add("over");};
+  const up=async e=>{if(!st||e.pointerId!==st.pid)return;const s=st;st=null;clear();if(s.ghost)s.ghost.remove();s.card.classList.remove("drag");
+    if(!s.moved)return;   // a click: the card opens as usual
+    const swallow=ev=>{ev.stopPropagation();ev.preventDefault();};document.addEventListener("click",swallow,{capture:true,once:true});setTimeout(()=>document.removeEventListener("click",swallow,{capture:true}),50);
+    const col=colAt(e.clientX,e.clientY);if(!col)return;await drvDrop(s.id,col.dataset.col);};
+  document.removeEventListener("pointermove",window.__fa4move||(()=>{}));document.removeEventListener("pointerup",window.__fa4up||(()=>{}));document.removeEventListener("pointercancel",window.__fa4up||(()=>{}));
+  window.__fa4move=move;window.__fa4up=up;
+  document.addEventListener("pointermove",move,{passive:false});document.addEventListener("pointerup",up);document.addEventListener("pointercancel",up);}
+async function drvDrop(id,to){const d=drvItems().find(x=>x.id===id);if(!d||d.stage===to)return;
+  if(d.kind==="rent"){toast("Водитель уже на машине. Сменить или снять — кнопкой «Сменить водителя» в карточке машины.");return;}
+  if(to==="rent"){if(!d.code){toast("Укажите в карточке водителя, на какую машину он планируется");boardModal(d.bid);return;}actModal("assign","V-"+d.code);ACT.boardId=d.bid;const n=document.querySelector('#layer [data-k="driver"]');if(n)n.value=d.name;return;}
+  const b=(BOARD||[]).find(x=>x.id===d.bid);const prev=b.stage;b.stage=to;VIEWS.drivers();
+  try{const {data}=await opPost(`/api/v4/board/${d.bid}`,{data:{stage:to}});if(!data.ok)throw new Error(data.message||"Ошибка");toast(`${d.name}: «${DCOLS.find(x=>x[0]===to)[1]}»`);}
+  catch(err){b.stage=prev;VIEWS.drivers();toast("Не сохранилось: "+err.message);}}
+function boardModal(bid){const b=bid?(BOARD||[]).find(x=>x.id===+bid):{name:"",phone:"",stage:"new",car_code:"",note:""};if(!b)return;
+  BM={id:bid?+bid:null,busy:false};
+  const st=DCOLS.filter(x=>x[0]!=="rent").map(x=>`<option value="${x[0]}" ${b.stage===x[0]?"selected":""}>${x[1]}</option>`).join("");
+  const co=`<option value="">—</option>`+cars.filter(c=>c.in_db!==false).map(c=>`<option ${b.car_code===c.code?"selected":""}>${esc(c.code)}</option>`).join("");
+  openLayer(`<div class="modal" role="dialog" aria-modal="true" aria-labelledby="bmT" style="width:min(500px,calc(100% - 32px))"><header style="padding:18px 20px 0"><h1 id="bmT" style="font-size:22px">${bid?"Карточка водителя":"Новый водитель"}</h1></header><div class="mb">
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px"><label class="field">Имя<input class="inp" data-b="name" value="${esc(b.name)}"></label><label class="field">Телефон<input class="inp" data-b="phone" value="${esc(b.phone)}" inputmode="tel"></label>
+    <label class="field">Этап<select class="inp" data-b="stage">${st}</select></label><label class="field">Планируемая машина<select class="inp" data-b="car_code">${co}</select></label></div>
+    <label class="field">Заметка<textarea class="inp" data-b="note" rows="2">${esc(b.note)}</textarea></label><div id="bmRes"></div>
+    <div style="display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap">${bid?`<button class="btn" id="bmDel" style="margin-right:auto">Удалить</button>`:""}<button class="btn" data-close>Закрыть</button><button class="btn lime" id="bmSave">Сохранить</button></div></div></div>`);
+  $("#bmSave").addEventListener("click",()=>boardSave(false));if(bid)$("#bmDel").addEventListener("click",()=>boardSave(true));}
+async function boardSave(del){if(!BM||BM.busy)return;BM.busy=true;
+  if(del&&!confirm("Удалить карточку водителя?")){BM.busy=false;return;}
+  const data={};document.querySelectorAll("#layer [data-b]").forEach(el=>{data[el.dataset.b]=el.value.trim();});
+  try{const url=BM.id?`/api/v4/board/${BM.id}${del?"/delete":""}`:"/api/v4/board";const {data:r}=await opPost(url,{data});
+    if(!r.ok)throw new Error(r.message||"Ошибка");await boardLoad(true);closeLayer();VIEWS.drivers();toast(r.message||"Сохранено");}
+  catch(e){$("#bmRes").innerHTML=`<div class="note warn">${esc(e.message)}</div>`;}BM.busy=false;}
 VIEWS.repairs=async function(){shell("Ремонты");try{if(!REP)REP=await once("/api/v4/repairs");}catch(e){if(onView("repairs"))failed("Ремонты",e);return;}
   if(!onView("repairs"))return;
   const parts=REP.parts.filter(p=>!rf||p.car===rf),exp=REP.expenses.filter(x=>!rf||x.car===rf);
@@ -1068,7 +1137,7 @@ const SOON={task:"Создание задачи — в FleetAI",repair:"План
 document.addEventListener("click",e=>{const t=e.target;
   if(t.closest("[data-close]")){closeLayer();return;}
   if(t.closest("[data-back]")){payModal(draft.kind);return;}
-  const act=t.closest("[data-act]");if(act){const a=act.dataset.act,cp=act.dataset.carPay||"";if(a==="pay"||a==="expense"){cmdFocus(cp.replace(/^V-/,""));return;}toast(SOON[a]||"Действие доступно в FleetAI");return;}
+  const act=t.closest("[data-act]");if(act){const a=act.dataset.act,cp=act.dataset.carPay||"";if(a==="pay"||a==="expense"){cmdFocus(cp.replace(/^V-/,""));return;}if(a==="driver"){boardModal(null);return;}toast(SOON[a]||"Действие доступно в FleetAI");return;}
   const x=t.closest("[data-x]");if(x){const xv=x.dataset.x;if(xv==="op"){cmdFocus("");return;}if(xv==="logout"){fetch("/logout",{method:"POST",credentials:"same-origin",headers:{"X-CSRF":CSRF}}).finally(()=>location.href="/login");return;}xv==="search"?palette():cycleTheme();return;}
   const mc=t.closest("[data-city]");if(mc){goCity(mc.dataset.city);return;}
   const mz=t.closest("[data-mz]");if(mz){const m=mz.dataset.mz;m==="fit"?fitAll():zoomAt(m==="in"?1/1.4:1.4);return;}
@@ -1079,6 +1148,8 @@ document.addEventListener("click",e=>{const t=e.target;
   const ct=t.closest("[data-ctab]");if(ct){carDrawer(ct.dataset.cid,ct.dataset.ctab);return;}
   const drv=t.closest("[data-drv]");if(drv){drvDrawer(drv.dataset.drv);return;}
   const car=t.closest("[data-car]");if(car){carDrawer(car.dataset.car);return;}
+  const bc=t.closest("[data-bcard]");if(bc){boardModal(bc.dataset.bcard);return;}
+  const oe=t.closest("[data-ope]");if(oe){opeModal(oe.dataset.ope,oe.dataset.opw);return;}
   const an=t.closest("[data-actn]");if(an){actModal(an.dataset.actn,an.dataset.acar||"");return;}
   const cc=t.closest("[data-cmdcar]");if(cc){closeLayer();cmdFocus(cc.dataset.cmdcar);return;}
   const fp=t.closest("[data-finp]");if(fp){FINP=fp.dataset.finp;route();return;}

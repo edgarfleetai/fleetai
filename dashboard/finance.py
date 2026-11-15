@@ -97,7 +97,7 @@ def journal(engine, days=90, now=None):
     since = now - timedelta(days=days)
     with engine.connect() as conn:
         ops = conn.execute(text(
-            "SELECT id, date, car_code, type, category, description, amount FROM operations "
+            "SELECT id, date, car_code, type, category, description, amount, raw_message FROM operations "
             "WHERE date >= :since ORDER BY date DESC, id DESC LIMIT 1000"), {"since": since}).mappings().all()
     out = []
     for o in ops:
@@ -110,6 +110,10 @@ def journal(engine, days=90, now=None):
             "type": o["type"] or "", "label": label, "dir": direction,
             "category": o["category"] or "", "description": (o["description"] or "")[:300],
             "amount": _k(o["amount"]),
+            "raw": (o["raw_message"] or "")[:500],
+            "topup": "[DRIVER_TOPUP:" in (o["raw_message"] or ""),
+            "edit": ("inplace" if (o["type"] or "") in ("repair", "service", "expense") else
+                     "topup" if "[DRIVER_TOPUP:" in (o["raw_message"] or "") else "replace"),
         })
     return {"days": days, "operations": out}
 

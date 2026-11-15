@@ -405,3 +405,60 @@ def test_preview_marks_income_from_driver(ops_dash):
                 json={'message': '621 получил 13000 / 897 получил 5000 / 621 мойка 500'}).get_json()
     drivers = [i['driver'] for i in pv['items']]
     assert drivers == ['Сергей', '', '']     # only income on a car with a driver
+
+
+def op_change(c, h, op_id, what, data, key):
+    return c.post(f'/api/v4/op/{op_id}/{what}', base_url=BASE, headers=h, json={'key': key, 'data': data})
+
+
+def test_edit_and_delete_operations(fin_dash):
+    from dashboard.app import create_app
+    app = create_app({'TESTING': True, 'SECRET_KEY': 'x' * 40, 'DATABASE_URL': fin_dash.engine_url,
+                      'PUBLIC_URL': BASE, 'WIALON_FETCH': lambda: ([], None)})
+    c = app.test_client()
+    assert op_change(c, {}, 2, 'delete', {}, 'del-key-00000001').status_code == 401
+    login(c)
+    h = csrf_headers(c)
+    eng = create_engine(fin_dash.engine_url)
+    q = lambda sql: eng.connect().execute(text(sql)).scalar()
+    # repair edited in place (same operation id)
+    r = op_change(c, h, 2, 'edit', {'message': '621 ремонт колодки 3000'}, 'edit-key-0000001')
+    assert r.status_code == 200, r.get_json()
+    assert q("SELECT amount FROM expenses WHERE operation_id = 2") == 3000
+    # income replaced: new record saved, old one removed
+    r = op_change(c, h, 1, 'edit', {'message': '621 получил 14000'}, 'edit-key-0000002')
+    assert r.status_code == 200, r.get_json()
+    assert q("SELECT count(*) FROM operations WHERE id = 1") == 0
+    assert q("SELECT sum(amount) FROM income WHERE car_code = '621'") == 14000
+    # driver top-up deleted: income and wallet both go back
+    act(c, h, 'topup', {'car_code': '621', 'amount': 5000, 'payment_method': 'cash'}, 'topup-for-delete1')
+    top_id = q("SELECT id FROM operations WHERE raw_message LIKE '%DRIVER_TOPUP%'")
+    assert q("SELECT sum(amount) FROM driver_wallet_transactions WHERE car_code = '621'") == 5000
+    r = op_change(c, h, top_id, 'delete', {}, 'del-key-00000002')
+    assert r.status_code == 200, r.get_json()
+    assert q("SELECT sum(amount) FROM driver_wallet_transactions WHERE car_code = '621'") == 0
+    assert q(f"SELECT count(*) FROM income WHERE operation_id = {top_id}") == 0
+    assert op_change(c, h, 99999, 'delete', {}, 'del-key-00000003').status_code == 404
+
+
+def test_driver_board_cards(fin_dash):
+    from dashboard.app import create_app
+    app = create_app({'TESTING': True, 'SECRET_KEY': 'x' * 40, 'DATABASE_URL': fin_dash.engine_url,
+                      'PUBLIC_URL': BASE, 'WIALON_FETCH': lambda: ([], None)})
+    c = app.test_client()
+    assert c.post('/api/v4/board', base_url=BASE, json={'data': {'name': 'Иван'}}).status_code == 401
+    login(c)
+    h = csrf_headers(c)
+    assert c.get('/api/v4/board', base_url=BASE).get_json()['cards'] == []
+    r = c.post('/api/v4/board', base_url=BASE, headers=h, json={'data': {'name': 'Иван', 'phone': '+7900', 'car_code': '897'}})
+    card_id = r.get_json()['id']
+    assert r.status_code == 200
+    assert c.post(f'/api/v4/board/{card_id}', base_url=BASE, headers=h, json={'data': {'stage': 'contract'}}).status_code == 200
+    assert c.post(f'/api/v4/board/{card_id}', base_url=BASE, headers=h, json={'data': {'stage': 'rent'}}).status_code == 400
+    assert c.post('/api/v4/board', base_url=BASE, headers=h, json={'data': {'name': ''}}).status_code == 400
+    cards = c.get('/api/v4/board', base_url=BASE).get_json()['cards']
+    assert [(x['name'], x['stage'], x['car_code']) for x in cards] == [('Иван', 'contract', '897')]
+    assert c.post(f'/api/v4/board/{card_id}/delete', base_url=BASE, headers=h, json={}).status_code == 200
+    assert c.get('/api/v4/board', base_url=BASE).get_json()['cards'] == []
+    with create_engine(fin_dash.engine_url).connect() as conn:   # old tables untouched
+        assert conn.execute(text("SELECT count(*) FROM cars")).scalar() == 2
