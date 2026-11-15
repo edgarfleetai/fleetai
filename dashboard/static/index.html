@@ -935,8 +935,7 @@ async function actGo(){if(!ACT||ACT.busy)return;const a=ACTS[ACT.name];
     ACT.data=d;$("#actPv").innerHTML=`<div class="note">${a.s(ACT.c,d)}</div><div style="color:var(--muted);font-size:12.5px">Всё верно? Нажмите «Подтвердить».</div>`;$("#actGo").textContent="Подтвердить";return;}
   ACT.busy=true;$("#actGo").textContent="Сохраняю…";
   const payload=Object.assign({},ACT.data,(ACT.c.code&&ACT.name!=="add_car")?{car_code:ACT.c.code}:{});
-  try{const r=await fetch("/api/v4/act/"+ACT.name,{method:"POST",credentials:"same-origin",headers:{"Content-Type":"application/json","X-CSRF":CSRF},body:JSON.stringify({key:ACT.key,data:payload})});
-    if(r.status===401){location.href="/login";return;}const b=await r.json().catch(()=>({}));
+  try{const {data:b}=await opPost("/api/v4/act/"+ACT.name,{key:ACT.key,data:payload});
     ACT.res=b;$("#actPv").innerHTML=`<div class="note ${b.ok?"":"warn"}">${b.ok?"✓":"✕"} ${esc(b.message||(b.ok?"Готово":"Ошибка"))}</div>`;
     if(b.ok){FIN=null;JRN=null;REP=null;RENT=null;try{const f=await getJSON("/api/v4/fleet");cars=f.cars;drivers=f.drivers;}catch(_){}$("#actGo").textContent="Готово";OPD.res=[{ok:true}];}
     else{ACT.data=null;$("#actGo").textContent="Далее";}}
