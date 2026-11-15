@@ -167,3 +167,66 @@ def test_267_in_database_is_personal_use(dash):
     cars = {x['code']: x for x in c.get('/api/v4/fleet', base_url=BASE).get_json()['cars']}
     assert cars['267']['status'] == 'personal' and cars['267'].get('in_db', True) is True
     assert cars['267']['plates'] == ['С665ХК716', 'Х267СО716']
+
+
+@pytest.fixture
+def fin_dash(tmp_path):
+    from datetime import datetime
+    from fleetai.models import Base
+    url = 'sqlite:///' + str(tmp_path / 'fin.sqlite')
+    eng = create_engine(url)
+    Base.metadata.create_all(eng)
+    with eng.begin() as c:
+        c.execute(text("CREATE TABLE IF NOT EXISTS auth_owners (id INTEGER PRIMARY KEY, username TEXT, password_hash TEXT)"))
+        c.execute(text("INSERT INTO auth_owners VALUES (1, 'owner', :h)"),
+                  {'h': generate_password_hash(PASSWORD, method='pbkdf2:sha256:1000')})
+        c.execute(text("""INSERT INTO cars (id, code, brand, model, plate, status, driver, owner_type, investor_name,
+            investor_percent, settlement_day) VALUES
+            (1,'621','Hyundai','Solaris','Т621СУ716','Работает','Сергей','investor','илья',75,15),
+            (2,'897','Kia','Rio','К897УР716','Работает','Иван','own','',0,15)"""))
+        now = datetime.now()
+        c.execute(text("INSERT INTO operations (id, date, car_code, type, category, description, amount) VALUES "
+                       "(1, :d, '621', 'income', 'Аренда', 'оплата', 13000), (2, :d, '621', 'repair', 'Ремонт', 'колодки', 2000)"),
+                  {'d': now})
+        c.execute(text("INSERT INTO income (operation_id, car_code, date, amount, income_type) VALUES (1, '621', :d, 13000, 'rent')"), {'d': now})
+        c.execute(text("INSERT INTO expenses (operation_id, car_code, date, category, amount, share_type) VALUES (2, '621', :d, 'Ремонт', 2000, 'shared')"), {'d': now})
+    from dashboard.app import create_app
+    app = create_app({'TESTING': True, 'SECRET_KEY': 'x' * 40, 'DATABASE_URL': url, 'PUBLIC_URL': BASE,
+                      'WIALON_FETCH': lambda: ([], None)})
+    app.engine_url = url
+    return app
+
+
+def test_finance_matches_old_fleetai_calculation(fin_dash):
+    from sqlalchemy.orm import Session
+    from fleetai.finance import calculate_period_for_car, period_bounds_for_car
+    from fleetai.models import Car
+    c = fin_dash.test_client()
+    assert c.get('/api/v4/finance', base_url=BASE).status_code == 401
+    login(c)
+    data = c.get('/api/v4/finance', base_url=BASE).get_json()
+    row = {x['code']: x for x in data['cars']}['621']
+    with Session(create_engine(fin_dash.engine_url)) as s:
+        car = s.query(Car).filter_by(code='621').one()
+        calc = calculate_period_for_car(s, car, *period_bounds_for_car(car))
+    assert row['income'] == calc['income'] * 100 == 1_300_000
+    assert row['expenses'] == calc['expenses'] * 100 == 200_000
+    assert row['investor_amount'] == calc['investor_amount'] * 100
+    assert row['gps'] == 50_000 and row['garage'] in (150_000,) and row['recurring_booked'] is False
+
+
+def test_journal_and_repairs(fin_dash):
+    c = fin_dash.test_client()
+    login(c)
+    ops = c.get('/api/v4/journal?days=30', base_url=BASE).get_json()['operations']
+    assert [(o['label'], o['dir'], o['amount']) for o in ops][:2] in (
+        [('Доход', 'in', 1_300_000), ('Ремонт', 'out', 200_000)], [('Ремонт', 'out', 200_000), ('Доход', 'in', 1_300_000)])
+    rep = c.get('/api/v4/repairs', base_url=BASE).get_json()
+    assert rep['expenses'][0]['amount'] == 200_000 and rep['expenses'][0]['description'] == 'колодки'
+
+
+def test_finance_module_has_no_write_sql():
+    import inspect
+    import dashboard.finance as f
+    src = inspect.getsource(f).upper()
+    assert not re.search(r'\b(INSERT|UPDATE|DELETE|ALTER|DROP|CREATE TABLE|COMMIT)\b', src)

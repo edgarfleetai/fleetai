@@ -489,7 +489,7 @@ VIEWS.home=function(){const k=kpis();const segs=[["rented",k.rented],["free",k.f
       <div class="list"><div class="row"><i class="dotx" style="background:var(--s1)"></i><div class="t"><div>С трекером Wialon</div><div>${cars.filter(c=>WUNITS.some(u=>u.car===c.id)).map(c=>c.code).join(", ")||(posError?esc(posError):"загрузка…")}</div></div><span class="amt num">${withT}</span></div>
       <div class="row"><i class="dotx" style="background:var(--faint)"></i><div class="t"><div>Без трекера</div><div>${cars.filter(c=>!WUNITS.some(u=>u.car===c.id)).map(c=>c.code).join(", ")}</div></div><span class="amt num">${k.total-withT}</span></div></div></section>
   </div>
-  <section class="panel glass"><div class="pbody" style="padding-top:16px"><div class="note">Поступления, долги водителей, журнал операций и расчёт инвесторов подключаются на следующем этапе — их цифры будут сверены со старым FleetAI перед показом.</div></div></section>`;};
+  <section class="panel glass"><div class="pbody" style="padding-top:16px"><div class="note">Доходы, расходы, журнал операций и расчёт инвесторов — в разделах «Финансы» и «Инвесторы». Баланс аренды водителей подключается следующим этапом.</div></div></section>`;};
 
 let carFilter="all",carQuery="",carView="grid";
 VIEWS.cars=function(){const k=kpis();const counts=st=>cars.filter(c=>st==="all"||c.status===st).length;
@@ -748,7 +748,79 @@ VIEWS.monitor=function(){
   wireMap();if(!monTimer)monTimer=setInterval(loadPos,30000);
   $("#monQ").addEventListener("input",e=>{monQ=e.target.value;const p=e.target.selectionStart;VIEWS.monitor();const n=$("#monQ");n.focus();n.setSelectionRange(p,p);});};
 const LATER=t=>function(){$("#page").innerHTML=`<div class="phead"><h1><span>${t}</span></h1></div><section class="panel glass"><div class="empty"><h2>Раздел подключается</h2><span>Данные возьмём из базы FleetAI и перед показом сверим со старым FleetAI. Тестовых цифр здесь нет.</span></div></section>`;};
-VIEWS.finance=LATER("Финансы");VIEWS.investors=LATER("Инвесторы");VIEWS.repairs=LATER("Ремонты");
+/* ===== Финансы, инвесторы, ремонты: реальные данные (те же расчёты, что в FleetAI) ===== */
+let FIN=null,FINP="current",JRN=null,REP=null,jf={car:"",dir:""},rf="";
+const AGREED={ilya:75,ravshan:70,mark:75};
+async function getJSON(u){const r=await fetch(u,{credentials:"same-origin",cache:"no-store"});if(r.status===401){location.href="/login";throw new Error("401");}if(!r.ok)throw new Error("HTTP "+r.status);return r.json();}
+const onView=v=>(location.hash||"#home").slice(1)===v;
+const d2=s=>{if(!s)return"—";const m=String(s).match(/^(\d{4})-(\d{2})-(\d{2})/);return m?`${m[3]}.${m[2]}.${m[1]}`:esc(s);};
+const money=(k,cls)=>`<span class="num ${cls||(k<0?"out":"")}">${rub(k)}</span>`;
+function shell(t,body){$("#page").innerHTML=`<div class="phead"><h1><span>${t}</span></h1>${body||""}</div><section class="panel glass"><div class="empty"><h2>Загрузка…</h2><span>Считаем так же, как старый FleetAI.</span></div></section>`;}
+function failed(t,e){$("#page").innerHTML=`<div class="phead"><h1><span>${t}</span></h1></div><section class="panel glass"><div class="empty"><h2>Не удалось загрузить</h2><span>${esc(e&&e.message||"")}. Обновите страницу.</span></div></section>`;}
+async function needFin(){if(!FIN||FIN.period!==FINP)FIN=await getJSON("/api/v4/finance?period="+FINP);return FIN;}
+const perSeg=()=>`<div class="seg" role="group" aria-label="Период">${[["current","Текущий период"],["previous","Прошлый период"]].map(([k,l])=>`<button class="${FINP===k?"on":""}" data-finp="${k}">${l}</button>`).join("")}</div>`;
+const perLabel=r=>r.length?`${d2(r[0].period_start)} — ${d2(r[0].period_end)}`:"";
+const carLabel=code=>{const c=cars.find(x=>x.code===code);return c?`${esc(code)} · ${esc(c.model)}`:esc(code||"—");};
+
+VIEWS.finance=async function(){shell("Финансы");try{await needFin();if(!JRN)JRN=await getJSON("/api/v4/journal?days=90");}catch(e){if(onView("finance"))failed("Финансы",e);return;}
+  if(!onView("finance"))return;
+  const r=FIN.cars,t=k=>sum(r,x=>x[k]);
+  const ops=JRN.operations.filter(o=>(!jf.car||o.car===jf.car)&&(!jf.dir||o.dir===jf.dir));
+  const codes=[...new Set(JRN.operations.map(o=>o.car).filter(Boolean))].sort();
+  $("#page").innerHTML=`
+  <div class="phead"><h1><span>Финансы</span></h1>${hstat("coin",rubK(t("income")),"Доход за период")}${hstat("wrench",rubK(t("expenses")),"Расходы")}${hstat("check",rubK(t("profit")),"Прибыль")}
+    <div class="acts">${perSeg()}</div></div>
+  <section class="panel glass"><header><h2>По машинам</h2><span class="sub">период ${perLabel(r)}</span></header>
+    <div class="tbl-wrap"><table><thead><tr><th>Машина</th><th>Собственник</th><th class="r">Доход</th><th class="r">Расходы</th><th class="r">Прибыль</th><th class="r">Инвестору</th><th class="r">Парку</th><th class="r">Простой</th></tr></thead><tbody>
+    ${r.map(x=>`<tr data-car="V-${esc(x.code)}" tabindex="0" style="cursor:pointer"><td>${carLabel(x.code)}</td><td>${esc(owners[x.owner]?owners[x.owner][0]:x.owner)}</td><td class="r">${money(x.income,"in")}</td><td class="r">${money(-x.expenses)}</td><td class="r">${money(x.profit)}</td><td class="r">${x.owner_type==="investor"?money(x.investor_amount):"—"}</td><td class="r">${money(x.owner_amount)}</td><td class="r num">${x.downtime_days?x.downtime_days+" дн":"—"}</td></tr>`).join("")}
+    <tr><td><b>Итого</b></td><td></td><td class="r"><b>${money(t("income"),"in")}</b></td><td class="r"><b>${money(-t("expenses"))}</b></td><td class="r"><b>${money(t("profit"))}</b></td><td class="r"><b>${money(sum(r.filter(x=>x.owner_type==="investor"),x=>x.investor_amount))}</b></td><td class="r"><b>${money(t("owner_amount"))}</b></td><td></td></tr>
+    </tbody></table></div></section>
+  <section class="panel glass"><header><h2>Журнал операций</h2><span class="sub">последние ${JRN.days} дней · ${ops.length}</span>
+    <div class="r" style="display:flex;gap:8px;flex-wrap:wrap"><div class="seg" role="group" aria-label="Тип">${[["","Все"],["in","Доходы"],["out","Расходы"],["info","Прочее"]].map(([k,l])=>`<button class="${jf.dir===k?"on":""}" data-jdir="${k}">${l}</button>`).join("")}</div>
+    <select id="jcar" aria-label="Машина" style="font:inherit;color:var(--fg);background:var(--glass-2);border:1px solid var(--stroke-2);border-radius:99px;padding:6px 10px"><option value="">Все машины</option>${codes.map(c=>`<option ${jf.car===c?"selected":""}>${esc(c)}</option>`).join("")}</select></div></header>
+    <div class="tbl-wrap"><table><thead><tr><th>Дата</th><th>Машина</th><th>Операция</th><th>Категория</th><th>Описание</th><th class="r">Сумма</th></tr></thead><tbody>
+    ${ops.slice(0,300).map(o=>`<tr><td class="num">${d2(o.date)}</td><td>${esc(o.car||"—")}${o.car_raw&&o.car_raw!==o.car?` <span class="tag t-mute">${esc(o.car_raw)}</span>`:""}</td><td>${esc(o.label)}</td><td>${esc(o.category)}</td><td style="max-width:360px;white-space:normal;color:var(--muted)">${esc(o.description)}</td><td class="r">${o.dir==="info"?(o.amount?money(o.amount,""):"—"):money(o.dir==="out"?-o.amount:o.amount,o.dir==="in"?"in":"")}</td></tr>`).join("")||`<tr><td colspan="6" style="color:var(--muted)">Операций нет</td></tr>`}
+    </tbody></table></div></section>
+  <section class="panel glass"><div class="pbody" style="padding-top:16px"><div class="note">Доходы, расходы и доли считаются той же функцией, что и в старом FleetAI (расчётный период с 16-го по 15-е), поэтому цифры совпадают. Записи старой машины 119 показаны под 665.</div></div></section>`;
+  $("#jcar").addEventListener("change",e=>{jf.car=e.target.value;VIEWS.finance();});};
+
+VIEWS.investors=async function(){shell("Инвесторы");try{await needFin();}catch(e){if(onView("investors"))failed("Инвесторы",e);return;}
+  if(!onView("investors"))return;
+  const r=FIN.cars;
+  const card=key=>{const rows=r.filter(x=>x.owner===key);if(!rows.length)return"";
+    const ded=x=>x.recurring_booked?0:x.gps+x.garage;
+    const sumk=k=>sum(rows,x=>x[k]),dedT=sum(rows,ded);
+    const pay=sumk("available_to_pay"),payAdj=pay-dedT;
+    const issues=rows.flatMap(x=>{const out=[];if(x.owner_type!=="investor")out.push(`${x.code}: в базе машина записана как своя — FleetAI не начисляет инвестору долю. Нужно исправить тип в базе.`);
+      if(AGREED[key]&&x.investor_percent!==AGREED[key])out.push(`${x.code}: в базе ${x.investor_percent}%, по договорённости ${AGREED[key]}%.`);return out;});
+    return `<section class="panel glass"><header><h2>${oav(key)} ${esc(owners[key][0])}</h2><span class="sub">${rows.length} маш. · договорённость ${AGREED[key]||"—"}% · период ${perLabel(rows)}</span></header>
+    ${issues.length?`<div class="pbody">${issues.map(s=>`<div class="note warn">${esc(s)}</div>`).join("")}</div>`:""}
+    <div class="tbl-wrap"><table><thead><tr><th>Машина</th><th class="r">Доход</th><th class="r">Расходы</th><th class="r">Начислено</th><th class="r">Выплачено</th><th class="r">К выплате (FleetAI)</th><th class="r">GPS + гараж</th><th class="r">С учётом GPS и гаража</th></tr></thead><tbody>
+    ${rows.map(x=>`<tr><td>${carLabel(x.code)} <span class="tag t-mute">${x.investor_percent}%</span></td><td class="r">${money(x.income,"in")}</td><td class="r">${money(-x.expenses)}</td><td class="r">${money(x.accrued_to_investor)}</td><td class="r">${money(x.payouts_in_period)}</td><td class="r">${money(x.available_to_pay)}</td><td class="r">${x.recurring_booked?`<span class="tag t-mute">уже в расходах</span>`:money(-ded(x))}</td><td class="r"><b>${money(x.available_to_pay-ded(x))}</b></td></tr>`).join("")}
+    <tr><td><b>Итого</b></td><td class="r"><b>${money(sumk("income"),"in")}</b></td><td class="r"><b>${money(-sumk("expenses"))}</b></td><td class="r"><b>${money(sumk("accrued_to_investor"))}</b></td><td class="r"><b>${money(sumk("payouts_in_period"))}</b></td><td class="r"><b>${money(pay)}</b></td><td class="r"><b>${money(-dedT)}</b></td><td class="r"><b>${money(payAdj)}</b></td></tr>
+    </tbody></table></div>
+    ${sumk("investor_debt_to_park")||sumk("park_debt_to_investor")?`<div class="pbody"><div class="note">Долг инвестора парку: <b>${rub(sumk("investor_debt_to_park"))}</b> · долг парка инвестору: <b>${rub(sumk("park_debt_to_investor"))}</b></div></div>`:""}</section>`;};
+  $("#page").innerHTML=`<div class="phead"><h1><span>Инвесторы</span></h1><div class="acts">${perSeg()}</div></div>
+    ${["ilya","ravshan","mark"].map(card).join("")}
+    <section class="panel glass"><div class="pbody" style="padding-top:16px"><div class="note">«К выплате (FleetAI)» — та же сумма, что считает старый FleetAI. Колонка «С учётом GPS и гаража» вычитает вашу договорённость: GPS 500 ₽ за машину и гараж 3 000 ₽ в месяц на все машины поровну. Если такой расход уже внесён в FleetAI за этот период, он не вычитается второй раз.</div></div></section>`;};
+
+VIEWS.repairs=async function(){shell("Ремонты");try{if(!REP)REP=await getJSON("/api/v4/repairs");}catch(e){if(onView("repairs"))failed("Ремонты",e);return;}
+  if(!onView("repairs"))return;
+  const parts=REP.parts.filter(p=>!rf||p.car===rf),exp=REP.expenses.filter(x=>!rf||x.car===rf);
+  const codes=[...new Set([...REP.parts,...REP.expenses].map(x=>x.car).filter(Boolean))].sort();
+  $("#page").innerHTML=`
+  <div class="phead"><h1><span>Ремонты и расходы</span></h1>${hstat("wrench",rubK(sum(parts,p=>p.price+p.labor)),"Запчасти и работа")}${hstat("coin",rubK(sum(exp,x=>x.amount)),"Все расходы")}
+    <div class="acts"><select id="rcar" aria-label="Машина" style="font:inherit;color:var(--fg);background:var(--glass-2);border:1px solid var(--stroke-2);border-radius:99px;padding:6px 10px"><option value="">Все машины</option>${codes.map(c=>`<option ${rf===c?"selected":""}>${esc(c)}</option>`).join("")}</select></div></div>
+  <section class="panel glass"><header><h2>Запчасти</h2><span class="sub">последние ${REP.days} дней · ${parts.length}</span></header>
+    <div class="tbl-wrap"><table><thead><tr><th>Дата</th><th>Машина</th><th>Запчасть</th><th>Статус</th><th class="r">Цена</th><th class="r">Работа</th></tr></thead><tbody>
+    ${parts.map(p=>`<tr><td class="num">${d2(p.date)}</td><td>${esc(p.car)}</td><td>${esc([p.name,p.brand,p.position].filter(Boolean).join(" · "))}</td><td>${esc(p.status)}</td><td class="r">${money(-p.price)}</td><td class="r">${p.labor?money(-p.labor):"—"}</td></tr>`).join("")||`<tr><td colspan="6" style="color:var(--muted)">Нет записей</td></tr>`}
+    </tbody></table></div></section>
+  <section class="panel glass"><header><h2>Расходы</h2><span class="sub">последние ${REP.days} дней · ${exp.length}</span></header>
+    <div class="tbl-wrap"><table><thead><tr><th>Дата</th><th>Машина</th><th>Категория</th><th>Описание</th><th class="r">Сумма</th></tr></thead><tbody>
+    ${exp.map(x=>`<tr><td class="num">${d2(x.date)}</td><td>${esc(x.car)}</td><td>${esc(x.category)}</td><td style="max-width:380px;white-space:normal;color:var(--muted)">${esc(x.description)}</td><td class="r">${money(-x.amount)}</td></tr>`).join("")||`<tr><td colspan="5" style="color:var(--muted)">Нет записей</td></tr>`}
+    </tbody></table></div></section>`;
+  $("#rcar").addEventListener("change",e=>{rf=e.target.value;VIEWS.repairs();});};
+
 const STUB={rent:["Аренда",["Активные аренды с условиями и датами действия","Индивидуальные графики (3×800 ₽, затем 1 857 ₽/сут)","Паузы, отсрочки, переплаты","Смена водителя: закрытие аренды по дате с фиксацией баланса"]],
  contracts:["Договоры",["Шаблоны и версии","Создание из карточки водителя","Отправка в Telegram со статусом доставки и повторной отправкой","Архив подписанных"]],
  tasks:["Задачи",["Ответственный, срок, статус","Связь с машиной, водителем, ремонтом","История выполнения"]],
@@ -834,6 +906,8 @@ document.addEventListener("click",e=>{const t=e.target;
   const ct=t.closest("[data-ctab]");if(ct){carDrawer(ct.dataset.cid,ct.dataset.ctab);return;}
   const drv=t.closest("[data-drv]");if(drv){drvDrawer(drv.dataset.drv);return;}
   const car=t.closest("[data-car]");if(car){carDrawer(car.dataset.car);return;}
+  const fp=t.closest("[data-finp]");if(fp){FINP=fp.dataset.finp;route();return;}
+  const jd=t.closest("[data-jdir]");if(jd){jf.dir=jd.dataset.jdir;VIEWS.finance();return;}
   const cf=t.closest("[data-cf]");if(cf){carFilter=cf.dataset.cf;if(cf.dataset.reset)carQuery="";VIEWS.cars();return;}
   const cv=t.closest("[data-cv]");if(cv){carView=cv.dataset.cv;VIEWS.cars();return;}
   const go=t.closest("[data-go]");if(go){location.hash="#"+go.dataset.go;return;}
