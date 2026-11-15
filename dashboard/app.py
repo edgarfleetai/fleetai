@@ -345,7 +345,11 @@ def create_app(config=None):
         units, _ = wialon_fetch()
         cars_now = data.load_fleet(engine)["cars"]
         by_car = {u["car_code"]: u["id"] for u in data.match_units_to_cars(units, cars_now) if u.get("car_code")}
-        return service.overview(engine, by_car, odo_fetch)
+        write_engine = None
+        if writes_enabled and not ops_save:
+            from fleetai import db as fleet_db
+            write_engine = fleet_db.engine
+        return service.overview(engine, by_car, odo_fetch, write_engine=write_engine)
 
     @app.get("/api/v4/service")
     def service_view():

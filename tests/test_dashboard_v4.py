@@ -481,16 +481,16 @@ def test_service_overview_oil_reminders(fin_dash):
     with eng.begin() as c:
         c.execute(text("UPDATE cars SET current_mileage = 150000 WHERE code IN ('621','897')"))
         c.execute(text("INSERT INTO operations (id, date, car_code, type, category, description, amount, raw_message, mileage) "
-                       "VALUES (10, :d, '621', 'service', 'ТО', 'замена масла', 2500, '621 замена масла 2500 пробег 137500', 137500), "
+                       "VALUES (10, :d, '621', 'service', 'ТО', 'замена масла', 2500, '621 замена масла 2500', NULL), "
                        "(11, :d, '897', 'service', 'ТО', 'замена масла', 2500, '897 замена масла 2500', NULL)"),
                   {'d': datetime.now() - timedelta(days=60)})
         c.execute(text("INSERT INTO mileage (car_code, date, mileage, source) VALUES ('897', :d1, 140000, 'пробег'), ('897', :d2, 151000, 'пробег')"),
                   {'d1': datetime.now() - timedelta(days=61), 'd2': datetime.now() - timedelta(days=1)})
 
     def fake_odo(moments):
-        assert set(moments) == {50496}
+        assert set(moments) == {50496} and set(moments[50496]) == {'day', 'month', 'oil'}
         return {50496: {'name': 'Hyundai А621СУ 716', 'counter_km': None, 'param_now': 152_000_000.0,
-                        'at': {'day': 151_800_000.0, 'month': 150_000_000.0}}}, None
+                        'at': {'day': 151_800_000.0, 'month': 150_000_000.0, 'oil': 137_500_000.0}}}, None
 
     from dashboard.app import create_app
     app = create_app({'TESTING': True, 'SECRET_KEY': 'x' * 40, 'DATABASE_URL': fin_dash.engine_url, 'PUBLIC_URL': BASE,
@@ -503,7 +503,38 @@ def test_service_overview_oil_reminders(fin_dash):
     data = c.get('/api/v4/service', base_url=BASE).get_json()
     cars = {x['code']: x for x in data['cars']}
     assert cars['621']['odometer_km'] == 152_000 and cars['621']['source'] == 'tracker'
-    assert cars['621']['today_km'] == 200 and cars['621']['month_km'] == 2000
+    assert cars['621']['today_km'] == 200
     assert cars['621']['oil']['since_km'] == 14_500 and cars['621']['oil']['status'] == 'soon'
     assert cars['897']['source'] == 'fleetai' and cars['897']['oil']['since_km'] == 11_000
     assert [t['car'] for t in data['tasks']] == ['621'] and 'через 500 км' in data['tasks'][0]['title']
+
+
+def test_implausible_distance_and_counter_trackers(fin_dash):
+    from dashboard.service import _distance
+    assert _distance(218_104, 201_916, 16) == 16_188          # spread over 16 days: allowed
+    assert _distance(218_104, 201_916, 1) is None              # in one day: impossible
+    assert _distance(100, 200, 5) is None                      # odometer went back
+    eng = create_engine(fin_dash.engine_url)
+    with eng.begin() as conn:
+        conn.execute(text("UPDATE cars SET current_mileage = 240000 WHERE code = '621'"))
+
+    def counter_only(moments):
+        return {50496: {'name': 'Hyundai А621СУ 716', 'counter_km': 115_074, 'param_now': None, 'at': {}}}, None
+    from dashboard.app import create_app
+    app = create_app({'TESTING': True, 'SECRET_KEY': 'x' * 40, 'DATABASE_URL': fin_dash.engine_url, 'PUBLIC_URL': BASE,
+                      'WIALON_FETCH': lambda: ([{'id': 50496, 'name': 'Hyundai А621СУ 716', 'lat': 1, 'lon': 1,
+                                                 'speed_kmh': 0, 'course': 0, 'time': 1}], None),
+                      'ODO_FETCH': counter_only})
+    c = app.test_client()
+    login(c)
+    car = {x['code']: x for x in c.get('/api/v4/service', base_url=BASE).get_json()['cars']}['621']
+    # the Wialon counter is not the real odometer: the FleetAI value is shown, nothing is mixed
+    assert car['odometer_km'] == 240_000 and car['tracker'] == 'counter' and car['source'] == 'fleetai'
+    with eng.connect() as conn:   # the reading was recorded for future day/month distances
+        assert conn.execute(text("SELECT count(*) FROM dashboard_odometer_log WHERE car_code = '621'")).scalar() == 1
+
+
+def test_wialon_batch_only_reads():
+    from dashboard import wialon
+    with pytest.raises(ValueError):
+        wialon._call('core/batch', {'params': [{'svc': 'unit/exec_cmd', 'params': {}}]})

@@ -8,12 +8,15 @@ import os
 
 import requests
 
-ALLOWED_SERVICES = frozenset({"token/login", "core/search_items", "messages/load_last"})
+ALLOWED_SERVICES = frozenset({"token/login", "core/search_items", "messages/load_last", "core/batch"})
+BATCH_ALLOWED = frozenset({"messages/load_last", "core/search_items"})
 
 
 def _call(svc, params, sid=None):
     if svc not in ALLOWED_SERVICES:
         raise ValueError("Wialon service not allowed in the dashboard: " + svc)
+    if svc == "core/batch" and any(x.get("svc") not in BATCH_ALLOWED for x in params.get("params", [])):
+        raise ValueError("Wialon batch may contain only read services")
     base = os.environ.get("WIALON_BASE_URL", "https://wialonreg.ru").rstrip("/")
     url = os.environ.get("WIALON_API_URL", base + "/wialon/ajax.html")
     payload = {"svc": svc, "params": json.dumps(params, ensure_ascii=False)}
@@ -80,7 +83,8 @@ def odo_param(params):
 def fetch_odometers(moments, call=None):
     """Return ({unit_id: {name, counter_km, param_now, at: {label: param}}}, error).
 
-    moments: {label: unix_time} — e.g. start of day/month or a service date.
+    moments: {unit_id or "*": {label: unix_time}}. All history reads go in one
+    core/batch request (only read services inside, checked here).
     """
     call = call or _call
     token = (os.environ.get("WIALON_TOKEN") or "").strip()
@@ -98,18 +102,23 @@ def fetch_odometers(moments, call=None):
         }, sid=sid)
         if not isinstance(found, dict) or found.get("error") is not None:
             return {}, "Wialon: ошибка поиска объектов"
-        out = {}
+        out, batch, slots = {}, [], []
         for item in found.get("items") or []:
             uid = item.get("id")
             lmsg = item.get("lmsg") or {}
-            entry = {"name": item.get("nm", ""), "counter_km": item.get("cnm"),
-                     "param_now": odo_param(lmsg.get("p")), "at": {}}
+            out[uid] = {"name": item.get("nm", ""), "counter_km": item.get("cnm"),
+                        "param_now": odo_param(lmsg.get("p")), "at": {}}
             for label, ts in (moments.get(uid) or moments.get("*") or {}).items():
-                res = call("messages/load_last", {"itemId": uid, "lastTime": int(ts), "lastCount": 1,
-                                                   "flags": 0, "flagsMask": 0, "loadCount": 1}, sid=sid)
-                msgs = (res or {}).get("messages") or [] if isinstance(res, dict) else []
-                entry["at"][label] = odo_param((msgs[0] or {}).get("p")) if msgs else None
-            out[uid] = entry
+                batch.append({"svc": "messages/load_last",
+                              "params": {"itemId": uid, "lastTime": int(ts), "lastCount": 1,
+                                         "flags": 0, "flagsMask": 0, "loadCount": 1}})
+                slots.append((uid, label))
+        if batch:
+            res = call("core/batch", {"params": batch, "flags": 0}, sid=sid)
+            res = res if isinstance(res, list) else []
+            for (uid, label), r in zip(slots, res):
+                msgs = (r or {}).get("messages") or [] if isinstance(r, dict) else []
+                out[uid]["at"][label] = odo_param((msgs[0] or {}).get("p")) if msgs else None
         return out, None
     except requests.RequestException:
         return {}, "Wialon недоступен"

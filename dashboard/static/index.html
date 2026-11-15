@@ -1054,9 +1054,9 @@ const km=v=>v==null?"—":Math.round(v).toLocaleString("ru-RU")+" км";
 const SRC={tracker:"трекер",wialon_counter:"счётчик Wialon",fleetai:"записи FleetAI"};
 const svcCar=code=>SVC&&SVC.cars.find(x=>x.code===code);
 function oilCell(o){if(!o)return `<span style="color:var(--muted)">замен масла в журнале нет</span>`;
-  if(o.since_km==null)return `<span style="color:var(--muted)">замена ${d2(o.date)}, пробег на момент замены неизвестен</span>`;
+  if(o.since_km==null)return `<span style="color:var(--muted)">замена ${d2(o.date)}: пока не по чему считать — внесите пробег («пробег 152000») или подождите, пока накопятся показания трекера</span>`;
   const cls=o.status==="overdue"?"t-bad":o.status==="soon"?"t-warn":"t-ok";
-  return `${tag(o.status==="overdue"?`просрочено на ${km(o.since_km-o.interval_km)}`:`через ${km(o.due_in_km)}`,cls)} <span style="color:var(--muted);font-size:12.5px">пройдено ${km(o.since_km)} из ${km(o.interval_km)} · замена ${d2(o.date)}</span>`;}
+  return `${tag(o.status==="overdue"?`просрочено на ${km(o.since_km-o.interval_km)}`:`через ${km(o.due_in_km)}`,cls)} <span style="color:var(--muted);font-size:12.5px">пройдено ${km(o.since_km)} из ${km(o.interval_km)} · замена ${d2(o.date)}${o.how?` · по ${esc(o.how)}`:""}</span>`;}
 VIEWS.tasks=async function(){shell("Задачи");try{await needSvc();}catch(e){if(onView("tasks"))failed("Задачи",e);return;}
   if(!onView("tasks"))return;
   const t=SVC.tasks,parts=SVC.parts;
@@ -1067,7 +1067,7 @@ VIEWS.tasks=async function(){shell("Задачи");try{await needSvc();}catch(e)
     <div class="list">${t.map(x=>`<button class="row" data-car="V-${esc(x.car)}"><i class="dotx" style="background:var(--${x.sev})"></i><div class="t"><div>${esc(x.title)}</div><div>${esc(x.detail)}</div></div></button>`).join("")||`<div class="empty"><h2>Всё в порядке</h2><span>Замены масла пока не подходят. Задача появится за ${km(1000)} до ${km(SVC.oil_interval_km)}.</span></div>`}</div></section>
   <section class="panel glass"><header><h2>Пробег и масло</h2><span class="sub">масло каждые ${km(SVC.oil_interval_km)}</span></header>
     <div class="tbl-wrap"><table><thead><tr><th>Машина</th><th class="r">Одометр</th><th class="r">Сегодня</th><th class="r">За месяц</th><th>Масло</th></tr></thead><tbody>
-    ${SVC.cars.map(c=>`<tr data-car="V-${esc(c.code)}" tabindex="0" style="cursor:pointer"><td>${carLabel(c.code)}</td><td class="r num">${km(c.odometer_km)}<div style="font-size:11px;color:var(--muted)">${esc(SRC[c.source]||"")}</div></td><td class="r num">${c.today_km==null?"—":km(c.today_km)}</td><td class="r num">${c.month_km==null?"—":km(c.month_km)}</td><td>${oilCell(c.oil)}</td></tr>`).join("")}
+    ${SVC.cars.map(c=>`<tr data-car="V-${esc(c.code)}" tabindex="0" style="cursor:pointer"><td>${carLabel(c.code)}</td><td class="r num">${km(c.odometer_km)}<div style="font-size:11px;color:var(--muted)">${esc(SRC[c.source]||"")}${c.tracker==="counter"?" · пробег за день по счётчику Wialon":""}</div></td><td class="r num">${c.today_km==null?"—":km(c.today_km)}</td><td class="r num">${c.month_km==null?"—":km(c.month_km)}${c.month_partial?`<div style="font-size:11px;color:var(--muted)">с начала записи</div>`:""}</td><td>${oilCell(c.oil)}</td></tr>`).join("")}
     </tbody></table></div></section>
   <section class="panel glass"><header><h2>Как часто меняются запчасти</h2><span class="sub">по записям ремонтов</span></header>
     <div class="tbl-wrap"><table><thead><tr><th>Машина</th><th>Запчасть</th><th class="r">Замен</th><th>Последняя</th><th class="r">В среднем раз в</th></tr></thead><tbody>
