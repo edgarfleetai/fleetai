@@ -11,6 +11,7 @@ import hashlib
 import hmac
 import os
 import secrets
+import threading
 import time
 from datetime import timedelta
 from pathlib import Path
@@ -74,6 +75,24 @@ def create_app(config=None):
         # session factory at this database. Reads keep the read-only engine.
         ops.configure_writes(app.config["DATABASE_URL"])
     fails = {}
+    cache, cache_lock = {}, threading.Lock()
+    CACHE_SECONDS = 60
+
+    def cached(key, fn):
+        """Heavy read-only calculations are reused for a minute; any write clears them."""
+        now = time.time()
+        with cache_lock:
+            hit = cache.get(key)
+            if hit and now - hit[0] < CACHE_SECONDS:
+                return hit[1]
+        value = fn()
+        with cache_lock:
+            cache[key] = (time.time(), value)
+        return value
+
+    def clear_cache():
+        with cache_lock:
+            cache.clear()
     wialon_fetch = app.config.get("WIALON_FETCH") or wialon.fetch_units
 
     def same_origin():
@@ -174,23 +193,23 @@ def create_app(config=None):
     def finance_view():
         api_owner()
         period = "previous" if request.args.get("period") == "previous" else "current"
-        return jsonify(finance.fleet_finance(engine, period))
+        return jsonify(cached("finance:" + period, lambda: finance.fleet_finance(engine, period)))
 
     @app.get("/api/v4/journal")
     def journal_view():
         api_owner()
         days = max(1, min(int(request.args.get("days", 90) or 90), 400))
-        return jsonify(finance.journal(engine, days))
+        return jsonify(cached(f"journal:{days}", lambda: finance.journal(engine, days)))
 
     @app.get("/api/v4/repairs")
     def repairs_view():
         api_owner()
-        return jsonify(finance.repairs(engine))
+        return jsonify(cached("repairs", lambda: finance.repairs(engine)))
 
     @app.get("/api/v4/rent")
     def rent_view():
         api_owner()
-        return jsonify(rent.rent_overview(engine))
+        return jsonify(cached("rent", lambda: rent.rent_overview(engine)))
 
     @app.get("/api/v4/contracts")
     def contracts_view():
@@ -221,6 +240,7 @@ def create_app(config=None):
         if len(key) < 16 or body.get("fingerprint") != ops.fingerprint(message):
             return jsonify(ok=False, results=[{"ok": False, "message": "Команда изменилась после проверки — проверьте ещё раз"}]), 409
         ok, results = ops.commit(message, key, engine, save=ops_save)
+        clear_cache()
         return jsonify(ok=ok, results=results), (200 if ok else 400)
 
     @app.post("/api/v4/act/<name>")
@@ -232,6 +252,7 @@ def create_app(config=None):
             return jsonify(ok=False, message="Нет ключа операции"), 400
         status, result = actions.run(app, name, body.get("data") or {}, name + ":" + key,
                                      views=app.config.get("ACTION_VIEWS"))
+        clear_cache()
         return jsonify(result), status
 
     @app.errorhandler(403)
