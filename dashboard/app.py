@@ -93,6 +93,27 @@ def create_app(config=None):
     def clear_cache():
         with cache_lock:
             cache.clear()
+
+    def refresh(key, fn):
+        value = fn()
+        with cache_lock:
+            cache[key] = (time.time(), value)
+
+    def warm_loop():
+        """Keep the heavy pages pre-calculated so the home page opens at once."""
+        jobs = (("finance:current", lambda: finance.fleet_finance(engine, "current")),
+                ("rent", lambda: rent.rent_overview(engine)),
+                ("journal:90", lambda: finance.journal(engine, 90)))
+        while True:
+            for key, fn in jobs:
+                try:
+                    refresh(key, fn)
+                except Exception as error:  # keep warming; a request will show the error
+                    app.logger.warning("cache warm %s failed: %s", key, type(error).__name__)
+            time.sleep(CACHE_SECONDS - 10)
+
+    if not app.testing and app.config.get("WARM_CACHE", True):
+        threading.Thread(target=warm_loop, name="fa4-cache-warm", daemon=True).start()
     wialon_fetch = app.config.get("WIALON_FETCH") or wialon.fetch_units
 
     def same_origin():
