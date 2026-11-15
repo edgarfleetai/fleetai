@@ -13,10 +13,15 @@ INVESTORS = (("илья", "ilya"), ("равшан", "ravshan"), ("марк", "ma
 # Findings confirmed by the owner or by comparing Wialon with the database
 # (docs/current-system-audit.md). Shown as "Сверка" notes; never applied to data.
 KNOWN_NOTES = {
-    "119": "По словам владельца, это нынешняя 665. Записи 119 и 665 в базе нужно объединить без потери истории.",
-    "665": "Бывшая 119. Прежняя 665 теперь ездит как 267 (Х267СО716) — её в базе FleetAI нет.",
+    "665": "Бывшая 119. В базе осталась старая запись 119 — в дашборде она скрыта, объединить в базе. Прежняя 665 теперь ездит как 267 (Х267СО716) — её в базе FleetAI нет.",
     "621": "В Wialon номер «А621СУ», в базе «т621су» — одна из записей с ошибкой.",
 }
+
+
+# Earlier plates of the same physical car (owner, 2026-11-14).
+PLATE_HISTORY = {"665": ["В119ЕН716"], "267": ["С665ХК716"]}
+# Cars the owner drives himself (not rented out).
+PERSONAL_USE = {"267"}
 
 
 def make_engine(url):
@@ -72,6 +77,8 @@ def map_car(row):
     else:
         terms, rate = "—", "—"
     status = car_status(row["status"], driver)
+    if code in PERSONAL_USE and not driver:
+        status = "personal"
     plate = (row["plate"] or "").strip().upper() or code
     return {
         "id": "V-" + code, "code": code, "plate": plate,
@@ -84,7 +91,7 @@ def map_car(row):
         "deposit": int(row["driver_deposit"] or 0) * 100,   # kopecks
         "balance": None,                                     # wallet is not connected yet
         "mileage": int(row["current_mileage"] or 0),
-        "plates": [plate], "flag": " ".join(notes) or None,
+        "plates": PLATE_HISTORY.get(code, []) + [plate], "flag": " ".join(notes) or None,
         "why": None if status != "notready" else (row["status"] or "Не готова"),
     }
 
@@ -96,10 +103,34 @@ CARS_SQL = text("""
 """)
 
 
+# Old database records of cars that now drive under another code (owner, 2026-11-14).
+# They are hidden from the fleet and counts; the database itself is not changed.
+RETIRED_CODES = {"119": "665"}
+
+# Cars that are in the fleet but not yet in the FleetAI database (owner, 2026-11-14).
+# Shown with status "nodata" until the record is added in FleetAI; never written anywhere.
+MISSING_CARS = (
+    {"code": "267", "plate": "Х267СО716", "model": "Kia",
+     "note": "Машина в парке, но её нет в базе FleetAI: добавьте её в FleetAI, чтобы появились водитель, тариф и деньги. Бывшая 665."},
+)
+# Wialon unit names with a known typo -> real car code.
+UNIT_NAME_FIXES = {"167": "267"}
+
+
 def load_fleet(engine):
     with engine.connect() as conn:
         rows = conn.execute(CARS_SQL).mappings().all()
-    cars = [map_car(r) for r in rows]
+    cars = [map_car(r) for r in rows if str(r["code"]).strip() not in RETIRED_CODES]
+    have = {c["code"] for c in cars}
+    for m in MISSING_CARS:
+        if m["code"] not in have:
+            cars.append({"id": "V-" + m["code"], "code": m["code"], "plate": m["plate"], "model": m["model"],
+                         "year": None, "owner": "park", "investor_name": "", "investor_percent": 0,
+                         "status": "nodata", "status_raw": "нет в базе FleetAI", "driver": None,
+                         "driver_name": "", "terms": "—", "rate": "—", "deposit": 0, "balance": None,
+                         "mileage": 0, "plates": ["С665ХК716", m["plate"]], "flag": m["note"],
+                         "why": "Нет в базе FleetAI", "in_db": False})
+    cars.sort(key=lambda c: c["code"])
     drivers = [{"id": c["driver"], "name": c["driver_name"], "phone": "", "tg": False,
                 "stage": "rent", "car": c["id"]} for c in cars if c["driver"]]
     return {"cars": cars, "drivers": drivers}
@@ -117,6 +148,7 @@ def match_units_to_cars(units, cars):
     codes = {c["code"] for c in cars}
     out = []
     for u in units:
-        found = [d for d in re.findall(r"\d{3}", u.get("name") or "") if d in codes and d != "716"]
+        digits = [UNIT_NAME_FIXES.get(d, d) for d in re.findall(r"\d{3}", u.get("name") or "")]
+        found = [d for d in digits if d in codes and d != "716"]
         out.append(dict(u, car_code=found[0] if found else None))
     return out
