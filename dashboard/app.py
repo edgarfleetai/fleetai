@@ -76,7 +76,7 @@ def create_app(config=None):
         ops.configure_writes(app.config["DATABASE_URL"])
     fails = {}
     cache, cache_lock = {}, threading.Lock()
-    CACHE_SECONDS = 60
+    CACHE_SECONDS = 150  # warm loop refreshes every ~65 s; writes clear it at once
 
     def cached(key, fn):
         """Heavy read-only calculations are reused for a minute; any write clears them."""
@@ -110,7 +110,7 @@ def create_app(config=None):
                     refresh(key, fn)
                 except Exception as error:  # keep warming; a request will show the error
                     app.logger.warning("cache warm %s failed: %s", key, type(error).__name__)
-            time.sleep(CACHE_SECONDS - 10)
+            time.sleep(45)
 
     if not app.testing and app.config.get("WARM_CACHE", True):
         threading.Thread(target=warm_loop, name="fa4-cache-warm", daemon=True).start()
