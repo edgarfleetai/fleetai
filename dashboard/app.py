@@ -19,7 +19,7 @@ from urllib.parse import urlsplit
 from flask import Flask, abort, jsonify, redirect, request, send_file, session
 from werkzeug.security import check_password_hash
 
-from . import data, finance, rent, wialon
+from . import data, finance, ops, rent, wialon
 
 STATIC = Path(__file__).resolve().parent / "static"
 SESSION_HOURS = 8
@@ -67,6 +67,12 @@ def create_app(config=None):
     if not app.testing and (public.scheme != "https" or not public.netloc or public.path):
         raise RuntimeError("DASHBOARD_PUBLIC_URL must be an https origin, e.g. https://name.onrender.com")
     engine = data.make_engine(app.config["DATABASE_URL"])
+    writes_enabled = (os.environ.get("DASHBOARD_READ_ONLY") or "").strip() != "1"
+    ops_save = app.config.get("OPS_SAVE")
+    if writes_enabled and not ops_save:
+        # Operations are saved by the old FleetAI's own save_operation; point its
+        # session factory at this database. Reads keep the read-only engine.
+        ops.configure_writes(app.config["DATABASE_URL"])
     fails = {}
     wialon_fetch = app.config.get("WIALON_FETCH") or wialon.fetch_units
 
@@ -190,6 +196,36 @@ def create_app(config=None):
     def contracts_view():
         api_owner()
         return jsonify(rent.contracts(engine))
+
+    def write_guard():
+        api_owner()
+        if not writes_enabled:
+            abort(403)
+        if not same_origin() or not hmac.compare_digest(session.get("csrf", ""), request.headers.get("X-CSRF", "")):
+            abort(403)
+
+    @app.post("/api/v4/ops/preview")
+    def ops_preview():
+        write_guard()
+        message = str((request.get_json(silent=True) or {}).get("message") or "")[:ops.MAX_LEN]
+        items = ops.parse_all(message, engine)
+        return jsonify(ok=bool(items) and not any(i["problem"] for i in items),
+                       items=ops.public(items), fingerprint=ops.fingerprint(message))
+
+    @app.post("/api/v4/ops/commit")
+    def ops_commit():
+        write_guard()
+        body = request.get_json(silent=True) or {}
+        message = str(body.get("message") or "")[:ops.MAX_LEN]
+        key = str(body.get("key") or "")[:64]
+        if len(key) < 16 or body.get("fingerprint") != ops.fingerprint(message):
+            return jsonify(ok=False, results=[{"ok": False, "message": "Команда изменилась после проверки — проверьте ещё раз"}]), 409
+        ok, results = ops.commit(message, key, engine, save=ops_save)
+        return jsonify(ok=ok, results=results), (200 if ok else 400)
+
+    @app.errorhandler(403)
+    def forbidden(_):
+        return jsonify(ok=False, error="Запрещено"), 403
 
     @app.get("/api/v4/positions")
     def positions():

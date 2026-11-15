@@ -340,7 +340,7 @@ td.r,th.r{text-align:right}
       <div class="brand"><span class="logo">FA</span><span>FleetAI</span></div>
       <nav class="pillnav" id="nav" aria-label="Разделы"><span class="ind" id="ind"></span></nav>
       <div class="tools">
-        <button class="ibtn" data-x="search" aria-label="Поиск">__I_search__</button>
+        <button class="btn lime" data-x="op" aria-label="Новая операция" style="padding:7px 12px">__I_plus__ Операция</button><button class="ibtn" data-x="search" aria-label="Поиск">__I_search__</button>
         <button class="ibtn" data-x="logout" aria-label="Выйти" title="Выйти">__I_arrow__</button>
         <button class="ibtn hide-sm" data-x="theme" aria-label="Сменить тему">__I_moon__</button>
         <span class="avatar" title="Владелец" id="me">··</span>
@@ -830,6 +830,41 @@ VIEWS.contracts=async function(){shell("Договоры");try{if(!CTR)CTR=await
     </tbody></table></div></section>
   <section class="panel glass"><div class="pbody" style="padding-top:16px"><div class="note">Паспортные данные, телефоны и PDF договоров в дашборд не загружаются. Создание и отправка договоров — в FleetAI.</div></div></section>`;};
 
+/* ===== Внесение операций: та же команда и та же запись, что в старом FleetAI ===== */
+let OPD={msg:"",key:"",pv:null,busy:false,res:null};
+const OPKINDS=[["income","Доход","получил"],["expense","Расход","расход"],["repair","Ремонт","ремонт"],["payout","Выплата инвестору","выплата"]];
+function opCompose(){const car=$("#opCar").value,k=$("#opKind").value,a=($("#opAmt").value||"").replace(/\D/g,""),c=($("#opCom").value||"").trim().replace(/\//g," ");
+  if(!car||!a)return;const w=OPKINDS.find(x=>x[0]===k)[2];
+  $("#opMsg").value=k==="income"?`${car} ${w} ${a}${c?" "+c:""}`:`${car} ${w}${c?" "+c:""} ${a}`;OPD.pv=null;opRender();}
+async function opPost(url,body){const r=await fetch(url,{method:"POST",credentials:"same-origin",headers:{"Content-Type":"application/json","X-CSRF":CSRF},body:JSON.stringify(body)});if(r.status===401){location.href="/login";throw new Error("401");}return {status:r.status,data:await r.json().catch(()=>({}))};}
+function opRender(){const box=$("#opPv");if(!box)return;const p=OPD.pv;
+  if(OPD.res){box.innerHTML=OPD.res.map(r=>`<div class="note ${r.ok?"":"warn"}">${r.ok?"✓":"✕"} ${esc(r.message)}</div>`).join("");$("#opSave").disabled=true;return;}
+  if(!p){box.innerHTML=`<div class="note">Нажмите «Проверить» — дашборд покажет, как понял команду. Сохранится только после подтверждения.</div>`;$("#opSave").disabled=true;return;}
+  box.innerHTML=p.items.map(i=>`<div class="glass" style="padding:10px 12px;border-radius:12px"><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><b>${esc(i.label)}</b>${i.car?`<span class="plate">${esc(i.car)}</span>`:""}${i.category?`<span class="tag t-mute">${esc(i.category)}</span>`:""}${i.share?`<span class="tag t-info">${esc(i.share)}</span>`:""}<span class="amt num" style="margin-left:auto">${rub(i.amount)}</span></div>
+    ${i.parts.length?`<div style="font-size:12.5px;color:var(--muted);margin-top:4px">${i.parts.map(x=>esc(x.name)+(x.price?" · "+rub(x.price):"")).join("<br>")}</div>`:""}${i.mileage?`<div style="font-size:12.5px;color:var(--muted)">пробег ${esc(i.mileage)}</div>`:""}${i.investor?`<div style="font-size:12.5px;color:var(--muted)">инвестор ${esc(i.investor)}</div>`:""}
+    ${i.problem?`<div class="note warn" style="margin-top:6px">${esc(i.problem)}</div>`:""}</div>`).join("")||`<div class="note warn">Пустая команда</div>`;
+  $("#opSave").disabled=!p.ok||OPD.busy;}
+function opModal(prefCar){OPD={msg:"",key:(crypto.randomUUID?crypto.randomUUID():String(Date.now())+Math.random().toString(36).slice(2)),pv:null,busy:false,res:null};
+  const opts=cars.filter(c=>c.in_db!==false).map(c=>`<option ${prefCar===c.code?"selected":""}>${esc(c.code)}</option>`).join("");
+  openLayer(`<div class="modal" role="dialog" aria-modal="true" aria-labelledby="opt" style="width:min(560px,calc(100% - 32px))"><header style="padding:18px 20px 0"><h1 id="opt" style="font-size:22px">Новая операция</h1></header><div class="mb">
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:8px">
+      <label class="field">Машина<select class="inp" id="opCar"><option value="">—</option>${opts}</select></label>
+      <label class="field">Тип<select class="inp" id="opKind">${OPKINDS.map(k=>`<option value="${k[0]}">${k[1]}</option>`).join("")}</select></label>
+      <label class="field">Сумма, ₽<input class="inp" id="opAmt" inputmode="numeric" placeholder="13000"></label></div>
+    <label class="field">Комментарий<input class="inp" id="opCom" placeholder="колодки, мойка, имя инвестора…"></label>
+    <label class="field">Команда, как в FleetAI (можно писать сразу сюда)<textarea class="inp" id="opMsg" rows="2" placeholder="703 получил 13000 / 665 замена стойки стаба цена 1000"></textarea></label>
+    <div id="opPv"></div>
+    <div style="display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap"><button class="btn" data-close>Закрыть</button><button class="btn" id="opCheck">Проверить</button><button class="btn lime" id="opSave" disabled>Сохранить</button></div>
+  </div></div>`);
+  ["opCar","opKind","opAmt","opCom"].forEach(id=>$("#"+id).addEventListener("input",opCompose));
+  $("#opMsg").addEventListener("input",()=>{OPD.pv=null;OPD.res=null;opRender();});
+  $("#opCheck").addEventListener("click",async()=>{const m=$("#opMsg").value.trim();OPD.res=null;if(!m){OPD.pv={ok:false,items:[]};opRender();return;}
+    try{const {data}=await opPost("/api/v4/ops/preview",{message:m});OPD.msg=m;OPD.pv=data;}catch(e){OPD.pv={ok:false,items:[{label:"Ошибка",car:"",category:"",share:"",amount:0,parts:[],problem:e.message}]};}opRender();});
+  $("#opSave").addEventListener("click",async()=>{if(!OPD.pv||!OPD.pv.ok||OPD.busy)return;OPD.busy=true;$("#opSave").disabled=true;
+    try{const {data}=await opPost("/api/v4/ops/commit",{message:OPD.msg,fingerprint:OPD.pv.fingerprint,key:OPD.key});OPD.res=data.results||[{ok:false,message:"Ошибка"}];
+      if(data.ok){FIN=null;JRN=null;REP=null;RENT=null;toast("Операция сохранена");}}catch(e){OPD.res=[{ok:false,message:e.message}];}
+    OPD.busy=false;opRender();});
+  opRender();$("#opCar").focus();}
 VIEWS.repairs=async function(){shell("Ремонты");try{if(!REP)REP=await getJSON("/api/v4/repairs");}catch(e){if(onView("repairs"))failed("Ремонты",e);return;}
   if(!onView("repairs"))return;
   const parts=REP.parts.filter(p=>!rf||p.car===rf),exp=REP.expenses.filter(x=>!rf||x.car===rf);
@@ -854,7 +889,7 @@ const STUB={rent:["Аренда",["Активные аренды с услови
 function stub(v){return function(){const [t,items]=STUB[v];$("#page").innerHTML=`<div class="phead"><h1><span>${t}</span></h1></div><section class="glass"><div class="empty"><h2>Раздел в разработке</h2><span>Что в нём будет:</span><ul>${items.map(i=>`<li>${esc(i)}</li>`).join("")}</ul></div></section>`;};}
 
 /* ===== layer ===== */
-function closeLayer(){$("#layer").innerHTML="";document.body.style.overflow="";}
+function closeLayer(){const had=!!$("#layer").innerHTML;$("#layer").innerHTML="";document.body.style.overflow="";if(had&&typeof OPD!=="undefined"&&OPD.res&&OPD.res.some(r=>r.ok)){OPD.res=null;const v=(location.hash||"#home").slice(1);(VIEWS[v]||VIEWS.home)();}}
 function openLayer(html){$("#layer").innerHTML=`<div class="scrim" data-close></div>${html}`;document.body.style.overflow="hidden";const f=$("#layer [autofocus]")||$("#layer button, #layer input");f&&f.focus();}
 function carDrawer(id,tab="overview"){const c=carById(id),d=drvById(c.driver),ops=ledger.filter(e=>e.car===id);
   const tabs=[["overview","Обзор"],["fin","Финансы"],["plates","Госномера"],["repairs","Ремонты"],["wialon","Wialon"]];let body="";
@@ -921,8 +956,8 @@ const SOON={task:"Создание задачи — в FleetAI",repair:"План
 document.addEventListener("click",e=>{const t=e.target;
   if(t.closest("[data-close]")){closeLayer();return;}
   if(t.closest("[data-back]")){payModal(draft.kind);return;}
-  const act=t.closest("[data-act]");if(act){const a=act.dataset.act,cp=act.dataset.carPay||"";if(a==="pay"||a==="expense"){toast("Внесение операций — в FleetAI");return;}toast(SOON[a]||"Действие доступно в FleetAI");return;}
-  const x=t.closest("[data-x]");if(x){const xv=x.dataset.x;if(xv==="logout"){fetch("/logout",{method:"POST",credentials:"same-origin",headers:{"X-CSRF":CSRF}}).finally(()=>location.href="/login");return;}xv==="search"?palette():cycleTheme();return;}
+  const act=t.closest("[data-act]");if(act){const a=act.dataset.act,cp=act.dataset.carPay||"";if(a==="pay"||a==="expense"){opModal(cp.replace(/^V-/,""));return;}toast(SOON[a]||"Действие доступно в FleetAI");return;}
+  const x=t.closest("[data-x]");if(x){const xv=x.dataset.x;if(xv==="op"){opModal("");return;}if(xv==="logout"){fetch("/logout",{method:"POST",credentials:"same-origin",headers:{"X-CSRF":CSRF}}).finally(()=>location.href="/login");return;}xv==="search"?palette():cycleTheme();return;}
   const mc=t.closest("[data-city]");if(mc){goCity(mc.dataset.city);return;}
   const mz=t.closest("[data-mz]");if(mz){const m=mz.dataset.mz;m==="fit"?fitAll():zoomAt(m==="in"?1/1.4:1.4);return;}
   const mk=t.closest("[data-mk]");if(mk){monSel=mk.dataset.mk;VIEWS.monitor();return;}

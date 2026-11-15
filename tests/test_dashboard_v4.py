@@ -267,3 +267,82 @@ def test_contracts_hide_personal_data(fin_dash):
     body = resp.get_data(as_text=True)
     assert resp.get_json()['contracts'][0]['driver'] == 'Сергей'
     assert '123456' not in body and '7999' not in body and 'tok' not in body
+
+
+@pytest.fixture
+def ops_dash(fin_dash):
+    saved = []
+
+    def fake_save(parsed):
+        saved.append(parsed)
+        return {'ok': True, 'message': f"Сохранено: {parsed['car_code']} {parsed['type']}"}
+
+    from dashboard.app import create_app
+    app = create_app({'TESTING': True, 'SECRET_KEY': 'x' * 40, 'DATABASE_URL': fin_dash.engine_url,
+                      'PUBLIC_URL': BASE, 'WIALON_FETCH': lambda: ([], None), 'OPS_SAVE': fake_save})
+    app.saved = saved
+    return app
+
+
+def csrf_headers(c):
+    return {'Origin': BASE, 'X-CSRF': c.get('/api/v4/fleet', base_url=BASE).get_json()['csrf']}
+
+
+def test_ops_need_login_csrf_and_origin(ops_dash):
+    c = ops_dash.test_client()
+    assert c.post('/api/v4/ops/preview', base_url=BASE, json={'message': '621 получил 13000'}).status_code == 401
+    login(c)
+    assert c.post('/api/v4/ops/preview', base_url=BASE, json={'message': '621 получил 13000'},
+                  headers={'Origin': BASE}).status_code == 403
+    h = csrf_headers(c)
+    assert c.post('/api/v4/ops/preview', base_url=BASE, json={'message': '621 получил 13000'},
+                  headers={'Origin': 'https://evil.invalid', 'X-CSRF': h['X-CSRF']}).status_code == 403
+    assert ops_dash.saved == []
+
+
+def test_ops_preview_then_commit_once(ops_dash):
+    c = ops_dash.test_client()
+    login(c)
+    h = csrf_headers(c)
+    pv = c.post('/api/v4/ops/preview', base_url=BASE, json={'message': '621 получил 13000'}, headers=h).get_json()
+    assert pv['ok'] and pv['items'][0]['type'] == 'income' and pv['items'][0]['amount'] == 1_300_000
+    assert ops_dash.saved == []                       # preview never saves
+    body = {'message': '621 получил 13000', 'fingerprint': pv['fingerprint'], 'key': 'k' * 20}
+    r1 = c.post('/api/v4/ops/commit', base_url=BASE, json=body, headers=h)
+    r2 = c.post('/api/v4/ops/commit', base_url=BASE, json=body, headers=h)
+    assert r1.status_code == 200 and r2.status_code == 200
+    assert len(ops_dash.saved) == 1                   # double click does not double-save
+    changed = dict(body, message='621 получил 99000')
+    assert c.post('/api/v4/ops/commit', base_url=BASE, json=changed, headers=h).status_code == 409
+
+
+def test_ops_reject_unknown_retired_and_missing_cars(ops_dash):
+    c = ops_dash.test_client()
+    login(c)
+    h = csrf_headers(c)
+    for msg, needle in (('просто текст', 'Не понял'), ('119 получил 1000', 'ездит как 665'),
+                        ('777 получил 1000', 'нет в базе')):
+        pv = c.post('/api/v4/ops/preview', base_url=BASE, json={'message': msg}, headers=h).get_json()
+        assert not pv['ok'] and needle in pv['items'][0]['problem'], msg
+        r = c.post('/api/v4/ops/commit', base_url=BASE, headers=h,
+                   json={'message': msg, 'fingerprint': pv['fingerprint'], 'key': 'z' * 20 + msg[:3]})
+        assert r.status_code == 400
+    assert ops_dash.saved == []
+
+
+def test_ops_real_save_operation_writes_like_old_fleetai(fin_dash):
+    from dashboard.app import create_app
+    app = create_app({'TESTING': True, 'SECRET_KEY': 'x' * 40, 'DATABASE_URL': fin_dash.engine_url,
+                      'PUBLIC_URL': BASE, 'WIALON_FETCH': lambda: ([], None)})
+    c = app.test_client()
+    login(c)
+    h = csrf_headers(c)
+    pv = c.post('/api/v4/ops/preview', base_url=BASE, json={'message': '897 получил 12000'}, headers=h).get_json()
+    r = c.post('/api/v4/ops/commit', base_url=BASE, headers=h,
+               json={'message': '897 получил 12000', 'fingerprint': pv['fingerprint'], 'key': 'real-save-key-0001'})
+    assert r.status_code == 200, r.get_json()
+    eng = create_engine(fin_dash.engine_url)
+    with eng.connect() as conn:
+        op = conn.execute(text("SELECT type, amount FROM operations WHERE car_code = '897'")).one()
+        inc = conn.execute(text("SELECT amount FROM income WHERE car_code = '897'")).scalar()
+    assert tuple(op) == ('income', 12000) and inc == 12000
