@@ -472,7 +472,7 @@ function fillDaily(){const n=90,arr=new Array(n).fill(0),t0=new Date(TODAY);t0.s
   daily=arr;PLAN=sum(cars.filter(c=>c.status==="rented"),c=>{const m=String(c.rate||"").match(/([\d ]+) ₽\/(сут|нед)/);if(!m)return 0;const v=+m[1].replace(/\s/g,"")*100;return m[2]==="нед"?Math.round(v/7):v;});}
 VIEWS.home=function(){
   const need=[];if(!FIN)need.push(needFin());if(!JRN)need.push(once("/api/v4/journal?days=90").then(d=>{JRN=d;}));if(!RENT)need.push(once("/api/v4/rent").then(d=>{RENT=d;}));
-  if(need.length&&!HOMELOAD){HOMELOAD=1;Promise.allSettled(need).then(()=>{HOMELOAD=(FIN&&JRN&&RENT)?0:2;if(onView("home")||!location.hash)VIEWS.home();});}
+  if(need.length&&!HOMELOAD){HOMELOAD=1;Promise.allSettled(need).then(()=>{HOMELOAD=(FIN&&JRN&&RENT)?0:2;if(HOMELOAD)setTimeout(()=>{HOMELOAD=0;},30000);if(onView("home")||!location.hash)VIEWS.home();});}
   const k=kpis();fillDaily();
   const segs=[["rented",k.rented],["free",k.free],["repair",k.repair],["notready",k.notready],["personal",k.personal]].filter(s=>s[1]||!["personal"].includes(s[0]));
   const rents=RENT?RENT.rentals:[],owe=x=>Math.max(-x.wallet,0)+x.debt_total,debtors=rents.filter(x=>owe(x)>0).sort((a,b)=>owe(b)-owe(a));
