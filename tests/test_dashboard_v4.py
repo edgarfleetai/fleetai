@@ -212,6 +212,7 @@ def test_finance_matches_old_fleetai_calculation(fin_dash):
     assert row['income'] == calc['income'] * 100 == 1_300_000
     assert row['expenses'] == calc['expenses'] * 100 == 200_000
     assert row['investor_amount'] == calc['investor_amount'] * 100
+    assert row['period_share'] == 825_000 and row['period_due'] == 825_000   # (13000-2000)*75%, this period only
     assert row['gps'] == 50_000 and row['garage'] in (150_000,) and row['recurring_booked'] is False
 
 

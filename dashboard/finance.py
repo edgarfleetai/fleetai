@@ -53,6 +53,8 @@ def fleet_finance(engine, period="current", now=None):
             start, end = _bounds(car, period, now)
             calc = calculate_period_for_car(s, car, start, end)
             owner = owner_key(car.owner_type, car.investor_name)
+            pct = int(car.investor_percent or 0) if car.owner_type == "investor" else 0
+            period_share = round(int(calc["profit_for_split"] or 0) * pct / 100) * KOP
             garage = garage_base + (1 if i < garage_rest else 0)
             recurring_booked = any(
                 RECURRING_RE.search(cat or "") for (cat,) in s.execute(text(
@@ -70,6 +72,13 @@ def fleet_finance(engine, period="current", now=None):
                 "investments": _k(calc["investments"]), "profit": _k(calc["profit"]),
                 "investor_amount": _k(calc["investor_amount"]), "owner_amount": _k(calc["owner_amount"]),
                 "accrued_to_investor": _k(calc["accrued_to_investor"]),
+                "profit_for_split": _k(calc["profit_for_split"]),
+                # Investor's share of THIS period only (negative = share of a loss),
+                # minus investor-only expenses and payouts made in the period.
+                "period_share": period_share,
+                "period_due": period_share - _k(calc["investor_only_expenses"]) - _k(calc["payouts_in_period"]),
+                "previous_investor_debt": _k(calc["previous_investor_debt"]),
+                "previous_park_debt_to_investor": _k(calc["previous_park_debt_to_investor"]),
                 "payouts_in_period": _k(calc["payouts_in_period"]),
                 "available_to_pay": _k(calc["available_to_pay"]),
                 "investor_debt_to_park": _k(calc["investor_debt_to_park"]),
