@@ -173,6 +173,7 @@ def test_267_in_database_is_personal_use(dash):
 def fin_dash(tmp_path):
     from datetime import datetime
     from fleetai.models import Base
+    import fleetai.auth_models  # noqa: F401  (auth tables exist in production)
     url = 'sqlite:///' + str(tmp_path / 'fin.sqlite')
     eng = create_engine(url)
     Base.metadata.create_all(eng)
@@ -346,3 +347,48 @@ def test_ops_real_save_operation_writes_like_old_fleetai(fin_dash):
         op = conn.execute(text("SELECT type, amount FROM operations WHERE car_code = '897'")).one()
         inc = conn.execute(text("SELECT amount FROM income WHERE car_code = '897'")).scalar()
     assert tuple(op) == ('income', 12000) and inc == 12000
+
+
+def act(c, h, name, data, key):
+    return c.post('/api/v4/act/' + name, base_url=BASE, headers=h, json={'key': key, 'data': data})
+
+
+def test_actions_use_old_fleetai_handlers(fin_dash):
+    from dashboard.app import create_app
+    app = create_app({'TESTING': True, 'SECRET_KEY': 'x' * 40, 'DATABASE_URL': fin_dash.engine_url,
+                      'PUBLIC_URL': BASE, 'WIALON_FETCH': lambda: ([], None)})
+    c = app.test_client()
+    assert act(c, {}, 'topup', {'car_code': '621', 'amount': 5000}, 'k' * 20).status_code == 401
+    login(c)
+    h = csrf_headers(c)
+    assert act(c, {'Origin': BASE}, 'topup', {'car_code': '621', 'amount': 5000}, 'k' * 20).status_code == 403
+    r = act(c, h, 'topup', {'car_code': '621', 'amount': 5000, 'payment_method': 'cash', 'comment': 'тест'}, 'topup-key-000001')
+    assert r.status_code == 200 and r.get_json()['ok'], r.get_json()
+    again = act(c, h, 'topup', {'car_code': '621', 'amount': 5000, 'payment_method': 'cash'}, 'topup-key-000001')
+    assert 'повторное' in again.get_json()['message']
+    r = act(c, h, 'fine', {'car_code': '621', 'amount': 1000, 'reason': 'превышение'}, 'fine-key-0000001')
+    assert r.status_code == 200 and r.get_json()['ok'], r.get_json()
+    r = act(c, h, 'add_car', {'code': '777', 'brand': 'Kia', 'model': 'Rio', 'plate': 'А777АА716'}, 'addcar-key-00001')
+    assert r.status_code == 200 and r.get_json()['ok'], r.get_json()
+    assert act(c, h, 'topup', {'car_code': '119', 'amount': 100}, 'retired-key-0001').status_code == 400
+    assert act(c, h, 'drop_table', {}, 'unknown-key-0001').status_code == 404
+    eng = create_engine(fin_dash.engine_url)
+    with eng.connect() as conn:
+        wallet = conn.execute(text("SELECT sum(amount) FROM driver_wallet_transactions WHERE car_code = '621'")).scalar()
+        cars = conn.execute(text("SELECT count(*) FROM cars WHERE code = '777'")).scalar()
+    assert wallet == 5000 - 1000 and cars == 1
+
+
+def test_assign_driver_through_old_handler(fin_dash):
+    from datetime import date
+    from dashboard.app import create_app
+    app = create_app({'TESTING': True, 'SECRET_KEY': 'x' * 40, 'DATABASE_URL': fin_dash.engine_url,
+                      'PUBLIC_URL': BASE, 'WIALON_FETCH': lambda: ([], None)})
+    c = app.test_client()
+    login(c)
+    h = csrf_headers(c)
+    r = act(c, h, 'assign', {'car_code': '897', 'driver': 'Petr', 'start_date': date.today().isoformat(),
+                             'daily_rent': 1857, 'opening_balance': 0}, 'assign-key-00001')
+    assert r.status_code == 200 and r.get_json()['ok'], r.get_json()
+    with create_engine(fin_dash.engine_url).connect() as conn:
+        assert conn.execute(text("SELECT driver FROM cars WHERE code = '897'")).scalar() == 'Petr'

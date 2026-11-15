@@ -498,7 +498,7 @@ VIEWS.cars=function(){const k=kpis();const counts=st=>cars.filter(c=>st==="all"|
   const list=cars.filter(c=>(carFilter==="all"||c.status===carFilter)&&(!carQuery||(c.code+c.plate+c.model+(drvById(c.driver)?.name||"")+owners[c.owner][0]).toLowerCase().includes(carQuery.toLowerCase())));
   const occ=c=>c.status==="rented"?(c.balance<0?Math.max(20,100+c.balance/K(200)):100):c.status==="repair"?35:10;
   $("#page").innerHTML=`
-  <div class="phead"><h1><span>Автомобили</span></h1>${hstat("car",k.total,"в парке")}${hstat("check",k.rented,"сданы")}${hstat("wrench",k.repair+k.notready,"ремонт и не готовы")}
+  <div class="phead"><h1><span>Автомобили</span></h1>${hstat("car",k.total,"в парке")}${hstat("check",k.rented,"сданы")}${hstat("wrench",k.repair+k.notready,"ремонт и не готовы")}<div class="acts"><button class="btn lime" data-actn="add_car">${ico("plus",15)} Машина</button></div>
     </div>
   <div class="board-bar"><label class="searchbox">${ico("search",15)}<input id="carQ" placeholder="Номер, модель, водитель, инвестор" value="${esc(carQuery)}" aria-label="Фильтр автомобилей"></label>
     <div class="seg" role="group" aria-label="Статус">${["all","rented","free","repair","notready","personal","nodata"].filter(st=>!["nodata","personal"].includes(st)||counts(st)).map(st=>`<button class="${carFilter===st?"on":""}" data-cf="${st}">${st==="all"?"Все":ST[st][0]} ${counts(st)}</button>`).join("")}</div>
@@ -890,6 +890,49 @@ function cmdInit(){const inp=$("#cmd");
   inp.addEventListener("input",()=>{if(CMD.pv&&CMD.msg!==inp.value.trim()){CMD.pv=null;cmdShow("");}cmdLabel();});
   $("#cmdGo").addEventListener("click",cmdRun);}
 function cmdFocus(prefix){const inp=$("#cmd");if(prefix&&!inp.value)inp.value=prefix+" ";inp.focus();window.scrollTo({top:0,behavior:"smooth"});}
+/* ===== Действия владельца: те же обработчики, что в старом FleetAI ===== */
+const today=()=>new Date(Date.now()-new Date().getTimezoneOffset()*6e4).toISOString().slice(0,10);
+const PAYM={cash:"наличные",transfer:"перевод",other:"другое"};
+const ACTS={
+  topup:{t:"Пополнить кошелёк водителя",f:c=>[["amount","Сумма, ₽","num",""],["payment_method","Способ","sel","cash",[["cash","Наличные"],["transfer","Перевод"],["other","Другое"]]],["comment","Комментарий","txt",""]],
+    s:(c,d)=>`Пополнить кошелёк ${esc(c.driver_name||"водителя")} (${esc(c.code)}) на <b>${rub(+d.amount*100)}</b>, ${esc(PAYM[d.payment_method]||"")}.`},
+  fine:{t:"Штраф водителю",f:c=>[["amount","Сумма, ₽","num",""],["reason","Причина","txt",""],["comment","Комментарий","txt",""]],
+    s:(c,d)=>`Списать штраф <b>${rub(+d.amount*100)}</b> с кошелька ${esc(c.driver_name||"водителя")} (${esc(c.code)}): «${esc(d.reason)}».`},
+  assign:{t:"Назначить или сменить водителя",f:c=>[["driver","Имя водителя","txt",""],["start_date","Дата начала","date",today()],["daily_rent","Аренда в сутки, ₽","num",String((String(c.rate||"").match(/[\d ]+(?= ₽\/сут)/)||[""])[0]).replace(/\s/g,"")],["opening_balance","Стартовый баланс, ₽","num","0"]],
+    s:(c,d)=>`${c.driver_name?`Сменить водителя ${esc(c.code)}: <b>${esc(c.driver_name)}</b> → <b>${esc(d.driver)}</b>. Долг прежнего водителя FleetAI переносит в отдельный долг.`:`Назначить на ${esc(c.code)} водителя <b>${esc(d.driver)}</b>.`} С ${esc(d.start_date)}, ${rub(+d.daily_rent*100)}/сут, стартовый баланс ${rub(+d.opening_balance*100)}.`},
+  close_period:{t:"Закрыть расчётный период",f:c=>[],
+    s:c=>{const x=FIN&&FIN.cars.find(r=>r.code===c.code);return `Закрыть текущий период по ${esc(c.code)}${x?` (${d2(x.period_start)} — ${d2(x.period_end)}; доля инвестора ${rub(x.period_share)})`:""}. Итоги сохранятся в истории FleetAI.`;}},
+  add_car:{t:"Добавить машину",f:()=>[["code","Код (3 цифры)","txt",""],["brand","Марка","txt",""],["model","Модель","txt",""],["plate","Госномер","txt",""],["year","Год","num",""],["mileage","Пробег, км","num",""],["purchase_date","Дата покупки","txt",""],["purchase_price","Цена покупки, ₽","num",""],["owner_type","Собственник","sel","own",[["own","Парк (своя)"],["investor","Инвестор"]]],["investor_name","Имя инвестора","txt",""],["investor_percent","Доля инвестора, %","num",""],["settlement_day","День расчёта","num","15"]],
+    s:(c,d)=>`Добавить машину <b>${esc(d.code)}</b> · ${esc(d.brand)} ${esc(d.model)} · ${esc(d.plate)}${d.owner_type==="investor"?` · инвестор ${esc(d.investor_name)} ${esc(d.investor_percent)}%`:" · своя"}.`},
+};
+let ACT=null;
+function actField(f){const [k,l,t,v,o]=f;
+  if(t==="sel")return `<label class="field">${l}<select class="inp" data-k="${k}">${o.map(x=>`<option value="${x[0]}" ${x[0]===v?"selected":""}>${x[1]}</option>`).join("")}</select></label>`;
+  return `<label class="field">${l}<input class="inp" data-k="${k}"${t==="num"?' inputmode="numeric"':""}${t==="date"?' type="date"':""} value="${esc(v)}"></label>`;}
+function actModal(name,carId){const c=carId?carById(carId):{code:"",driver_name:"",rate:""};const a=ACTS[name];if(!a||!c)return;
+  ACT={name,c,key:(crypto.randomUUID?crypto.randomUUID():String(Date.now())+Math.random().toString(36).slice(2)),data:null,res:null,busy:false};
+  const fs=a.f(c);
+  openLayer(`<div class="modal" role="dialog" aria-modal="true" aria-labelledby="act" style="width:min(520px,calc(100% - 32px))"><header style="padding:18px 20px 0"><h1 id="act" style="font-size:22px">${esc(a.t)}${c.code?` · ${esc(c.code)}`:""}</h1></header><div class="mb">
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px">${fs.map(actField).join("")}</div>
+    <div id="actPv"></div>
+    <div style="display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap"><button class="btn" data-close>Закрыть</button><button class="btn lime" id="actGo">${fs.length?"Далее":"Подтвердить"}</button></div></div></div>`);
+  if(!fs.length){ACT.data={};$("#actPv").innerHTML=`<div class="note">${a.s(c,{})}</div>`;}
+  document.querySelectorAll("#layer [data-k]").forEach(el=>el.addEventListener("input",()=>{ACT.data=null;ACT.res=null;$("#actPv").innerHTML="";$("#actGo").textContent="Далее";}));
+  $("#actGo").addEventListener("click",actGo);}
+async function actGo(){if(!ACT||ACT.busy)return;const a=ACTS[ACT.name];
+  if(ACT.res&&ACT.res.ok){closeLayer();return;}
+  if(!ACT.data){const d={};document.querySelectorAll("#layer [data-k]").forEach(el=>{d[el.dataset.k]=el.value.trim();});
+    if(d.amount!==undefined)d.amount=d.amount.replace(/\D/g,"");
+    ACT.data=d;$("#actPv").innerHTML=`<div class="note">${a.s(ACT.c,d)}</div><div style="color:var(--muted);font-size:12.5px">Всё верно? Нажмите «Подтвердить».</div>`;$("#actGo").textContent="Подтвердить";return;}
+  ACT.busy=true;$("#actGo").textContent="Сохраняю…";
+  const payload=Object.assign({},ACT.data,(ACT.c.code&&ACT.name!=="add_car")?{car_code:ACT.c.code}:{});
+  try{const r=await fetch("/api/v4/act/"+ACT.name,{method:"POST",credentials:"same-origin",headers:{"Content-Type":"application/json","X-CSRF":CSRF},body:JSON.stringify({key:ACT.key,data:payload})});
+    if(r.status===401){location.href="/login";return;}const b=await r.json().catch(()=>({}));
+    ACT.res=b;$("#actPv").innerHTML=`<div class="note ${b.ok?"":"warn"}">${b.ok?"✓":"✕"} ${esc(b.message||(b.ok?"Готово":"Ошибка"))}</div>`;
+    if(b.ok){FIN=null;JRN=null;REP=null;RENT=null;try{const f=await getJSON("/api/v4/fleet");cars=f.cars;drivers=f.drivers;}catch(_){}$("#actGo").textContent="Готово";OPD.res=[{ok:true}];}
+    else{ACT.data=null;$("#actGo").textContent="Далее";}}
+  catch(e){$("#actPv").innerHTML=`<div class="note warn">${esc(e.message)}</div>`;ACT.data=null;$("#actGo").textContent="Далее";}
+  ACT.busy=false;}
 VIEWS.repairs=async function(){shell("Ремонты");try{if(!REP)REP=await getJSON("/api/v4/repairs");}catch(e){if(onView("repairs"))failed("Ремонты",e);return;}
   if(!onView("repairs"))return;
   const parts=REP.parts.filter(p=>!rf||p.car===rf),exp=REP.expenses.filter(x=>!rf||x.car===rf);
@@ -924,7 +967,7 @@ function carDrawer(id,tab="overview"){const c=carById(id),d=drvById(c.driver),op
     <div><div class="l">Собственник</div><div class="v">${esc(owners[c.owner][0])}</div></div><div><div class="l">Водитель</div><div class="v">${d?esc(d.name):"—"}</div></div>
     <div><div class="l">Условия</div><div class="v">${esc(c.terms)}</div></div><div><div class="l">Тариф</div><div class="v">${esc(c.rate)}</div></div>
     <div><div class="l">Депозит</div><div class="v num">${rub(c.deposit)}</div></div><div><div class="l">Баланс аренды</div><div class="v num">${c.balance==null?"не подключён":rub(c.balance,true)}</div></div></div>
-    <div class="kv"><div><div class="l">Статус в базе</div><div class="v">${esc(c.status_raw||"—")}</div></div><div><div class="l">Пробег в базе</div><div class="v num">${c.mileage?c.mileage.toLocaleString("ru-RU")+" км":"—"}</div></div></div>`;
+    <div class="kv"><div><div class="l">Статус в базе</div><div class="v">${esc(c.status_raw||"—")}</div></div><div><div class="l">Пробег в базе</div><div class="v num">${c.mileage?c.mileage.toLocaleString("ru-RU")+" км":"—"}</div></div></div>${c.in_db===false?"":`<div style="display:flex;gap:8px;flex-wrap:wrap">${c.driver?`<button class="btn lime" data-actn="topup" data-acar="${c.id}">Пополнить кошелёк</button><button class="btn" data-actn="fine" data-acar="${c.id}">Штраф</button>`:""}<button class="btn" data-actn="assign" data-acar="${c.id}">${c.driver?"Сменить водителя":"Назначить водителя"}</button>${c.owner!=="park"?`<button class="btn" data-actn="close_period" data-acar="${c.id}">Закрыть период</button>`:""}<button class="btn" data-cmdcar="${esc(c.code)}">Операция по машине</button></div>`}`;
   if(tab==="fin")body=`${(()=>{if(!JRN){getJSON("/api/v4/journal?days=90").then(d=>{JRN=d;carDrawer(id,"fin");}).catch(()=>{});return `<div class="note">Загрузка операций…</div>`;}const ops=JRN.operations.filter(o=>"V-"+o.car===id);return ops.length?`<div class="glass"><div class="tbl-wrap"><table><thead><tr><th>Дата</th><th>Операция</th><th>Описание</th><th class="r">Сумма</th></tr></thead><tbody>${ops.slice(0,60).map(o=>`<tr><td class="num">${d2(o.date)}</td><td>${esc(o.label)}</td><td style="white-space:normal;color:var(--muted)">${esc(o.category)} ${esc(o.description)}</td><td class="r">${o.dir==="info"?"—":money(o.dir==="out"?-o.amount:o.amount,o.dir==="in"?"in":"")}</td></tr>`).join("")}</tbody></table></div></div>`:`<div class="note">За 90 дней операций по машине нет.</div>`;})()}`;
   if(tab==="plates")body=`<div class="timeline">${c.plates.map((p,i)=>`<div><b class="num">${esc(p)}</b><div style="color:var(--muted);font-size:12px">${i===c.plates.length-1?"текущий":"прежний"}</div></div>`).join("")}</div>`;
   if(tab==="repairs"){const rs=repairs.filter(r=>r.car===id);body=rs.map(r=>`<div class="row glass"><div class="t"><div>${esc(r.title)}</div><div>${esc(r.date)} · ${esc(r.who)}</div></div>${tag(RCOLS.find(x=>x[0]===r.st)[1],r.st==="done"?"t-ok":"t-info")}<span class="amt num">${rub(r.fact||r.plan)}</span></div>`).join("")||`<div class="empty"><h2>Ремонтов нет</h2><span>Запланированные и выполненные ремонты появятся здесь.</span></div>`;}
@@ -992,6 +1035,8 @@ document.addEventListener("click",e=>{const t=e.target;
   const ct=t.closest("[data-ctab]");if(ct){carDrawer(ct.dataset.cid,ct.dataset.ctab);return;}
   const drv=t.closest("[data-drv]");if(drv){drvDrawer(drv.dataset.drv);return;}
   const car=t.closest("[data-car]");if(car){carDrawer(car.dataset.car);return;}
+  const an=t.closest("[data-actn]");if(an){actModal(an.dataset.actn,an.dataset.acar||"");return;}
+  const cc=t.closest("[data-cmdcar]");if(cc){closeLayer();cmdFocus(cc.dataset.cmdcar);return;}
   const fp=t.closest("[data-finp]");if(fp){FINP=fp.dataset.finp;route();return;}
   const jd=t.closest("[data-jdir]");if(jd){jf.dir=jd.dataset.jdir;VIEWS.finance();return;}
   const cf=t.closest("[data-cf]");if(cf){carFilter=cf.dataset.cf;if(cf.dataset.reset)carQuery="";VIEWS.cars();return;}

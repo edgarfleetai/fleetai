@@ -19,7 +19,7 @@ from urllib.parse import urlsplit
 from flask import Flask, abort, jsonify, redirect, request, send_file, session
 from werkzeug.security import check_password_hash
 
-from . import data, finance, ops, rent, wialon
+from . import actions, data, finance, ops, rent, wialon
 
 STATIC = Path(__file__).resolve().parent / "static"
 SESSION_HOURS = 8
@@ -222,6 +222,17 @@ def create_app(config=None):
             return jsonify(ok=False, results=[{"ok": False, "message": "Команда изменилась после проверки — проверьте ещё раз"}]), 409
         ok, results = ops.commit(message, key, engine, save=ops_save)
         return jsonify(ok=ok, results=results), (200 if ok else 400)
+
+    @app.post("/api/v4/act/<name>")
+    def run_action(name):
+        write_guard()
+        body = request.get_json(silent=True) or {}
+        key = str(body.get("key") or "")[:64]
+        if len(key) < 16:
+            return jsonify(ok=False, message="Нет ключа операции"), 400
+        status, result = actions.run(app, name, body.get("data") or {}, name + ":" + key,
+                                     views=app.config.get("ACTION_VIEWS"))
+        return jsonify(result), status
 
     @app.errorhandler(403)
     def forbidden(_):
