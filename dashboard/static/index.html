@@ -472,12 +472,13 @@ function fillDaily(){const n=90,arr=new Array(n).fill(0),t0=new Date(TODAY);t0.s
   (JRN?JRN.operations:[]).filter(o=>o.dir==="in"&&o.type==="income").forEach(o=>{const d=new Date(o.date);d.setHours(0,0,0,0);const i=n-1-Math.round((t0-d)/864e5);if(i>=0&&i<n)arr[i]+=o.amount;});
   daily=arr;PLAN=sum(cars.filter(c=>c.status==="rented"),c=>{const m=String(c.rate||"").match(/([\d ]+) ₽\/(сут|нед)/);if(!m)return 0;const v=+m[1].replace(/\s/g,"")*100;return m[2]==="нед"?Math.round(v/7):v;});}
 VIEWS.home=function(){
-  const need=[];if(!FIN)need.push(needFin());if(!JRN)need.push(once("/api/v4/journal?days=90").then(d=>{JRN=d;}));if(!RENT)need.push(once("/api/v4/rent").then(d=>{RENT=d;}));
+  const need=[];if(!FIN)need.push(needFin());if(!JRN)need.push(once("/api/v4/journal?days=90").then(d=>{JRN=d;}));if(!RENT)need.push(once("/api/v4/rent").then(d=>{RENT=d;}));if(!SVC)needSvc().then(()=>{if(onView("home")||!location.hash)VIEWS.home();}).catch(()=>{});
   if(need.length&&!HOMELOAD){HOMELOAD=1;Promise.allSettled(need).then(()=>{HOMELOAD=(FIN&&JRN&&RENT)?0:2;if(HOMELOAD)setTimeout(()=>{HOMELOAD=0;},30000);if(onView("home")||!location.hash)VIEWS.home();});}
   const k=kpis();fillDaily();
   const segs=[["rented",k.rented],["free",k.free],["repair",k.repair],["notready",k.notready],["personal",k.personal]].filter(s=>s[1]||!["personal"].includes(s[0]));
   const rents=RENT?RENT.rentals:[],owe=x=>Math.max(-x.wallet,0)+x.debt_total,debtors=rents.filter(x=>owe(x)>0).sort((a,b)=>owe(b)-owe(a));
   const attn=[...debtors.map(x=>({id:"V-"+x.code,cls:"bad",k:"Долг водителя",n:`${x.code} · ${x.driver}`,s:x.debt_total?`аренда ${rub(-Math.max(-x.wallet,0))} · отдельный долг ${rub(-x.debt_total)}`:"долг по аренде",amt:rub(-owe(x)),f:"к оплате"})),
+    ...(SVC?SVC.tasks.map(t=>({id:"V-"+t.car,cls:t.sev,k:t.kind==="oil"?"Замена масла":"ТО",n:t.title,s:t.detail,amt:"—",f:"обслуживание"})):[]),
     ...cars.filter(c=>c.status==="repair"||c.status==="free"||c.status==="notready").map(c=>({id:c.id,cls:c.status==="repair"?"warn":"info",k:ST[c.status][0],n:`${c.code} · ${c.model}`,s:c.status_raw?`в базе: «${c.status_raw}»`:"",amt:"—",f:"не приносит доход"}))].slice(0,6);
   const inc=FIN?sum(FIN.cars,x=>x.income):null,per=FIN&&FIN.cars.length?`${d2(FIN.cars[0].period_start)} — ${d2(FIN.cars[0].period_end)}`:"";
   const dueBy=key=>FIN?sum(FIN.cars.filter(x=>x.owner===key),x=>x.period_due-(x.recurring_booked||x.owner_type!=="investor"?0:x.gps+x.garage)):0;
@@ -748,12 +749,12 @@ VIEWS.monitor=function(){
     <section class="panel glass"><header><h2>Карта</h2><span class="sub">Казань, Набережные Челны, Елабуга, Нижнекамск · колесо или +/− — масштаб</span></header>${mapHTML()}</section>
     <section class="panel glass"><header><h2>Трекеры по машинам</h2><span class="sub">${cars.length} машин</span></header>
       <div style="padding:4px 14px 6px"><label class="searchbox" style="flex:1 1 auto">${ico("search",15)}<input id="monQ" placeholder="Номер или модель" value="${esc(monQ)}" aria-label="Поиск машины"></label></div>
-      <div class="list trk">${list.map(c=>{const us=WUNITS.filter(u=>u.car===c.id);return `<div class="row"><i class="dotx" style="background:${us.length?"var(--s1)":"var(--faint)"}"></i>${plate(c)}<div class="t"><div>${esc(c.model)}</div><div style="white-space:normal">${us.length?us.map(u=>`Wialon #${u.id} · ${esc(u.name)}${u.time?" · "+(u.speed_kmh>3?"едет "+u.speed_kmh+" км/ч":"стоит")+" · "+ago(u.time):" · нет позиции"}`).join("<br>"):"Трекера нет"}</div></div>${us.length>1?tag("2 объекта","t-warn"):us.length?tag("есть","t-lime"):tag("нет","t-mute")}</div>`;}).join("")}</div></section>
+      <div class="list trk">${list.map(c=>{const us=WUNITS.filter(u=>u.car===c.id);return `<div class="row"><i class="dotx" style="background:${us.length?"var(--s1)":"var(--faint)"}"></i>${plate(c)}<div class="t"><div>${esc(c.model)}</div><div style="white-space:normal">${us.length?us.map(u=>`Wialon #${u.id} · ${esc(u.name)}${u.time?" · "+(u.speed_kmh>3?"едет "+u.speed_kmh+" км/ч":"стоит")+" · "+ago(u.time):" · нет позиции"}`).join("<br>"):"Трекера нет"}${(()=>{const s=svcCar(c.code);return s&&(s.today_km!=null||s.month_km!=null)?`<br><b style="color:var(--fg)">сегодня ${km(s.today_km)} · за месяц ${km(s.month_km)}</b>`:"";})()}</div></div>${us.length>1?tag("2 объекта","t-warn"):us.length?tag("есть","t-lime"):tag("нет","t-mute")}</div>`;}).join("")}</div></section>
   </div>
   <section class="panel glass"><header><h2>Что сверить</h2><span class="sub">найдено при сравнении Wialon и базы FleetAI</span></header>
     <div class="tiles" style="grid-template-columns:repeat(auto-fill,minmax(260px,1fr))">${checks.map(a=>`<div class="tile ${a.sev}" style="cursor:default"><div class="n">${esc(a.t)}</div><div class="s" style="white-space:normal">${esc(a.s)}</div></div>`).join("")}</div></section>
   <section class="panel glass"><div class="pbody" style="padding-top:16px"><div class="lockcard"><span class="ic">${ico("alert",18)}</span><div><b>Блокировка двигателя отключена</b><div style="font-size:12.5px;color:var(--muted);margin-top:2px">Команды на автомобили из диспетчерской не отправляются. Включение — только после аппаратной проверки безопасности и вашего отдельного разрешения.</div></div></div></div></section>`;
-  wireMap();if(!monTimer)monTimer=setInterval(loadPos,30000);
+  wireMap();if(!monTimer)monTimer=setInterval(loadPos,30000);if(!SVC)needSvc().then(()=>{if(onView("monitor"))VIEWS.monitor();}).catch(()=>{});
   $("#monQ").addEventListener("input",e=>{monQ=e.target.value;const p=e.target.selectionStart;VIEWS.monitor();const n=$("#monQ");n.focus();n.setSelectionRange(p,p);});};
 const LATER=t=>function(){$("#page").innerHTML=`<div class="phead"><h1><span>${t}</span></h1></div><section class="panel glass"><div class="empty"><h2>Раздел подключается</h2><span>Данные возьмём из базы FleetAI и перед показом сверим со старым FleetAI. Тестовых цифр здесь нет.</span></div></section>`;};
 /* ===== Финансы, инвесторы, ремонты: реальные данные (те же расчёты, что в FleetAI) ===== */
@@ -880,7 +881,7 @@ function opModal(prefCar){OPD={msg:"",key:(crypto.randomUUID?crypto.randomUUID()
     try{const {data}=await opPost("/api/v4/ops/preview",{message:m});OPD.msg=m;OPD.pv=data;}catch(e){OPD.pv={ok:false,items:[{label:"Ошибка",car:"",category:"",share:"",amount:0,parts:[],problem:e.message}]};}opRender();});
   $("#opSave").addEventListener("click",async()=>{if(!OPD.pv||!OPD.pv.ok||OPD.busy)return;OPD.busy=true;$("#opSave").disabled=true;
     try{const {data}=await opPost("/api/v4/ops/commit",{message:OPD.msg,fingerprint:OPD.pv.fingerprint,key:OPD.key});OPD.res=data.results||[{ok:false,message:"Ошибка"}];
-      if(data.ok){FIN=null;JRN=null;REP=null;RENT=null;toast("Операция сохранена");}}catch(e){OPD.res=[{ok:false,message:e.message}];}
+      if(data.ok){FIN=null;JRN=null;REP=null;RENT=null;SVC=null;toast("Операция сохранена");}}catch(e){OPD.res=[{ok:false,message:e.message}];}
     OPD.busy=false;opRender();});
   opRender();$("#opCar").focus();}
 /* ===== Одна строка для всех операций: Enter — проверить, Enter ещё раз — сохранить ===== */
@@ -908,7 +909,7 @@ async function cmdSave(m){const items=CMD.pv.items,res=[];
 async function cmdRun(){const inp=$("#cmd"),m=inp.value.trim();if(!m||CMD.busy)return;
   if(CMD.pv&&CMD.pv.ok&&CMD.msg===m){CMD.busy=true;$("#cmdGo").textContent="Сохраняю…";
     try{const {ok,res}=await cmdSave(m);
-      if(ok){cmdShow(`<div class="note">✓ ${res.map(r=>esc(r.message)).join(" · ")}</div>`);inp.value="";CMD={pv:null,msg:"",key:"",busy:false,mode:{},pay:{}};FIN=null;JRN=null;REP=null;RENT=null;const v=(location.hash||"#home").slice(1);(VIEWS[v]||VIEWS.home)();setTimeout(()=>{if(!CMD.pv)cmdShow("");},6000);}
+      if(ok){cmdShow(`<div class="note">✓ ${res.map(r=>esc(r.message)).join(" · ")}</div>`);inp.value="";CMD={pv:null,msg:"",key:"",busy:false,mode:{},pay:{}};FIN=null;JRN=null;REP=null;RENT=null;SVC=null;const v=(location.hash||"#home").slice(1);(VIEWS[v]||VIEWS.home)();setTimeout(()=>{if(!CMD.pv)cmdShow("");},6000);}
       else cmdShow(res.map(r=>`<div class="note ${r.ok?"":"warn"}">${r.ok?"✓":"✕"} ${esc(r.message)}</div>`).join(""));}catch(e){cmdShow(`<div class="note warn">${esc(e.message)}</div>`);}
     CMD.busy=false;cmdLabel();return;}
   CMD.busy=true;$("#cmdGo").textContent="Проверяю…";
@@ -961,7 +962,7 @@ async function actGo(){if(!ACT||ACT.busy)return;const a=ACTS[ACT.name];
   const payload=Object.assign({},ACT.data,(ACT.c.code&&ACT.name!=="add_car")?{car_code:ACT.c.code}:{});
   try{const {data:b}=await opPost("/api/v4/act/"+ACT.name,{key:ACT.key,data:payload});
     ACT.res=b;$("#actPv").innerHTML=`<div class="note ${b.ok?"":"warn"}">${b.ok?"✓":"✕"} ${esc(b.message||(b.ok?"Готово":"Ошибка"))}</div>`;
-    if(b.ok){if(ACT.boardId){try{await opPost(`/api/v4/board/${ACT.boardId}/delete`,{data:{}});}catch(_){}await boardLoad(true);}FIN=null;JRN=null;REP=null;RENT=null;try{const f=await getJSON("/api/v4/fleet");cars=f.cars;drivers=f.drivers;}catch(_){}$("#actGo").textContent="Готово";OPD.res=[{ok:true}];}
+    if(b.ok){if(ACT.boardId){try{await opPost(`/api/v4/board/${ACT.boardId}/delete`,{data:{}});}catch(_){}await boardLoad(true);}FIN=null;JRN=null;REP=null;RENT=null;SVC=null;try{const f=await getJSON("/api/v4/fleet");cars=f.cars;drivers=f.drivers;}catch(_){}$("#actGo").textContent="Готово";OPD.res=[{ok:true}];}
     else{ACT.data=null;$("#actGo").textContent="Далее";}}
   catch(e){$("#actPv").innerHTML=`<div class="note warn">${esc(e.message)}</div>`;ACT.data=null;$("#actGo").textContent="Далее";}
   ACT.busy=false;}
@@ -985,7 +986,7 @@ async function opeGo(){if(!OPE||OPE.busy)return;if(OPE.done){closeLayer();return
   OPE.busy=true;$("#opeGo").textContent="Сохраняю…";
   try{const {data:b}=await opPost(`/api/v4/op/${OPE.id}/${OPE.what}`,{key:OPE.key,data});
     $("#opeRes").innerHTML=`<div class="note ${b.ok?"":"warn"}">${b.ok?"✓":"✕"} ${esc(b.message||(b.ok?"Готово":"Ошибка"))}</div>`;
-    if(b.ok){OPE.done=true;$("#opeGo").textContent="Готово";FIN=null;JRN=null;REP=null;RENT=null;OPD.res=[{ok:true}];}else $("#opeGo").textContent=OPE.what==="delete"?"Удалить":"Сохранить";}
+    if(b.ok){OPE.done=true;$("#opeGo").textContent="Готово";FIN=null;JRN=null;REP=null;RENT=null;SVC=null;OPD.res=[{ok:true}];}else $("#opeGo").textContent=OPE.what==="delete"?"Удалить":"Сохранить";}
   catch(e){$("#opeRes").innerHTML=`<div class="note warn">${esc(e.message)}</div>`;$("#opeGo").textContent="Повторить";}
   OPE.busy=false;}
 /* ===== Путь водителя: кандидаты хранятся в dashboard_driver_board, арендаторы — из машин ===== */
@@ -1046,6 +1047,33 @@ async function boardSave(del){if(!BM||BM.busy)return;BM.busy=true;
   try{const url=BM.id?`/api/v4/board/${BM.id}${del?"/delete":""}`:"/api/v4/board";const {data:r}=await opPost(url,{data});
     if(!r.ok)throw new Error(r.message||"Ошибка");await boardLoad(true);closeLayer();VIEWS.drivers();toast(r.message||"Сохранено");}
   catch(e){$("#bmRes").innerHTML=`<div class="note warn">${esc(e.message)}</div>`;}BM.busy=false;}
+/* ===== Пробег, масло и запчасти ===== */
+let SVC=null;
+async function needSvc(){if(!SVC)SVC=await once("/api/v4/service");return SVC;}
+const km=v=>v==null?"—":Math.round(v).toLocaleString("ru-RU")+" км";
+const SRC={tracker:"трекер",wialon_counter:"счётчик Wialon",fleetai:"записи FleetAI"};
+const svcCar=code=>SVC&&SVC.cars.find(x=>x.code===code);
+function oilCell(o){if(!o)return `<span style="color:var(--muted)">замен масла в журнале нет</span>`;
+  if(o.since_km==null)return `<span style="color:var(--muted)">замена ${d2(o.date)}, пробег на момент замены неизвестен</span>`;
+  const cls=o.status==="overdue"?"t-bad":o.status==="soon"?"t-warn":"t-ok";
+  return `${tag(o.status==="overdue"?`просрочено на ${km(o.since_km-o.interval_km)}`:`через ${km(o.due_in_km)}`,cls)} <span style="color:var(--muted);font-size:12.5px">пройдено ${km(o.since_km)} из ${km(o.interval_km)} · замена ${d2(o.date)}</span>`;}
+VIEWS.tasks=async function(){shell("Задачи");try{await needSvc();}catch(e){if(onView("tasks"))failed("Задачи",e);return;}
+  if(!onView("tasks"))return;
+  const t=SVC.tasks,parts=SVC.parts;
+  $("#page").innerHTML=`
+  <div class="phead"><h1><span>Задачи</span><span>и ТО</span></h1>${hstat("alert",t.length,"задач по обслуживанию")}${hstat("wrench",SVC.cars.filter(c=>c.oil&&c.oil.since_km!=null).length,"машин со счётчиком масла")}</div>
+  ${SVC.error?`<section class="panel glass"><div class="pbody" style="padding-top:14px"><div class="note warn">Wialon: ${esc(SVC.error)} — пробег по трекерам временно недоступен, используются записи FleetAI.</div></div></section>`:""}
+  <section class="panel glass"><header><h2>Нужно сделать</h2><span class="sub">${t.length}</span></header>
+    <div class="list">${t.map(x=>`<button class="row" data-car="V-${esc(x.car)}"><i class="dotx" style="background:var(--${x.sev})"></i><div class="t"><div>${esc(x.title)}</div><div>${esc(x.detail)}</div></div></button>`).join("")||`<div class="empty"><h2>Всё в порядке</h2><span>Замены масла пока не подходят. Задача появится за ${km(1000)} до ${km(SVC.oil_interval_km)}.</span></div>`}</div></section>
+  <section class="panel glass"><header><h2>Пробег и масло</h2><span class="sub">масло каждые ${km(SVC.oil_interval_km)}</span></header>
+    <div class="tbl-wrap"><table><thead><tr><th>Машина</th><th class="r">Одометр</th><th class="r">Сегодня</th><th class="r">За месяц</th><th>Масло</th></tr></thead><tbody>
+    ${SVC.cars.map(c=>`<tr data-car="V-${esc(c.code)}" tabindex="0" style="cursor:pointer"><td>${carLabel(c.code)}</td><td class="r num">${km(c.odometer_km)}<div style="font-size:11px;color:var(--muted)">${esc(SRC[c.source]||"")}</div></td><td class="r num">${c.today_km==null?"—":km(c.today_km)}</td><td class="r num">${c.month_km==null?"—":km(c.month_km)}</td><td>${oilCell(c.oil)}</td></tr>`).join("")}
+    </tbody></table></div></section>
+  <section class="panel glass"><header><h2>Как часто меняются запчасти</h2><span class="sub">по записям ремонтов</span></header>
+    <div class="tbl-wrap"><table><thead><tr><th>Машина</th><th>Запчасть</th><th class="r">Замен</th><th>Последняя</th><th class="r">В среднем раз в</th></tr></thead><tbody>
+    ${parts.map(p=>`<tr><td>${esc(p.car)}</td><td>${esc(p.part)}</td><td class="r num">${p.count}</td><td class="num">${d2(p.last_date)}${p.last_km?` · ${km(p.last_km)}`:""}</td><td class="r num">${[p.avg_km?km(p.avg_km):"",p.avg_days?p.avg_days+" дн":""].filter(Boolean).join(" · ")||"—"}</td></tr>`).join("")||`<tr><td colspan="5" style="color:var(--muted)">Записей о запчастях пока нет</td></tr>`}
+    </tbody></table></div></section>
+  <section class="panel glass"><div class="pbody" style="padding-top:16px"><div class="note">Счётчик масла стартует от последней записи о замене масла (например «621 замена масла 2500 фильтр 500»). Пробег на момент замены берётся из команды («пробег 152000»), из трекера Wialon на дату замены или из записей пробега FleetAI. Для машин без трекера одометр — по записям пробега.</div></div></section>`;};
 VIEWS.repairs=async function(){shell("Ремонты");try{if(!REP)REP=await once("/api/v4/repairs");}catch(e){if(onView("repairs"))failed("Ремонты",e);return;}
   if(!onView("repairs"))return;
   const parts=REP.parts.filter(p=>!rf||p.car===rf),exp=REP.expenses.filter(x=>!rf||x.car===rf);
@@ -1073,7 +1101,7 @@ function stub(v){return function(){const [t,items]=STUB[v];$("#page").innerHTML=
 function closeLayer(){const had=!!$("#layer").innerHTML;$("#layer").innerHTML="";document.body.style.overflow="";if(had&&typeof OPD!=="undefined"&&OPD.res&&OPD.res.some(r=>r.ok)){OPD.res=null;const v=(location.hash||"#home").slice(1);(VIEWS[v]||VIEWS.home)();}}
 function openLayer(html){$("#layer").innerHTML=`<div class="scrim" data-close></div>${html}`;document.body.style.overflow="hidden";const f=$("#layer [autofocus]")||$("#layer button, #layer input");f&&f.focus();}
 function carDrawer(id,tab="overview"){const c=carById(id),d=drvById(c.driver),ops=ledger.filter(e=>e.car===id);
-  const tabs=[["overview","Обзор"],["fin","Финансы"],["plates","Госномера"],["repairs","Ремонты"],["wialon","Wialon"]];let body="";
+  const tabs=[["overview","Обзор"],["fin","Финансы"],["to","ТО и пробег"],["plates","Госномера"],["wialon","Wialon"]];let body="";
   if(tab==="overview")body=`${c.flag?`<div class="note warn">${esc(c.flag)}</div>`:""}<div class="kv">
     <div><div class="l">Внутренний ID</div><div class="v num">${c.id}</div></div><div><div class="l">Госномер</div><div class="v num">${esc(c.plate)}</div></div>
     <div><div class="l">Модель / год</div><div class="v">${esc(c.model)}${c.year?", "+c.year:""}</div></div><div><div class="l">VIN</div><div class="v" style="color:var(--faint)">не заполнен</div></div>
@@ -1082,6 +1110,10 @@ function carDrawer(id,tab="overview"){const c=carById(id),d=drvById(c.driver),op
     <div><div class="l">Депозит</div><div class="v num">${rub(c.deposit)}</div></div><div><div class="l">Баланс аренды</div><div class="v num">${c.balance==null?"не подключён":rub(c.balance,true)}</div></div></div>
     <div class="kv"><div><div class="l">Статус в базе</div><div class="v">${esc(c.status_raw||"—")}</div></div><div><div class="l">Пробег в базе</div><div class="v num">${c.mileage?c.mileage.toLocaleString("ru-RU")+" км":"—"}</div></div></div>${c.in_db===false?"":`<div style="display:flex;gap:8px;flex-wrap:wrap">${c.driver?`<button class="btn lime" data-actn="topup" data-acar="${c.id}">Пополнить кошелёк</button><button class="btn" data-actn="fine" data-acar="${c.id}">Штраф</button>`:""}<button class="btn" data-actn="assign" data-acar="${c.id}">${c.driver?"Сменить водителя":"Назначить водителя"}</button>${c.owner!=="park"?`<button class="btn" data-actn="close_period" data-acar="${c.id}">Закрыть период</button>`:""}<button class="btn" data-cmdcar="${esc(c.code)}">Операция по машине</button></div>`}`;
   if(tab==="fin")body=`${(()=>{if(!JRN){getJSON("/api/v4/journal?days=90").then(d=>{JRN=d;carDrawer(id,"fin");}).catch(()=>{});return `<div class="note">Загрузка операций…</div>`;}const ops=JRN.operations.filter(o=>"V-"+o.car===id);return ops.length?`<div class="glass"><div class="tbl-wrap"><table><thead><tr><th>Дата</th><th>Операция</th><th>Описание</th><th class="r">Сумма</th></tr></thead><tbody>${ops.slice(0,60).map(o=>`<tr><td class="num">${d2(o.date)}</td><td>${esc(o.label)}</td><td style="white-space:normal;color:var(--muted)">${esc(o.category)} ${esc(o.description)}</td><td class="r">${o.dir==="info"?"—":money(o.dir==="out"?-o.amount:o.amount,o.dir==="in"?"in":"")}</td></tr>`).join("")}</tbody></table></div></div>`:`<div class="note">За 90 дней операций по машине нет.</div>`;})()}`;
+  if(tab==="to"){if(!SVC){needSvc().then(()=>carDrawer(id,"to")).catch(()=>{});body=`<div class="note">Загрузка…</div>`;}else{const s=svcCar(c.code)||{};const ps=SVC.parts.filter(p=>p.car===c.code);
+    body=`<div class="kv"><div><div class="l">Одометр</div><div class="v num">${km(s.odometer_km)}</div></div><div><div class="l">Источник</div><div class="v">${esc(SRC[s.source]||"—")}</div></div><div><div class="l">Сегодня</div><div class="v num">${km(s.today_km)}</div></div><div><div class="l">За месяц</div><div class="v num">${km(s.month_km)}</div></div></div>
+    <div class="note">Масло: ${oilCell(s.oil)}</div>
+    ${ps.length?`<div class="glass"><div class="tbl-wrap"><table><thead><tr><th>Запчасть</th><th class="r">Замен</th><th>Последняя</th><th class="r">Интервал</th></tr></thead><tbody>${ps.map(p=>`<tr><td>${esc(p.part)}</td><td class="r">${p.count}</td><td class="num">${d2(p.last_date)}${p.last_km?` · ${km(p.last_km)}`:""}</td><td class="r num">${[p.avg_km?km(p.avg_km):"",p.avg_days?p.avg_days+" дн":""].filter(Boolean).join(" · ")||"—"}</td></tr>`).join("")}</tbody></table></div></div>`:`<div class="note">Записей о запчастях по машине пока нет.</div>`}`;}}
   if(tab==="plates")body=`<div class="timeline">${c.plates.map((p,i)=>`<div><b class="num">${esc(p)}</b><div style="color:var(--muted);font-size:12px">${i===c.plates.length-1?"текущий":"прежний"}</div></div>`).join("")}</div>`;
   if(tab==="repairs"){const rs=repairs.filter(r=>r.car===id);body=rs.map(r=>`<div class="row glass"><div class="t"><div>${esc(r.title)}</div><div>${esc(r.date)} · ${esc(r.who)}</div></div>${tag(RCOLS.find(x=>x[0]===r.st)[1],r.st==="done"?"t-ok":"t-info")}<span class="amt num">${rub(r.fact||r.plan)}</span></div>`).join("")||`<div class="empty"><h2>Ремонтов нет</h2><span>Запланированные и выполненные ремонты появятся здесь.</span></div>`;}
   if(tab==="wialon")body=`<div class="kv"><div><div class="l">Трекер</div><div class="v">${(()=>{const u=WUNITS.find(u=>u.car===c.id);return u?("#"+u.id+" · "+esc(u.name)+(u.time?" · сигнал "+ago(u.time):"")):"нет трекера"})()}</div></div><div><div class="l">Пробег</div><div class="v num">—</div></div></div><div class="note">Удалённая блокировка двигателя отключена. Включение — только после аппаратной проверки и вашего отдельного разрешения.</div>`;

@@ -462,3 +462,48 @@ def test_driver_board_cards(fin_dash):
     assert c.get('/api/v4/board', base_url=BASE).get_json()['cards'] == []
     with create_engine(fin_dash.engine_url).connect() as conn:   # old tables untouched
         assert conn.execute(text("SELECT count(*) FROM cars")).scalar() == 2
+
+
+def test_odometer_units_are_detected():
+    from dashboard.service import to_km, is_oil_change
+    assert to_km(152_000.0, 150_000) == 152_000            # km
+    assert to_km(152_000_000.0, 150_000) == 152_000        # metres
+    assert to_km(None, 1) is None
+    assert is_oil_change('621 замена масла 2500 фильтр 500')
+    assert is_oil_change('Моторное масло')
+    assert not is_oil_change('621 масло кпп 3000')
+    assert not is_oil_change('датчик давления масла')
+
+
+def test_service_overview_oil_reminders(fin_dash):
+    from datetime import datetime, timedelta
+    eng = create_engine(fin_dash.engine_url)
+    with eng.begin() as c:
+        c.execute(text("UPDATE cars SET current_mileage = 150000 WHERE code IN ('621','897')"))
+        c.execute(text("INSERT INTO operations (id, date, car_code, type, category, description, amount, raw_message, mileage) "
+                       "VALUES (10, :d, '621', 'service', 'ТО', 'замена масла', 2500, '621 замена масла 2500 пробег 137500', 137500), "
+                       "(11, :d, '897', 'service', 'ТО', 'замена масла', 2500, '897 замена масла 2500', NULL)"),
+                  {'d': datetime.now() - timedelta(days=60)})
+        c.execute(text("INSERT INTO mileage (car_code, date, mileage, source) VALUES ('897', :d1, 140000, 'пробег'), ('897', :d2, 151000, 'пробег')"),
+                  {'d1': datetime.now() - timedelta(days=61), 'd2': datetime.now() - timedelta(days=1)})
+
+    def fake_odo(moments):
+        assert set(moments) == {50496}
+        return {50496: {'name': 'Hyundai А621СУ 716', 'counter_km': None, 'param_now': 152_000_000.0,
+                        'at': {'day': 151_800_000.0, 'month': 150_000_000.0}}}, None
+
+    from dashboard.app import create_app
+    app = create_app({'TESTING': True, 'SECRET_KEY': 'x' * 40, 'DATABASE_URL': fin_dash.engine_url, 'PUBLIC_URL': BASE,
+                      'WIALON_FETCH': lambda: ([{'id': 50496, 'name': 'Hyundai А621СУ 716', 'lat': 1, 'lon': 1,
+                                                 'speed_kmh': 0, 'course': 0, 'time': 1}], None),
+                      'ODO_FETCH': fake_odo})
+    c = app.test_client()
+    assert c.get('/api/v4/service', base_url=BASE).status_code == 401
+    login(c)
+    data = c.get('/api/v4/service', base_url=BASE).get_json()
+    cars = {x['code']: x for x in data['cars']}
+    assert cars['621']['odometer_km'] == 152_000 and cars['621']['source'] == 'tracker'
+    assert cars['621']['today_km'] == 200 and cars['621']['month_km'] == 2000
+    assert cars['621']['oil']['since_km'] == 14_500 and cars['621']['oil']['status'] == 'soon'
+    assert cars['897']['source'] == 'fleetai' and cars['897']['oil']['since_km'] == 11_000
+    assert [t['car'] for t in data['tasks']] == ['621'] and 'через 500 км' in data['tasks'][0]['title']

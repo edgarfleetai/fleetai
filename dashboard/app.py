@@ -20,7 +20,7 @@ from urllib.parse import urlsplit
 from flask import Flask, abort, jsonify, redirect, request, send_file, session
 from werkzeug.security import check_password_hash
 
-from . import actions, board, data, finance, ops, rent, wialon
+from . import actions, board, data, finance, ops, rent, service, wialon
 
 STATIC = Path(__file__).resolve().parent / "static"
 SESSION_HOURS = 8
@@ -85,9 +85,10 @@ def create_app(config=None):
             return key_locks.setdefault(key, threading.Lock())
 
     def fresh(key):
+        ttl = 900 if key == "service" else CACHE_SECONDS
         with cache_lock:
             hit = cache.get(key)
-            return hit[1] if hit and time.time() - hit[0] < CACHE_SECONDS else None
+            return hit[1] if hit and time.time() - hit[0] < ttl else None
 
     def cached(key, fn):
         """Heavy read-only calculations are reused; one calculation per key at a
@@ -120,17 +121,22 @@ def create_app(config=None):
         jobs = (("finance:current", lambda: finance.fleet_finance(engine, "current")),
                 ("rent", lambda: rent.rent_overview(engine)),
                 ("journal:90", lambda: finance.journal(engine, 90)))
+        cycle = 0
         while True:
-            for key, fn in jobs:
+            # mileage/maintenance reads Wialon history: every ~10 minutes is enough
+            extra = (("service", lambda: service_data()),) if cycle % 12 == 0 else ()
+            for key, fn in jobs + extra:
                 try:
                     refresh(key, fn)
                 except Exception as error:  # keep warming; a request will show the error
                     app.logger.warning("cache warm %s failed: %s", key, type(error).__name__)
+            cycle += 1
             time.sleep(45)
 
     if not app.testing and app.config.get("WARM_CACHE", True):
         threading.Thread(target=warm_loop, name="fa4-cache-warm", daemon=True).start()
     wialon_fetch = app.config.get("WIALON_FETCH") or wialon.fetch_units
+    odo_fetch = app.config.get("ODO_FETCH") or wialon.fetch_odometers
 
     def same_origin():
         origin = request.headers.get("Origin")
@@ -334,6 +340,17 @@ def create_app(config=None):
     @app.errorhandler(403)
     def forbidden(_):
         return jsonify(ok=False, error="Запрещено"), 403
+
+    def service_data():
+        units, _ = wialon_fetch()
+        cars_now = data.load_fleet(engine)["cars"]
+        by_car = {u["car_code"]: u["id"] for u in data.match_units_to_cars(units, cars_now) if u.get("car_code")}
+        return service.overview(engine, by_car, odo_fetch)
+
+    @app.get("/api/v4/service")
+    def service_view():
+        api_owner()
+        return jsonify(cached("service", service_data))
 
     @app.get("/api/v4/positions")
     def positions():
