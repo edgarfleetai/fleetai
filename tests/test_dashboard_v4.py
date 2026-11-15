@@ -392,3 +392,16 @@ def test_assign_driver_through_old_handler(fin_dash):
     assert r.status_code == 200 and r.get_json()['ok'], r.get_json()
     with create_engine(fin_dash.engine_url).connect() as conn:
         assert conn.execute(text("SELECT driver FROM cars WHERE code = '897'")).scalar() == 'Petr'
+
+
+def test_preview_marks_income_from_driver(ops_dash):
+    c = ops_dash.test_client()
+    login(c)
+    h = csrf_headers(c)
+    eng = create_engine(ops_dash.config['DATABASE_URL'])
+    with eng.begin() as conn:
+        conn.execute(text("UPDATE cars SET driver = '' WHERE code = '897'"))
+    pv = c.post('/api/v4/ops/preview', base_url=BASE, headers=h,
+                json={'message': '621 получил 13000 / 897 получил 5000 / 621 мойка 500'}).get_json()
+    drivers = [i['driver'] for i in pv['items']]
+    assert drivers == ['Сергей', '', '']     # only income on a car with a driver

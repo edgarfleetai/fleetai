@@ -896,27 +896,44 @@ function opModal(prefCar){OPD={msg:"",key:(crypto.randomUUID?crypto.randomUUID()
     OPD.busy=false;opRender();});
   opRender();$("#opCar").focus();}
 /* ===== Одна строка для всех операций: Enter — проверить, Enter ещё раз — сохранить ===== */
-let CMD={pv:null,msg:"",key:"",busy:false};
+let CMD={pv:null,msg:"",key:"",busy:false,mode:{},pay:{}};
 function cmdKey(){return crypto.randomUUID?crypto.randomUUID():String(Date.now())+Math.random().toString(36).slice(2);}
 function cmdShow(html){const b=$("#cmdPv");b.innerHTML=html;b.hidden=!html;}
-function cmdCard(p){return p.items.map(i=>`<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><b>${esc(i.label)}</b>${i.car?`<span class="plate">${esc(i.car)}</span>`:""}${i.category?`<span class="tag t-mute">${esc(i.category)}</span>`:""}${i.parts.length?`<span style="color:var(--muted);font-size:12.5px">${i.parts.map(x=>esc(x.name)).join(", ")}</span>`:""}${i.investor?`<span style="color:var(--muted);font-size:12.5px">инвестор ${esc(i.investor)}</span>`:""}<span class="amt num" style="margin-left:auto">${rub(i.amount)}</span></div>${i.problem?`<div class="note warn" style="margin-top:4px">${esc(i.problem)}</div>`:""}`).join("<hr style='border:0;border-top:1px solid var(--stroke);margin:6px 0'>");}
+function cmdCard(p){return p.items.map((i,n)=>{const drv=i.driver&&!i.problem,asDrv=drv&&CMD.mode[n]!=="other";
+  return `<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><b>${asDrv?"Оплата водителя":esc(i.label)}</b>${i.car?`<span class="plate">${esc(i.car)}</span>`:""}${asDrv?`<span class="tag t-info">${esc(i.driver)}</span>`:i.category?`<span class="tag t-mute">${esc(i.category)}</span>`:""}${i.parts.length?`<span style="color:var(--muted);font-size:12.5px">${i.parts.map(x=>esc(x.name)).join(", ")}</span>`:""}${i.investor?`<span style="color:var(--muted);font-size:12.5px">инвестор ${esc(i.investor)}</span>`:""}<span class="amt num" style="margin-left:auto">${rub(i.amount)}</span></div>
+  ${drv?`<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:6px"><div class="seg" role="group" aria-label="Чьи деньги"><button class="${asDrv?"on":""}" data-cmode="${n}" data-v="driver">От водителя → в его кабинет</button><button class="${asDrv?"":"on"}" data-cmode="${n}" data-v="other">Другой доход</button></div>
+    ${asDrv?`<select class="inp" data-cpay="${n}" aria-label="Способ" style="padding:5px 8px">${[["cash","Наличные"],["transfer","Перевод"],["other","Другое"]].map(([v,l])=>`<option value="${v}" ${(CMD.pay[n]||"cash")===v?"selected":""}>${l}</option>`).join("")}</select>`:""}</div>
+    <div style="font-size:12px;color:var(--muted);margin-top:4px">${asDrv?"Пополнится кошелёк водителя (его личный кабинет) и запишется доход — как кнопка «Пополнить кошелёк».":"Запишется только доход парка; кошелёк водителя не изменится."}</div>`:""}
+  ${i.problem?`<div class="note warn" style="margin-top:4px">${esc(i.problem)}</div>`:""}`;}).join("<hr style='border:0;border-top:1px solid var(--stroke);margin:6px 0'>");}
+function cmdPreviewHTML(){const p=CMD.pv;return cmdCard(p)+(p.ok?`<div style="color:var(--muted);font-size:12.5px;margin-top:6px">Всё верно? Нажмите Enter или «Сохранить». Esc — отмена.</div>`:"");}
+async function cmdSave(m){const items=CMD.pv.items,res=[];
+  const drvIdx=items.map((i,n)=>i.driver&&!i.problem&&CMD.mode[n]!=="other"?n:-1).filter(n=>n>=0);
+  for(const n of drvIdx){const i=items[n];
+    const {data}=await opPost("/api/v4/act/topup",{key:CMD.key+":t"+n,data:{car_code:i.car,amount:Math.round(i.amount/100),payment_method:CMD.pay[n]||"cash",comment:i.raw}});
+    res.push({ok:!!data.ok,message:data.message||(data.ok?"Кошелёк пополнен":"Ошибка")});if(!data.ok)return {ok:false,res};}
+  const rest=items.filter((i,n)=>!drvIdx.includes(n)).map(i=>i.raw);
+  if(rest.length){let fp=CMD.pv.fingerprint,msg=m;
+    if(drvIdx.length){msg=rest.join(" / ");const {data:pv}=await opPost("/api/v4/ops/preview",{message:msg});if(!pv.ok)return {ok:false,res:res.concat([{ok:false,message:"Остальная часть команды не прошла проверку"}])};fp=pv.fingerprint;}
+    const {data}=await opPost("/api/v4/ops/commit",{message:msg,fingerprint:fp,key:CMD.key+":ops"});
+    (data.results||[{ok:false,message:"Ошибка"}]).forEach(r=>res.push(r));if(!data.ok)return {ok:false,res};}
+  return {ok:true,res};}
 async function cmdRun(){const inp=$("#cmd"),m=inp.value.trim();if(!m||CMD.busy)return;
   if(CMD.pv&&CMD.pv.ok&&CMD.msg===m){CMD.busy=true;$("#cmdGo").textContent="Сохраняю…";
-    try{const {data}=await opPost("/api/v4/ops/commit",{message:m,fingerprint:CMD.pv.fingerprint,key:CMD.key});
-      const rs=data.results||[];
-      if(data.ok){cmdShow(`<div class="note">✓ ${rs.map(r=>esc(r.message)).join(" · ")}</div>`);inp.value="";CMD={pv:null,msg:"",key:"",busy:false};FIN=null;JRN=null;REP=null;RENT=null;const v=(location.hash||"#home").slice(1);(VIEWS[v]||VIEWS.home)();setTimeout(()=>{if(!CMD.pv)cmdShow("");},6000);}
-      else cmdShow(rs.map(r=>`<div class="note warn">${esc(r.message)}</div>`).join(""));}catch(e){cmdShow(`<div class="note warn">${esc(e.message)}</div>`);}
+    try{const {ok,res}=await cmdSave(m);
+      if(ok){cmdShow(`<div class="note">✓ ${res.map(r=>esc(r.message)).join(" · ")}</div>`);inp.value="";CMD={pv:null,msg:"",key:"",busy:false,mode:{},pay:{}};FIN=null;JRN=null;REP=null;RENT=null;const v=(location.hash||"#home").slice(1);(VIEWS[v]||VIEWS.home)();setTimeout(()=>{if(!CMD.pv)cmdShow("");},6000);}
+      else cmdShow(res.map(r=>`<div class="note ${r.ok?"":"warn"}">${r.ok?"✓":"✕"} ${esc(r.message)}</div>`).join(""));}catch(e){cmdShow(`<div class="note warn">${esc(e.message)}</div>`);}
     CMD.busy=false;cmdLabel();return;}
   CMD.busy=true;$("#cmdGo").textContent="Проверяю…";
-  try{const {data}=await opPost("/api/v4/ops/preview",{message:m});CMD.pv=data;CMD.msg=m;CMD.key=cmdKey();
-    cmdShow(cmdCard(data)+(data.ok?`<div style="color:var(--muted);font-size:12.5px;margin-top:6px">Всё верно? Нажмите Enter или «Сохранить». Esc — отмена.</div>`:""));}
+  try{const {data}=await opPost("/api/v4/ops/preview",{message:m});CMD.pv=data;CMD.msg=m;CMD.key=cmdKey();CMD.mode={};CMD.pay={};cmdShow(cmdPreviewHTML());}
   catch(e){cmdShow(`<div class="note warn">${esc(e.message)}</div>`);}
   CMD.busy=false;cmdLabel();}
 function cmdLabel(){const ready=CMD.pv&&CMD.pv.ok&&CMD.msg===$("#cmd").value.trim();const b=$("#cmdGo");b.textContent=ready?"Сохранить":"Проверить";b.classList.toggle("lime",!!ready);}
 function cmdInit(){const inp=$("#cmd");
-  inp.addEventListener("keydown",e=>{if(e.key==="Enter"){e.preventDefault();cmdRun();}else if(e.key==="Escape"){inp.value="";CMD={pv:null,msg:"",key:"",busy:false};cmdShow("");cmdLabel();}});
+  inp.addEventListener("keydown",e=>{if(e.key==="Enter"){e.preventDefault();cmdRun();}else if(e.key==="Escape"){inp.value="";CMD={pv:null,msg:"",key:"",busy:false,mode:{},pay:{}};cmdShow("");cmdLabel();}});
   inp.addEventListener("input",()=>{if(CMD.pv&&CMD.msg!==inp.value.trim()){CMD.pv=null;cmdShow("");}cmdLabel();});
-  $("#cmdGo").addEventListener("click",cmdRun);}
+  $("#cmdGo").addEventListener("click",cmdRun);
+  $("#cmdPv").addEventListener("click",e=>{const b=e.target.closest("[data-cmode]");if(!b||!CMD.pv)return;CMD.mode[b.dataset.cmode]=b.dataset.v;cmdShow(cmdPreviewHTML());$("#cmd").focus();});
+  $("#cmdPv").addEventListener("change",e=>{const s=e.target.closest("[data-cpay]");if(s)CMD.pay[s.dataset.cpay]=s.value;});}
 function cmdFocus(prefix){const inp=$("#cmd");if(prefix&&!inp.value)inp.value=prefix+" ";inp.focus();window.scrollTo({top:0,behavior:"smooth"});}
 /* ===== Действия владельца: те же обработчики, что в старом FleetAI ===== */
 const today=()=>new Date(Date.now()-new Date().getTimezoneOffset()*6e4).toISOString().slice(0,10);

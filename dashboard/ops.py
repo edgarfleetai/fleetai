@@ -41,8 +41,9 @@ def _split(message):
 
 
 def _known_codes(engine):
+    """{code: current driver name or ''}"""
     with engine.connect() as conn:
-        return {str(r[0]).strip() for r in conn.execute(text("SELECT code FROM cars"))}
+        return {str(r[0]).strip(): (r[1] or "").strip() for r in conn.execute(text("SELECT code, driver FROM cars"))}
 
 
 def parse_all(message, engine):
@@ -75,6 +76,9 @@ def parse_all(message, engine):
             "parts": [{"name": x.get("part") or x.get("name") or "", "price": int(x.get("price") or x.get("part_price") or 0) * 100}
                       for x in (p.get("parts") or []) if isinstance(x, dict)],
             "problem": problem, "_parsed": p,
+            # Income on a car with a driver is usually the driver's payment: the
+            # dashboard offers to post it as a wallet top-up (cabinet + income).
+            "driver": codes.get(code, "") if p.get("type") == "income" and not problem else "",
         })
     return items
 
