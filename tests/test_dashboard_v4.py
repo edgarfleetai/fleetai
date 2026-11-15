@@ -511,7 +511,8 @@ def test_service_overview_oil_reminders(fin_dash):
 
 def test_implausible_distance_and_counter_trackers(fin_dash):
     from dashboard.service import _distance
-    assert _distance(218_104, 201_916, 16) == 16_188          # spread over 16 days: allowed
+    assert _distance(218_104, 210_104, 16) == 8_000           # 500 km a day: plausible
+    assert _distance(218_104, 201_916, 16) is None             # ~1 000 km a day for 16 days: bad reading
     assert _distance(218_104, 201_916, 1) is None              # in one day: impossible
     assert _distance(100, 200, 5) is None                      # odometer went back
     eng = create_engine(fin_dash.engine_url)

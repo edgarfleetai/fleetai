@@ -22,7 +22,7 @@ from .data import RETIRED_CODES
 
 OIL_INTERVAL_KM = 15_000
 OIL_WARN_BEFORE_KM = 1_000
-MAX_KM_PER_DAY = 1_500          # anything above is a bad reading, not a trip
+MAX_KM_PER_DAY = 800           # a taxi does ~300-500 km a day; more is a bad reading
 OIL_RE = re.compile(r"масл", re.I)
 NOT_ENGINE_OIL_RE = re.compile(r"кпп|коробк|колпач|датчик|приемник|приёмник|щуп|гур|мост", re.I)
 
