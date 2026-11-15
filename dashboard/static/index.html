@@ -281,6 +281,7 @@ td.r,th.r{text-align:right}
 .mk:focus-visible .ring{stroke:var(--fg);stroke-width:2}
 .maplegend{position:absolute;left:10px;bottom:10px;display:flex;gap:6px;flex-wrap:wrap}
 .maplegend .lg{background:var(--glass-2);backdrop-filter:blur(8px)}
+.cmdbar{display:flex;flex-wrap:wrap;align-items:center;gap:10px;padding:8px 8px 8px 16px;border-radius:18px}.cmdbar .ic{color:var(--lime);display:flex}.cmdbar input{flex:1 1 240px;min-width:0;border:0;background:transparent;color:var(--fg);font:inherit;font-size:15px;padding:8px 0;outline:none}.cmdbar input::placeholder{color:var(--faint)}.cmdpv{flex-basis:100%;padding:8px 8px 4px 0}
 .mapcities{position:absolute;left:56px;top:10px;right:200px;display:flex;gap:6px;flex-wrap:wrap}.mapcities .chip{font:inherit;font-size:12px;padding:5px 11px;border-radius:99px;border:1px solid var(--stroke-2);background:var(--glass-2);color:var(--muted);backdrop-filter:blur(8px);cursor:pointer}.mapcities .chip.on{background:var(--lime);color:#111;border-color:transparent}
 #msvg.z1 .l-minor,#msvg.z0 .l-mid,#msvg.z0 .l-green,#msvg.z0 .l-rail{display:none}#msvg.z0 .l-major{stroke-width:1.3}#msvg.z1 .l-major{stroke-width:2}
 @media (max-width:640px){.mapcities{right:10px}.mapempty{font-size:11px;padding:8px 10px}.mapempty span{display:none}}
@@ -346,6 +347,7 @@ td.r,th.r{text-align:right}
         <span class="avatar" title="Владелец" id="me">··</span>
       </div>
     </div>
+    <div class="cmdbar glass"><span class="ic">__I_plus__</span><input id="cmd" autocomplete="off" spellcheck="false" placeholder="Напишите операцию: 404 получил 13000 · 621 ремонт колодки 2500 · 550 мойка 500" aria-label="Операция"><button class="btn" id="cmdGo">Проверить</button><div id="cmdPv" class="cmdpv" hidden></div></div>
     <main class="view" id="page" style="display:flex;flex-direction:column;gap:16px"></main>
     <div class="proto" id="proto">FleetAI 4.0 · только просмотр · данные из базы FleetAI и Wialon</div>
   </div>
@@ -358,7 +360,7 @@ td.r,th.r{text-align:right}
 /* ===== icons ===== */
 const P={search:'<circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/>',plus:'<path d="M12 5v14M5 12h14"/>',minus:'<rect x="4" y="4" width="16" height="16" rx="4"/><path d="M8 12h8"/>',wrench:'<path d="M14.5 5.5a4 4 0 0 0 4.9 5L12 18l-3-3 7.4-7.5a4 4 0 0 0-1.9-2z"/><path d="m9 15-4 4"/>',check:'<rect x="4" y="4" width="16" height="16" rx="4"/><path d="m8.5 12 2.5 2.5 4.5-5"/>',send:'<path d="M21 3 3 10.5l7 2.5 2.5 7z"/><path d="m10 13 4-4"/>',spark:'<path d="M12 3v4M12 17v4M3 12h4M17 12h4M6 6l2.5 2.5M15.5 15.5 18 18M6 18l2.5-2.5M15.5 8.5 18 6"/>',moon:'<path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"/>',bell:'<path d="M6 16V11a6 6 0 0 1 12 0v5l1.5 2h-15z"/><path d="M10 20a2 2 0 0 0 4 0"/>',car:'<path d="M5 16h14M6 16l1.5-6h9L18 16"/><circle cx="8" cy="17.5" r="1.5"/><circle cx="16" cy="17.5" r="1.5"/>',coin:'<circle cx="12" cy="12" r="8"/><path d="M12 8v8M9.5 10h4a1.5 1.5 0 0 1 0 3h-3a1.5 1.5 0 0 0 0 3h4"/>',alert:'<path d="M12 4 2.5 20h19z"/><path d="M12 10v4M12 17h.01"/>',user:'<circle cx="12" cy="8" r="3.5"/><path d="M5 20c1-4 4-6 7-6s6 2 7 6"/>',clock:'<circle cx="12" cy="12" r="8"/><path d="M12 8v4l3 2"/>',arrow:'<path d="M7 17 17 7M9 7h8v8"/>',dots:'<circle cx="6" cy="12" r="1.2"/><circle cx="12" cy="12" r="1.2"/><circle cx="18" cy="12" r="1.2"/>'};
 const ico=(n,s)=>`<svg viewBox="0 0 24 24" ${s?`width="${s}" height="${s}"`:""} fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${P[n]}</svg>`;
-document.querySelectorAll(".rail, .tools").forEach(el=>{el.innerHTML=el.innerHTML.replace(/__I_(\w+)__/g,(_,n)=>ico(n));});
+document.querySelectorAll(".rail, .tools, .cmdbar").forEach(el=>{el.innerHTML=el.innerHTML.replace(/__I_(\w+)__/g,(_,n)=>ico(n));});
 
 /* ===== Test data (обезличено, вымышленные суммы). Деньги — целые копейки ===== */
 const K=r=>Math.round(r*100);
@@ -865,6 +867,29 @@ function opModal(prefCar){OPD={msg:"",key:(crypto.randomUUID?crypto.randomUUID()
       if(data.ok){FIN=null;JRN=null;REP=null;RENT=null;toast("Операция сохранена");}}catch(e){OPD.res=[{ok:false,message:e.message}];}
     OPD.busy=false;opRender();});
   opRender();$("#opCar").focus();}
+/* ===== Одна строка для всех операций: Enter — проверить, Enter ещё раз — сохранить ===== */
+let CMD={pv:null,msg:"",key:"",busy:false};
+function cmdKey(){return crypto.randomUUID?crypto.randomUUID():String(Date.now())+Math.random().toString(36).slice(2);}
+function cmdShow(html){const b=$("#cmdPv");b.innerHTML=html;b.hidden=!html;}
+function cmdCard(p){return p.items.map(i=>`<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><b>${esc(i.label)}</b>${i.car?`<span class="plate">${esc(i.car)}</span>`:""}${i.category?`<span class="tag t-mute">${esc(i.category)}</span>`:""}${i.parts.length?`<span style="color:var(--muted);font-size:12.5px">${i.parts.map(x=>esc(x.name)).join(", ")}</span>`:""}${i.investor?`<span style="color:var(--muted);font-size:12.5px">инвестор ${esc(i.investor)}</span>`:""}<span class="amt num" style="margin-left:auto">${rub(i.amount)}</span></div>${i.problem?`<div class="note warn" style="margin-top:4px">${esc(i.problem)}</div>`:""}`).join("<hr style='border:0;border-top:1px solid var(--stroke);margin:6px 0'>");}
+async function cmdRun(){const inp=$("#cmd"),m=inp.value.trim();if(!m||CMD.busy)return;
+  if(CMD.pv&&CMD.pv.ok&&CMD.msg===m){CMD.busy=true;$("#cmdGo").textContent="Сохраняю…";
+    try{const {data}=await opPost("/api/v4/ops/commit",{message:m,fingerprint:CMD.pv.fingerprint,key:CMD.key});
+      const rs=data.results||[];
+      if(data.ok){cmdShow(`<div class="note">✓ ${rs.map(r=>esc(r.message)).join(" · ")}</div>`);inp.value="";CMD={pv:null,msg:"",key:"",busy:false};FIN=null;JRN=null;REP=null;RENT=null;const v=(location.hash||"#home").slice(1);(VIEWS[v]||VIEWS.home)();setTimeout(()=>{if(!CMD.pv)cmdShow("");},6000);}
+      else cmdShow(rs.map(r=>`<div class="note warn">${esc(r.message)}</div>`).join(""));}catch(e){cmdShow(`<div class="note warn">${esc(e.message)}</div>`);}
+    CMD.busy=false;cmdLabel();return;}
+  CMD.busy=true;$("#cmdGo").textContent="Проверяю…";
+  try{const {data}=await opPost("/api/v4/ops/preview",{message:m});CMD.pv=data;CMD.msg=m;CMD.key=cmdKey();
+    cmdShow(cmdCard(data)+(data.ok?`<div style="color:var(--muted);font-size:12.5px;margin-top:6px">Всё верно? Нажмите Enter или «Сохранить». Esc — отмена.</div>`:""));}
+  catch(e){cmdShow(`<div class="note warn">${esc(e.message)}</div>`);}
+  CMD.busy=false;cmdLabel();}
+function cmdLabel(){const ready=CMD.pv&&CMD.pv.ok&&CMD.msg===$("#cmd").value.trim();const b=$("#cmdGo");b.textContent=ready?"Сохранить":"Проверить";b.classList.toggle("lime",!!ready);}
+function cmdInit(){const inp=$("#cmd");
+  inp.addEventListener("keydown",e=>{if(e.key==="Enter"){e.preventDefault();cmdRun();}else if(e.key==="Escape"){inp.value="";CMD={pv:null,msg:"",key:"",busy:false};cmdShow("");cmdLabel();}});
+  inp.addEventListener("input",()=>{if(CMD.pv&&CMD.msg!==inp.value.trim()){CMD.pv=null;cmdShow("");}cmdLabel();});
+  $("#cmdGo").addEventListener("click",cmdRun);}
+function cmdFocus(prefix){const inp=$("#cmd");if(prefix&&!inp.value)inp.value=prefix+" ";inp.focus();window.scrollTo({top:0,behavior:"smooth"});}
 VIEWS.repairs=async function(){shell("Ремонты");try{if(!REP)REP=await getJSON("/api/v4/repairs");}catch(e){if(onView("repairs"))failed("Ремонты",e);return;}
   if(!onView("repairs"))return;
   const parts=REP.parts.filter(p=>!rf||p.car===rf),exp=REP.expenses.filter(x=>!rf||x.car===rf);
@@ -956,8 +981,8 @@ const SOON={task:"Создание задачи — в FleetAI",repair:"План
 document.addEventListener("click",e=>{const t=e.target;
   if(t.closest("[data-close]")){closeLayer();return;}
   if(t.closest("[data-back]")){payModal(draft.kind);return;}
-  const act=t.closest("[data-act]");if(act){const a=act.dataset.act,cp=act.dataset.carPay||"";if(a==="pay"||a==="expense"){opModal(cp.replace(/^V-/,""));return;}toast(SOON[a]||"Действие доступно в FleetAI");return;}
-  const x=t.closest("[data-x]");if(x){const xv=x.dataset.x;if(xv==="op"){opModal("");return;}if(xv==="logout"){fetch("/logout",{method:"POST",credentials:"same-origin",headers:{"X-CSRF":CSRF}}).finally(()=>location.href="/login");return;}xv==="search"?palette():cycleTheme();return;}
+  const act=t.closest("[data-act]");if(act){const a=act.dataset.act,cp=act.dataset.carPay||"";if(a==="pay"||a==="expense"){cmdFocus(cp.replace(/^V-/,""));return;}toast(SOON[a]||"Действие доступно в FleetAI");return;}
+  const x=t.closest("[data-x]");if(x){const xv=x.dataset.x;if(xv==="op"){cmdFocus("");return;}if(xv==="logout"){fetch("/logout",{method:"POST",credentials:"same-origin",headers:{"X-CSRF":CSRF}}).finally(()=>location.href="/login");return;}xv==="search"?palette():cycleTheme();return;}
   const mc=t.closest("[data-city]");if(mc){goCity(mc.dataset.city);return;}
   const mz=t.closest("[data-mz]");if(mz){const m=mz.dataset.mz;m==="fit"?fitAll():zoomAt(m==="in"?1/1.4:1.4);return;}
   const mk=t.closest("[data-mk]");if(mk){monSel=mk.dataset.mk;VIEWS.monitor();return;}
@@ -984,7 +1009,7 @@ applyTheme();let CSRF="";
 (async()=>{try{const r=await fetch("/api/v4/fleet",{credentials:"same-origin",cache:"no-store"});if(r.status===401){location.href="/login";return;}
   const d=await r.json();cars=d.cars;drivers=d.drivers;CSRF=d.csrf||"";$("#me").textContent=(d.owner||"?").slice(0,2).toUpperCase();}
   catch(_){$("#page").innerHTML=`<section class="panel glass"><div class="empty"><h2>Не удалось загрузить данные</h2><span>Обновите страницу.</span></div></section>`;return;}
-  addEventListener("hashchange",route);route();loadPos();})();
+  addEventListener("hashchange",route);route();loadPos();cmdInit();})();
 if(document.fonts&&document.fonts.ready)document.fonts.ready.then(()=>movePill(true));
 })();
 </script>
