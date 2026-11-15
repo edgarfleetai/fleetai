@@ -411,7 +411,7 @@ let range=30;
 function areaChart(){
   const n=range, raw=daily.slice(-n); const bucket=n>30?7:n>7?2:1; const vals=[];
   for(let i=0;i<raw.length;i+=bucket) vals.push(sum(raw.slice(i,i+bucket),x=>x)/Math.min(bucket,raw.length-i));
-  const W=640,H=220,pl=44,pr=8,pt=12,pb=24; const max=Math.max(...vals)*1.15; const target=K(13000);
+  const W=640,H=220,pl=44,pr=8,pt=12,pb=24; const max=(Math.max(...vals,PLAN)||1)*1.15; const target=PLAN;
   const x=i=>pl+(W-pl-pr)*i/(vals.length-1), y=v=>pt+(H-pt-pb)*(1-v/max);
   const pts=vals.map((v,i)=>[x(i),y(v)]); const line=smooth(pts);
   const ticks=[0,.5,1].map(f=>{const v=max*f/1.15*1.0;const yy=y(max*f);return `<line x1="${pl}" x2="${W-pr}" y1="${yy}" y2="${yy}" stroke="var(--stroke)"/><text x="${pl-8}" y="${yy+4}" text-anchor="end" font-size="11" fill="var(--faint)">${Math.round(max*f/100000)} тыс</text>`;}).join("");
@@ -419,7 +419,7 @@ function areaChart(){
   return `<div class="chart" id="ach"><svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Поступления, среднее в день">
     <defs><linearGradient id="ag" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="var(--s1)" stop-opacity=".35"/><stop offset="1" stop-color="var(--s1)" stop-opacity="0"/></linearGradient></defs>
     ${ticks}
-    <line x1="${pl}" x2="${W-pr}" y1="${y(target)}" y2="${y(target)}" stroke="var(--fg)" stroke-opacity=".5" stroke-dasharray="4 5"/>
+    ${target?`<line x1="${pl}" x2="${W-pr}" y1="${y(target)}" y2="${y(target)}" stroke="var(--fg)" stroke-opacity=".5" stroke-dasharray="4 5"/>`:""}
     <path d="${line} L${x(vals.length-1)},${H-pb} L${pl},${H-pb} Z" fill="url(#ag)"/>
     <path d="${line}" fill="none" stroke="var(--s1)" stroke-width="2.5" stroke-linecap="round"/>
     <circle cx="${pts.at(-1)[0]}" cy="${pts.at(-1)[1]}" r="4.5" fill="var(--s1)" stroke="var(--bg)" stroke-width="2"/>
@@ -428,7 +428,7 @@ function areaChart(){
     </svg><div class="tipbox" id="atip" hidden></div></div>`;
 }
 function wireChart(){const box=$("#ach");if(!box)return;const svg=$("svg",box);const n=range,bucket=n>30?7:n>7?2:1;const raw=daily.slice(-n);const vals=[];for(let i=0;i<raw.length;i+=bucket)vals.push(sum(raw.slice(i,i+bucket),x=>x)/Math.min(bucket,raw.length-i));
-  const W=640,H=220,pl=44,pr=8,pt=12,pb=24,max=Math.max(...vals)*1.15;
+  const W=640,H=220,pl=44,pr=8,pt=12,pb=24,max=(Math.max(...vals,PLAN)||1)*1.15;
   svg.addEventListener("mousemove",e=>{const r=svg.getBoundingClientRect();const sx=(e.clientX-r.left)/r.width*W;const i=Math.max(0,Math.min(vals.length-1,Math.round((sx-pl)/(W-pl-pr)*(vals.length-1))));
     const cx=pl+(W-pl-pr)*i/(vals.length-1),cy=pt+(H-pt-pb)*(1-vals[i]/max);$("#hl").setAttribute("x1",cx);$("#hl").setAttribute("x2",cx);$("#hl").setAttribute("visibility","visible");$("#hc").setAttribute("cx",cx);$("#hc").setAttribute("cy",cy);$("#hc").setAttribute("visibility","visible");
     const d=new Date(TODAY);d.setDate(d.getDate()-(vals.length-1-i)*bucket);const tp=$("#atip");tp.hidden=false;tp.style.left=(cx/W*100)+"%";tp.style.top=(cy/H*r.height)+"px";tp.innerHTML=`<b>${rub(Math.round(vals[i]))}</b> · ${bucket>1?"ср. за "+bucket+" дн. до ":""}${dd(d)}`;});
@@ -466,32 +466,50 @@ addEventListener("resize",()=>movePill(true));
 
 /* ===== views ===== */
 const VIEWS={};
-VIEWS.home=function(){if(!FIN)needFin().then(()=>{if(onView("home")||!location.hash)VIEWS.home();}).catch(()=>{});const k=kpis();const segs=[["rented",k.rented],["free",k.free],["repair",k.repair],["notready",k.notready],["personal",k.personal],["nodata",k.nodata]].filter(s=>s[1]||!["nodata","personal"].includes(s[0]));
-  const withT=cars.filter(c=>WUNITS.some(u=>u.car===c.id)).length;
-  const attn=[...cars.filter(c=>c.status!=="rented"&&c.status!=="personal").map(c=>({c,cls:c.status==="repair"?"warn":"info",k:ST[c.status][0],s:c.status_raw?("В базе: «"+c.status_raw+"»"):"",f:c.driver?c.driver_name:"без водителя"})),
-    ...cars.filter(c=>c.flag).map(c=>({c,cls:"warn",k:"Сверка данных",s:c.flag,f:"нужно решение владельца"}))].slice(0,8);
-  const own={park:0,ilya:0,ravshan:0,mark:0};cars.forEach(c=>own[c.owner]=(own[c.owner]||0)+1);
+let PLAN=0,HOMELOAD=0;
+function fillDaily(){const n=90,arr=new Array(n).fill(0),t0=new Date(TODAY);t0.setHours(0,0,0,0);
+  (JRN?JRN.operations:[]).filter(o=>o.dir==="in"&&o.type==="income").forEach(o=>{const d=new Date(o.date);d.setHours(0,0,0,0);const i=n-1-Math.round((t0-d)/864e5);if(i>=0&&i<n)arr[i]+=o.amount;});
+  daily=arr;PLAN=sum(cars.filter(c=>c.status==="rented"),c=>{const m=String(c.rate||"").match(/([\d ]+) ₽\/(сут|нед)/);if(!m)return 0;const v=+m[1].replace(/\s/g,"")*100;return m[2]==="нед"?Math.round(v/7):v;});}
+VIEWS.home=function(){
+  const need=[];if(!FIN)need.push(needFin());if(!JRN)need.push(getJSON("/api/v4/journal?days=90").then(d=>{JRN=d;}));if(!RENT)need.push(getJSON("/api/v4/rent").then(d=>{RENT=d;}));
+  if(need.length&&HOMELOAD<2){HOMELOAD++;Promise.allSettled(need).then(()=>{if(onView("home")||!location.hash)VIEWS.home();});}else if(!need.length)HOMELOAD=0;
+  const k=kpis();fillDaily();
+  const segs=[["rented",k.rented],["free",k.free],["repair",k.repair],["notready",k.notready],["personal",k.personal]].filter(s=>s[1]||!["personal"].includes(s[0]));
+  const rents=RENT?RENT.rentals:[],owe=x=>Math.max(-x.wallet,0)+x.debt_total,debtors=rents.filter(x=>owe(x)>0).sort((a,b)=>owe(b)-owe(a));
+  const attn=[...debtors.map(x=>({id:"V-"+x.code,cls:"bad",k:"Долг водителя",n:`${x.code} · ${x.driver}`,s:x.debt_total?`аренда ${rub(-Math.max(-x.wallet,0))} · отдельный долг ${rub(-x.debt_total)}`:"долг по аренде",amt:rub(-owe(x)),f:"к оплате"})),
+    ...cars.filter(c=>c.status==="repair"||c.status==="free"||c.status==="notready").map(c=>({id:c.id,cls:c.status==="repair"?"warn":"info",k:ST[c.status][0],n:`${c.code} · ${c.model}`,s:c.status_raw?`в базе: «${c.status_raw}»`:"",amt:"—",f:"не приносит доход"}))].slice(0,6);
+  const inc=FIN?sum(FIN.cars,x=>x.income):null,per=FIN&&FIN.cars.length?`${d2(FIN.cars[0].period_start)} — ${d2(FIN.cars[0].period_end)}`:"";
+  const dueBy=key=>FIN?sum(FIN.cars.filter(x=>x.owner===key),x=>x.period_due-(x.recurring_booked||x.owner_type!=="investor"?0:x.gps+x.garage)):0;
+  const withT=cars.filter(c=>WUNITS.some(u=>u.car===c.id)).length,moving=WPOS.filter(p=>p.speed_kmh>3).length;
+  const rng=sum(daily.slice(-range),x=>x),avg=Math.round(rng/range);
   $("#page").innerHTML=`
   <div class="phead"><h1><span>Обзор</span><span>парка</span></h1>
-    ${hstat("car",k.total,"автомобилей в базе")}${hstat("check",`${k.rented}/${k.total}`,"сдано в аренду")}${hstat("alert",attn.length,"требуют внимания")}${FIN?hstat("coin",rubK(sum(FIN.cars,x=>x.income)),"доход за период"):""}</div>
+    ${hstat("coin",inc==null?"…":rubK(inc),"Доход за период"+(per?` · ${per}`:""))}
+    ${hstat("alert",RENT?rubK(sum(rents,owe)):"…",`Долг водителей${RENT?` · ${debtors.length}`:""}`)}
+    ${hstat("car",`${k.rented}/${k.total}`,"Сдано в аренду")}</div>
   <div class="g-home">
-    <section class="panel glass"><header><h2>Статус парка</h2><div class="r"><button class="ibtn" data-go="cars" aria-label="Автомобили">${ico("arrow")}</button></div></header>
-      <div class="donut-wrap">${donut(segs.map(([s2,v])=>({v,c:ST[s2][2]})),k.total,"автомобилей")}
-      <div class="dl">${segs.map(([s2,v])=>`<span><i class="dotx" style="background:${ST[s2][2]}"></i>${ST[s2][0]}</span><span class="num">${v}</span>`).join("")}<span><i class="dotx" style="background:var(--fg)"></i>Водителей</span><span class="num">${drivers.length}</span></div></div></section>
-    <section class="panel glass"><header><h2>Требуют внимания</h2><span class="sub">${attn.length}</span><div class="r"><button class="ibtn" data-go="cars" aria-label="Все автомобили">${ico("arrow")}</button></div></header>
-      <div class="tiles">${attn.map(a=>`<button class="tile ${a.cls}" data-car="${a.c.id}"><div class="k">${esc(a.k)}</div><div class="n">${esc(a.c.code)} · ${esc(a.c.model)}</div><div class="s" style="white-space:normal">${esc(a.s)}</div>
-        <div class="f"><div><small>${esc(a.f)}</small></div><div class="mini">${oav(a.c.owner)}</div></div></button>`).join("")||`<div class="empty"><h2>Всё в порядке</h2></div>`}</div></section>
+    <section class="panel glass"><header><h2>Поступления</h2><div class="r"><div class="seg" role="group" aria-label="Период">${[7,30,90].map(n=>`<button class="${range===n?"on":""}" data-range="${n}">${n} дн</button>`).join("")}</div><button class="ibtn" data-go="finance" aria-label="Открыть финансы">${ico("arrow")}</button></div></header>
+      <div class="pbody"><div class="big num">${JRN?rub(rng):"…"}<small>доходы за ${range} дней · в среднем ${rub(avg)} в день</small></div>
+      <div class="legend" style="margin:10px 0 4px"><span class="lg"><i style="background:var(--s1)"></i>в среднем за день</span>${PLAN?`<span class="lg"><i style="background:var(--fg);opacity:.5"></i>по тарифам <b>${rub(PLAN)}/день</b></span>`:""}</div>
+      ${JRN&&sum(daily,x=>x)?areaChart():`<div class="empty" style="padding:30px 0"><span>${JRN?"Доходов за этот срок нет":"Загрузка…"}</span></div>`}</div></section>
+    <section class="panel glass"><header><h2>Требуют внимания</h2><span class="sub">${attn.length}</span><div class="r"><button class="ibtn" data-go="rent" aria-label="Аренда">${ico("arrow")}</button></div></header>
+      <div class="tiles">${attn.map(a=>`<button class="tile ${a.cls}" data-car="${a.id}"><div class="k">${esc(a.k)}</div><div class="n">${esc(a.n)}</div><div class="s">${esc(a.s)}</div>
+        <div class="f"><div><div class="amt num ${a.cls==="bad"?"out":""}">${a.amt}</div><small>${esc(a.f)}</small></div></div></button>`).join("")||`<div class="empty"><h2>Всё в порядке</h2><span>${RENT?"Долгов и простоя нет":"Загрузка…"}</span></div>`}</div></section>
   </div>
   <div class="g-3">
-    <section class="panel glass"><header><h2>Сданы в аренду</h2><span class="sub">${drivers.length}</span></header>
-      <div class="list">${cars.filter(c=>c.driver).map(c=>`<button class="row" data-car="${c.id}"><span class="avatar" style="width:30px;height:30px;font-size:11px;background:var(--glass-3);color:var(--fg)">${esc(initials(c.driver_name||"?"))}</span><div class="t"><div>${esc(c.driver_name)}</div><div>${esc(c.code)} · ${esc(c.terms)} · ${esc(c.rate)}</div></div></button>`).join("")}</div></section>
-    <section class="panel glass"><header><h2>Собственники</h2></header>
-      <div class="list">${Object.keys(owners).map(o=>`<div class="row">${oav(o)}<div class="t"><div>${esc(owners[o][0])}</div><div>${cars.filter(c=>c.owner===o).map(c=>c.code).join(", ")||"—"}</div></div><span class="amt num">${own[o]||0}</span></div>`).join("")}</div></section>
+    <section class="panel glass"><header><h2>Статус парка</h2><div class="r"><button class="ibtn" data-go="cars" aria-label="Автомобили">${ico("arrow")}</button></div></header>
+      <div class="donut-wrap">${donut(segs.map(([s2,v])=>({v,c:ST[s2][2]})),k.total,"автомобилей")}
+      <div class="dl">${segs.map(([s2,v])=>`<span><i class="dotx" style="background:${ST[s2][2]}"></i>${ST[s2][0]}</span><span class="num">${v}</span>`).join("")}</div></div></section>
+    <section class="panel glass"><header><h2>Инвесторам к выплате</h2><span class="sub">за период</span><div class="r"><button class="ibtn" data-go="investors" aria-label="Инвесторы">${ico("arrow")}</button></div></header>
+      <div class="list">${["ilya","ravshan","mark"].map(o=>`<button class="row" data-go="investors">${oav(o)}<div class="t"><div>${esc(owners[o][0])}</div><div>${cars.filter(c=>c.owner===o).map(c=>c.code).join(", ")}</div></div><span class="amt num ${dueBy(o)<0?"out":""}">${FIN?rub(dueBy(o)):"…"}</span></button>`).join("")}</div></section>
     <section class="panel glass"><header><h2>Мониторинг</h2><div class="r"><button class="ibtn" data-go="monitor" aria-label="Мониторинг">${ico("arrow")}</button></div></header>
-      <div class="list"><div class="row"><i class="dotx" style="background:var(--s1)"></i><div class="t"><div>С трекером Wialon</div><div>${cars.filter(c=>WUNITS.some(u=>u.car===c.id)).map(c=>c.code).join(", ")||(posError?esc(posError):"загрузка…")}</div></div><span class="amt num">${withT}</span></div>
+      <div class="list"><div class="row"><i class="dotx" style="background:var(--s1)"></i><div class="t"><div>Едут сейчас</div><div>${WPOS.filter(p=>p.speed_kmh>3).map(p=>{const u=WUNITS.find(u=>u.id===p.id);return u&&u.car?u.car.slice(2):p.name;}).join(", ")||"никто"}</div></div><span class="amt num">${moving}</span></div>
+      <div class="row"><i class="dotx" style="background:var(--info)"></i><div class="t"><div>С трекером</div><div>${cars.filter(c=>WUNITS.some(u=>u.car===c.id)).map(c=>c.code).join(", ")||(posError?esc(posError):"загрузка…")}</div></div><span class="amt num">${withT}</span></div>
       <div class="row"><i class="dotx" style="background:var(--faint)"></i><div class="t"><div>Без трекера</div><div>${cars.filter(c=>!WUNITS.some(u=>u.car===c.id)).map(c=>c.code).join(", ")}</div></div><span class="amt num">${k.total-withT}</span></div></div></section>
   </div>
-  <section class="panel glass"><div class="pbody" style="padding-top:16px"><div class="note">Доходы, расходы, журнал операций и расчёт инвесторов — в разделах «Финансы» и «Инвесторы». Баланс аренды водителей подключается следующим этапом.</div></div></section>`;};
+  <section class="panel glass"><header><h2>Последние операции</h2><div class="r"><button class="btn" data-go="finance">Весь журнал</button></div></header>
+    <div class="tbl-wrap"><table><tbody>${JRN?JRN.operations.slice(0,8).map(o=>`<tr><td class="num" style="width:90px">${d2(o.date)}</td><td style="width:70px">${esc(o.car||"—")}</td><td>${esc(o.label)}${o.category&&o.category!==o.label?` · <span style="color:var(--muted)">${esc(o.category)}</span>`:""}</td><td style="color:var(--muted);white-space:normal">${esc(o.description)}</td><td class="r">${o.dir==="info"?"—":money(o.dir==="out"?-o.amount:o.amount,o.dir==="in"?"in":"")}</td></tr>`).join(""):`<tr><td style="color:var(--muted)">Загрузка…</td></tr>`}</tbody></table></div></section>`;
+  if(JRN&&sum(daily,x=>x))wireChart();};
 
 let carFilter="all",carQuery="",carView="grid";
 VIEWS.cars=function(){const k=kpis();const counts=st=>cars.filter(c=>st==="all"||c.status===st).length;
