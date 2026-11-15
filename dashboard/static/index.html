@@ -838,7 +838,16 @@ const OPKINDS=[["income","Доход","получил"],["expense","Расход
 function opCompose(){const car=$("#opCar").value,k=$("#opKind").value,a=($("#opAmt").value||"").replace(/\D/g,""),c=($("#opCom").value||"").trim().replace(/\//g," ");
   if(!car||!a)return;const w=OPKINDS.find(x=>x[0]===k)[2];
   $("#opMsg").value=k==="income"?`${car} ${w} ${a}${c?" "+c:""}`:`${car} ${w}${c?" "+c:""} ${a}`;OPD.pv=null;opRender();}
-async function opPost(url,body){const r=await fetch(url,{method:"POST",credentials:"same-origin",headers:{"Content-Type":"application/json","X-CSRF":CSRF},body:JSON.stringify(body)});if(r.status===401){location.href="/login";throw new Error("401");}return {status:r.status,data:await r.json().catch(()=>({}))};}
+async function opPost(url,body){
+  // A network error (Render restarting or waking up) is retried; commit is safe to retry: it has an idempotency key.
+  for(let attempt=0;;attempt++){let r;
+    try{r=await fetch(url,{method:"POST",credentials:"same-origin",headers:{"Content-Type":"application/json","X-CSRF":CSRF},body:JSON.stringify(body)});}
+    catch(e){if(attempt<3){await new Promise(res=>setTimeout(res,2500*(attempt+1)));continue;}throw new Error("Нет связи с сервером. Возможно, он перезапускается — повторите через минуту.");}
+    if(r.status===401){location.href="/login";throw new Error("Нужен вход");}
+    if((r.status===502||r.status===503)&&attempt<3){await new Promise(res=>setTimeout(res,3000*(attempt+1)));continue;}
+    const data=await r.json().catch(()=>null);
+    if(!data)throw new Error(r.status>=500?"Сервер ещё запускается — повторите через минуту.":"Неожиданный ответ сервера ("+r.status+")");
+    return {status:r.status,data};}}
 function opRender(){const box=$("#opPv");if(!box)return;const p=OPD.pv;
   if(OPD.res){box.innerHTML=OPD.res.map(r=>`<div class="note ${r.ok?"":"warn"}">${r.ok?"✓":"✕"} ${esc(r.message)}</div>`).join("");$("#opSave").disabled=true;return;}
   if(!p){box.innerHTML=`<div class="note">Нажмите «Проверить» — дашборд покажет, как понял команду. Сохранится только после подтверждения.</div>`;$("#opSave").disabled=true;return;}
