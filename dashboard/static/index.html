@@ -464,14 +464,14 @@ addEventListener("resize",()=>movePill(true));
 
 /* ===== views ===== */
 const VIEWS={};
-VIEWS.home=function(){const k=kpis();const segs=[["rented",k.rented],["free",k.free],["repair",k.repair],["notready",k.notready],["personal",k.personal],["nodata",k.nodata]].filter(s=>s[1]||!["nodata","personal"].includes(s[0]));
+VIEWS.home=function(){if(!FIN)needFin().then(()=>{if(onView("home")||!location.hash)VIEWS.home();}).catch(()=>{});const k=kpis();const segs=[["rented",k.rented],["free",k.free],["repair",k.repair],["notready",k.notready],["personal",k.personal],["nodata",k.nodata]].filter(s=>s[1]||!["nodata","personal"].includes(s[0]));
   const withT=cars.filter(c=>WUNITS.some(u=>u.car===c.id)).length;
   const attn=[...cars.filter(c=>c.status!=="rented"&&c.status!=="personal").map(c=>({c,cls:c.status==="repair"?"warn":"info",k:ST[c.status][0],s:c.status_raw?("В базе: «"+c.status_raw+"»"):"",f:c.driver?c.driver_name:"без водителя"})),
     ...cars.filter(c=>c.flag).map(c=>({c,cls:"warn",k:"Сверка данных",s:c.flag,f:"нужно решение владельца"}))].slice(0,8);
   const own={park:0,ilya:0,ravshan:0,mark:0};cars.forEach(c=>own[c.owner]=(own[c.owner]||0)+1);
   $("#page").innerHTML=`
   <div class="phead"><h1><span>Обзор</span><span>парка</span></h1>
-    ${hstat("car",k.total,"автомобилей в базе")}${hstat("check",`${k.rented}/${k.total}`,"сдано в аренду")}${hstat("alert",attn.length,"требуют внимания")}</div>
+    ${hstat("car",k.total,"автомобилей в базе")}${hstat("check",`${k.rented}/${k.total}`,"сдано в аренду")}${hstat("alert",attn.length,"требуют внимания")}${FIN?hstat("coin",rubK(sum(FIN.cars,x=>x.income)),"доход за период"):""}</div>
   <div class="g-home">
     <section class="panel glass"><header><h2>Статус парка</h2><div class="r"><button class="ibtn" data-go="cars" aria-label="Автомобили">${ico("arrow")}</button></div></header>
       <div class="donut-wrap">${donut(segs.map(([s2,v])=>({v,c:ST[s2][2]})),k.total,"автомобилей")}
@@ -805,6 +805,31 @@ VIEWS.investors=async function(){shell("Инвесторы");try{await needFin()
     ${["ilya","ravshan","mark"].map(card).join("")}
     <section class="panel glass"><div class="pbody" style="padding-top:16px"><div class="note">«Доля инвестора» = (доход − общие расходы за период) × процент из базы FleetAI. «К выплате за период» = доля − расходы только инвестора − уже выплаченное − GPS 500 ₽ за машину − гараж 3 000 ₽ в месяц, поделённый на все машины (если эти расходы ещё не внесены в FleetAI). Долги прошлых периодов показаны отдельно и в сумму за период не входят.</div></div></section>`;};
 
+let RENT=null,CTR=null;
+const CST={draft:["Черновик","t-mute"],sent:["Отправлен","t-info"],signed:["Подписан","t-ok"],cancelled:["Отменён","t-bad"],expired:["Истёк","t-warn"]};
+VIEWS.rent=async function(){shell("Аренда");try{if(!RENT)RENT=await getJSON("/api/v4/rent");}catch(e){if(onView("rent"))failed("Аренда",e);return;}
+  if(!onView("rent"))return;
+  const r=RENT.rentals,over=r.filter(x=>x.is_overdue||x.debt_total>0);
+  $("#page").innerHTML=`
+  <div class="phead"><h1><span>Аренда</span></h1>${hstat("car",r.length,"активных аренд")}${hstat("alert",over.length,"с просрочкой или долгом")}${hstat("coin",rubK(sum(r,x=>x.amount_due+x.debt_total)),"к оплате водителями")}</div>
+  <section class="panel glass"><header><h2>Активные аренды</h2><span class="sub">расчёт как в FleetAI</span></header>
+    <div class="tbl-wrap"><table><thead><tr><th>Машина</th><th>Водитель</th><th>Тариф</th><th class="r">Депозит</th><th class="r">Кошелёк</th><th class="r">К оплате</th><th class="r">Отдельный долг</th><th>Следующий платёж</th></tr></thead><tbody>
+    ${r.map(x=>`<tr data-car="V-${esc(x.code)}" tabindex="0" style="cursor:pointer"><td>${carLabel(x.code)}</td><td>${esc(x.driver)}</td><td class="num">${x.weekly_payment?rub(x.weekly_payment)+"/нед":x.daily_rent?rub(x.daily_rent)+"/сут":"—"}</td><td class="r">${x.deposit?money(x.deposit,""):"—"}</td><td class="r">${money(x.wallet,x.wallet<0?"out":"")}</td><td class="r">${x.amount_due?money(-x.amount_due):`<span class="tag t-ok">оплачено</span>`}${x.is_overdue?`<div style="font-size:11.5px;color:var(--bad)">просрочка ${x.overdue_days} дн · ${rub(x.overdue_total)}</div>`:""}</td><td class="r">${x.debt_total?money(-x.debt_total):"—"}</td><td class="num">${d2(x.next_payment_date)}</td></tr>`).join("")||`<tr><td colspan="8" style="color:var(--muted)">Активных аренд нет</td></tr>`}
+    </tbody></table></div></section>
+  ${r.some(x=>x.debts.length)?`<section class="panel glass"><header><h2>Отдельные долги водителей</h2></header><div class="list">${r.flatMap(x=>x.debts.map(d=>`<div class="row"><i class="dotx" style="background:var(--bad)"></i><div class="t"><div>${esc(x.driver)} · ${esc(x.code)}</div><div>${esc(d.reason||"без причины")} · ${d2(d.created_at)}</div></div><span class="amt num out">${rub(-d.amount)}</span></div>`)).join("")}</div></section>`:""}
+  <section class="panel glass"><div class="pbody" style="padding-top:16px"><div class="note">«К оплате» и просрочка считаются той же функцией, что в старом FleetAI. Кошелёк показан по последнему начислению, которое сделал FleetAI: дашборд сам ничего не начисляет.</div></div></section>`;};
+
+VIEWS.contracts=async function(){shell("Договоры");try{if(!CTR)CTR=await getJSON("/api/v4/contracts");}catch(e){if(onView("contracts"))failed("Договоры",e);return;}
+  if(!onView("contracts"))return;
+  const c=CTR.contracts,signed=c.filter(x=>x.status==="signed");
+  $("#page").innerHTML=`
+  <div class="phead"><h1><span>Договоры</span></h1>${hstat("check",signed.length,"подписано")}${hstat("alert",c.length-signed.length,"не подписано")}</div>
+  <section class="panel glass"><header><h2>Договоры аренды</h2><span class="sub">${c.length}</span></header>
+    <div class="tbl-wrap"><table><thead><tr><th>Создан</th><th>Машина</th><th>Водитель</th><th>Статус</th><th>Начало аренды</th><th class="r">Аренда в сутки</th><th class="r">Депозит</th><th>Подписан</th></tr></thead><tbody>
+    ${c.map(x=>`<tr><td class="num">${d2(x.created_at)}</td><td>${esc(x.car)}</td><td>${esc(x.driver||"—")}</td><td>${tag((CST[x.status]||[x.status])[0],(CST[x.status]||[0,"t-mute"])[1])}</td><td class="num">${esc(x.start||"—")}</td><td class="r">${x.daily_rent?money(x.daily_rent,""):"—"}</td><td class="r">${x.deposit?money(x.deposit,""):"—"}</td><td class="num">${x.signed_at?d2(x.signed_at):"—"}</td></tr>`).join("")||`<tr><td colspan="8" style="color:var(--muted)">Договоров нет</td></tr>`}
+    </tbody></table></div></section>
+  <section class="panel glass"><div class="pbody" style="padding-top:16px"><div class="note">Паспортные данные, телефоны и PDF договоров в дашборд не загружаются. Создание и отправка договоров — в FleetAI.</div></div></section>`;};
+
 VIEWS.repairs=async function(){shell("Ремонты");try{if(!REP)REP=await getJSON("/api/v4/repairs");}catch(e){if(onView("repairs"))failed("Ремонты",e);return;}
   if(!onView("repairs"))return;
   const parts=REP.parts.filter(p=>!rf||p.car===rf),exp=REP.expenses.filter(x=>!rf||x.car===rf);
@@ -840,7 +865,7 @@ function carDrawer(id,tab="overview"){const c=carById(id),d=drvById(c.driver),op
     <div><div class="l">Условия</div><div class="v">${esc(c.terms)}</div></div><div><div class="l">Тариф</div><div class="v">${esc(c.rate)}</div></div>
     <div><div class="l">Депозит</div><div class="v num">${rub(c.deposit)}</div></div><div><div class="l">Баланс аренды</div><div class="v num">${c.balance==null?"не подключён":rub(c.balance,true)}</div></div></div>
     <div class="kv"><div><div class="l">Статус в базе</div><div class="v">${esc(c.status_raw||"—")}</div></div><div><div class="l">Пробег в базе</div><div class="v num">${c.mileage?c.mileage.toLocaleString("ru-RU")+" км":"—"}</div></div></div>`;
-  if(tab==="fin")body=`<div class="note">Операции по машине подключаются на следующем этапе.</div>`;
+  if(tab==="fin")body=`${(()=>{if(!JRN){getJSON("/api/v4/journal?days=90").then(d=>{JRN=d;carDrawer(id,"fin");}).catch(()=>{});return `<div class="note">Загрузка операций…</div>`;}const ops=JRN.operations.filter(o=>"V-"+o.car===id);return ops.length?`<div class="glass"><div class="tbl-wrap"><table><thead><tr><th>Дата</th><th>Операция</th><th>Описание</th><th class="r">Сумма</th></tr></thead><tbody>${ops.slice(0,60).map(o=>`<tr><td class="num">${d2(o.date)}</td><td>${esc(o.label)}</td><td style="white-space:normal;color:var(--muted)">${esc(o.category)} ${esc(o.description)}</td><td class="r">${o.dir==="info"?"—":money(o.dir==="out"?-o.amount:o.amount,o.dir==="in"?"in":"")}</td></tr>`).join("")}</tbody></table></div></div>`:`<div class="note">За 90 дней операций по машине нет.</div>`;})()}`;
   if(tab==="plates")body=`<div class="timeline">${c.plates.map((p,i)=>`<div><b class="num">${esc(p)}</b><div style="color:var(--muted);font-size:12px">${i===c.plates.length-1?"текущий":"прежний"}</div></div>`).join("")}</div>`;
   if(tab==="repairs"){const rs=repairs.filter(r=>r.car===id);body=rs.map(r=>`<div class="row glass"><div class="t"><div>${esc(r.title)}</div><div>${esc(r.date)} · ${esc(r.who)}</div></div>${tag(RCOLS.find(x=>x[0]===r.st)[1],r.st==="done"?"t-ok":"t-info")}<span class="amt num">${rub(r.fact||r.plan)}</span></div>`).join("")||`<div class="empty"><h2>Ремонтов нет</h2><span>Запланированные и выполненные ремонты появятся здесь.</span></div>`;}
   if(tab==="wialon")body=`<div class="kv"><div><div class="l">Трекер</div><div class="v">${(()=>{const u=WUNITS.find(u=>u.car===c.id);return u?("#"+u.id+" · "+esc(u.name)+(u.time?" · сигнал "+ago(u.time):"")):"нет трекера"})()}</div></div><div><div class="l">Пробег</div><div class="v num">—</div></div></div><div class="note">Удалённая блокировка двигателя отключена. Включение — только после аппаратной проверки и вашего отдельного разрешения.</div>`;

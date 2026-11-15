@@ -19,7 +19,7 @@ from urllib.parse import urlsplit
 from flask import Flask, abort, jsonify, redirect, request, send_file, session
 from werkzeug.security import check_password_hash
 
-from . import data, finance, wialon
+from . import data, finance, rent, wialon
 
 STATIC = Path(__file__).resolve().parent / "static"
 SESSION_HOURS = 8
@@ -180,6 +180,16 @@ def create_app(config=None):
     def repairs_view():
         api_owner()
         return jsonify(finance.repairs(engine))
+
+    @app.get("/api/v4/rent")
+    def rent_view():
+        api_owner()
+        return jsonify(rent.rent_overview(engine))
+
+    @app.get("/api/v4/contracts")
+    def contracts_view():
+        api_owner()
+        return jsonify(rent.contracts(engine))
 
     @app.get("/api/v4/positions")
     def positions():

@@ -229,5 +229,41 @@ def test_journal_and_repairs(fin_dash):
 def test_finance_module_has_no_write_sql():
     import inspect
     import dashboard.finance as f
-    src = inspect.getsource(f).upper()
+    import dashboard.rent as r
+    src = (inspect.getsource(f) + inspect.getsource(r)).upper()
     assert not re.search(r'\b(INSERT|UPDATE|DELETE|ALTER|DROP|CREATE TABLE|COMMIT)\b', src)
+
+
+def test_rent_uses_old_fleetai_calculation(fin_dash):
+    from datetime import datetime
+    eng = create_engine(fin_dash.engine_url)
+    with eng.begin() as c:
+        # SQLite lower() is ASCII-only (PostgreSQL is not), so the test driver name is Latin.
+        c.execute(text("UPDATE cars SET daily_rent = 1857, driver_deposit = 10000, driver = 'Sergey' WHERE code = '621'"))
+        c.execute(text("INSERT INTO driver_wallet_transactions (driver_name, car_code, amount, transaction_type, source, date) "
+                       "VALUES ('Sergey', '621', 5000, 'topup', 'manual', :d)"), {'d': datetime.now()})
+        c.execute(text("INSERT INTO driver_debts (driver_name, car_code, original_amount, paid_amount, balance, status, reason, created_at) "
+                       "VALUES ('Sergey', '621', 3000, 0, 3000, 'open', 'штраф', :d)"), {'d': datetime.now()})
+    c = fin_dash.test_client()
+    assert c.get('/api/v4/rent', base_url=BASE).status_code == 401
+    login(c)
+    rows = {r['code']: r for r in c.get('/api/v4/rent', base_url=BASE).get_json()['rentals']}
+    assert set(rows) == {'621', '897'}
+    r = rows['621']
+    assert r['wallet'] == 500_000 and r['deposit'] == 1_000_000 and r['debt_total'] == 300_000
+    assert r['daily_rent'] == 185_700 and r['debts'][0]['reason'] == 'штраф'
+
+
+def test_contracts_hide_personal_data(fin_dash):
+    eng = create_engine(fin_dash.engine_url)
+    with eng.begin() as c:
+        c.execute(text("""CREATE TABLE driver_contracts (id TEXT PRIMARY KEY, public_token TEXT, car_code TEXT, status TEXT,
+            driver_name TEXT, passport_number TEXT, phone TEXT, daily_rent INTEGER, deposit INTEGER, rental_start_date TEXT,
+            signed_at TIMESTAMP, created_at TIMESTAMP, updated_at TIMESTAMP, pdf_data BLOB)"""))
+        c.execute(text("INSERT INTO driver_contracts VALUES ('c1','tok','621','signed','Сергей','123456','+79990000000',1857,10000,'01.11.2026',NULL,'2026-11-01','2026-11-01',NULL)"))
+    c = fin_dash.test_client()
+    login(c)
+    resp = c.get('/api/v4/contracts', base_url=BASE)
+    body = resp.get_data(as_text=True)
+    assert resp.get_json()['contracts'][0]['driver'] == 'Сергей'
+    assert '123456' not in body and '7999' not in body and 'tok' not in body
