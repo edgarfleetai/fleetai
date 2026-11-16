@@ -124,12 +124,12 @@ def repairs(engine, days=180, now=None):
     with engine.connect() as conn:
         rows = conn.execute(text(
             "SELECT id, car_code, part_name, brand, position, price, labor, install_date, status FROM parts "
-            "WHERE install_date >= :since ORDER BY install_date DESC, id DESC LIMIT 500"),
+            "WHERE install_date >= :since ORDER BY install_date DESC, id DESC LIMIT 3000"),
             {"since": since}).mappings().all()
         exp = conn.execute(text(
             "SELECT e.id, e.car_code, e.date, e.category, e.amount, o.description FROM expenses e "
             "LEFT JOIN operations o ON o.id = e.operation_id WHERE e.date >= :since "
-            "ORDER BY e.date DESC, e.id DESC LIMIT 500"), {"since": since}).mappings().all()
+            "ORDER BY e.date DESC, e.id DESC LIMIT 3000"), {"since": since}).mappings().all()
     iso = lambda d: d.isoformat() if isinstance(d, datetime) else str(d or "")
     return {
         "days": days,

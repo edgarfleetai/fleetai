@@ -761,7 +761,7 @@ VIEWS.monitor=function(){
   $("#monQ").addEventListener("input",e=>{monQ=e.target.value;const p=e.target.selectionStart;VIEWS.monitor();const n=$("#monQ");n.focus();n.setSelectionRange(p,p);});};
 const LATER=t=>function(){$("#page").innerHTML=`<div class="phead"><h1><span>${t}</span></h1></div><section class="panel glass"><div class="empty"><h2>Раздел подключается</h2><span>Данные возьмём из базы FleetAI и перед показом сверим со старым FleetAI. Тестовых цифр здесь нет.</span></div></section>`;};
 /* ===== Финансы, инвесторы, ремонты: реальные данные (те же расчёты, что в FleetAI) ===== */
-let FIN=null,FINP="current",JRN=null,REP=null,jf={car:"",dir:""},rf="";
+let FIN=null,FINP="current",JRN=null,REP=null,jf={car:"",dir:""},rf="";const RQ={q:"",days:180,t:0};
 const AGREED={ilya:75,ravshan:70,mark:75};
 async function getJSON(u){const r=await fetch(u,{credentials:"same-origin",cache:"no-store"});if(r.status===401){location.href="/login";throw new Error("401");}if(!r.ok)throw new Error("HTTP "+r.status);return r.json();}
 const onView=v=>(location.hash||"#home").slice(1)===v;
@@ -1081,22 +1081,52 @@ VIEWS.tasks=async function(){shell("Задачи");try{await Promise.all([needSv
   <section class="panel glass"><div class="pbody" style="padding-top:16px"><div class="note">Счётчик масла стартует от последней записи о замене масла (например «621 замена масла 2500 фильтр 500»). Пробег на момент замены берётся из команды («пробег 152000»), из трекера Wialon на дату замены или из записей пробега FleetAI. Для машин без трекера одометр — по записям пробега.</div></div></section>
   <section class="panel glass"><header><h2>История изменений</h2><span class="sub">30 дней · дашборд, бот и старый сайт</span></header>
     <div class="tbl-wrap"><table><thead><tr><th>Когда</th><th>Машина</th><th>Что изменилось</th><th>Кто / где</th></tr></thead><tbody>${histRows(HIST||[])}</tbody></table></div></section>`;};
-VIEWS.repairs=async function(){shell("Ремонты");try{if(!REP)REP=await once("/api/v4/repairs");}catch(e){if(onView("repairs"))failed("Ремонты",e);return;}
+VIEWS.repairs=async function(){shell("Ремонты");const key="/api/v4/repairs?days="+RQ.days;try{if(!REP||REP.key!==key){REP=await once(key);REP.key=key;}}catch(e){if(onView("repairs"))failed("Ремонты",e);return;}
   if(!onView("repairs"))return;
-  const parts=REP.parts.filter(p=>!rf||p.car===rf),exp=REP.expenses.filter(x=>!rf||x.car===rf);
   const codes=[...new Set([...REP.parts,...REP.expenses].map(x=>x.car).filter(Boolean))].sort();
+  const sel='font:inherit;color:var(--fg);background:var(--glass-2);border:1px solid var(--stroke-2);border-radius:99px;padding:6px 10px';
   $("#page").innerHTML=`
-  <div class="phead"><h1><span>Ремонты и расходы</span></h1>${hstat("wrench",rubK(sum(parts,p=>p.price+p.labor)),"Запчасти и работа")}${hstat("coin",rubK(sum(exp,x=>x.amount)),"Все расходы")}
-    <div class="acts"><select id="rcar" aria-label="Машина" style="font:inherit;color:var(--fg);background:var(--glass-2);border:1px solid var(--stroke-2);border-radius:99px;padding:6px 10px"><option value="">Все машины</option>${codes.map(c=>`<option ${rf===c?"selected":""}>${esc(c)}</option>`).join("")}</select></div></div>
-  <section class="panel glass"><header><h2>Запчасти</h2><span class="sub">последние ${REP.days} дней · ${parts.length}</span></header>
+  <div class="phead"><h1><span>Ремонты и расходы</span></h1><span id="rstat" style="display:contents"></span>
+    <div class="acts"><select id="rdays" aria-label="Период" style="${sel}">${[[180,"Полгода"],[365,"Год"],[3650,"Всё время"]].map(([v,t])=>`<option value="${v}" ${RQ.days===v?"selected":""}>${t}</option>`).join("")}</select>
+    <select id="rcar" aria-label="Машина" style="${sel}"><option value="">Все машины</option>${codes.map(c=>`<option ${rf===c?"selected":""}>${esc(c)}</option>`).join("")}</select></div></div>
+  <section class="panel glass"><div class="pbody" style="padding-top:14px;display:flex;flex-direction:column;gap:10px">
+    <input id="rq" class="inp" type="search" autocomplete="off" placeholder="Что ищем? Например: колодки, масло, ремень ГРМ, стартер" value="${esc(RQ.q)}" aria-label="Поиск по ремонтам" style="font:inherit;font-size:15px;color:var(--fg);background:var(--glass-2);border:1px solid var(--stroke-2);border-radius:14px;padding:10px 14px;width:100%;box-sizing:border-box">
+    <div style="display:flex;gap:6px;flex-wrap:wrap">${repTop().map(w=>`<button class="btn" data-rq="${esc(w)}" style="padding:5px 11px;font-size:13px">${esc(w)}</button>`).join("")}</div></div></section>
+  <div id="rbody"></div>`;
+  repDraw();
+  $("#rcar").addEventListener("change",e=>{rf=e.target.value;repDraw();});
+  $("#rdays").addEventListener("change",e=>{RQ.days=Number(e.target.value);VIEWS.repairs();});
+  $("#rq").addEventListener("input",e=>{RQ.q=e.target.value;clearTimeout(RQ.t);RQ.t=setTimeout(repDraw,150);});};
+/* repair search: "колодок" finds "Колодки", "ё" = "е", any word order */
+function repNorm(x){return String(x||"").toLowerCase().replace(/ё/g,"е");}
+function repWords(q){return repNorm(q).split(/[^a-zа-я0-9]+/).filter(w=>w.length>1).map(w=>w.length>5?w.slice(0,w.length-2):w);}
+function repHit(text,words){const t=repNorm(text);return words.every(w=>t.includes(w));}
+function repTop(){const n={};REP.parts.forEach(p=>{const k=(p.name||"").trim();if(k){const key=k[0].toUpperCase()+k.slice(1).toLowerCase();n[key]=(n[key]||0)+1;}});
+  return Object.entries(n).sort((a,b)=>b[1]-a[1]).slice(0,10).map(x=>x[0]);}
+function repDraw(){const box=$("#rbody");if(!box)return;const words=repWords(RQ.q);
+  const parts=REP.parts.filter(p=>(!rf||p.car===rf)&&(!words.length||repHit([p.name,p.brand,p.position,p.status].join(" "),words)));
+  const exp=REP.expenses.filter(x=>(!rf||x.car===rf)&&(!words.length||repHit([x.category,x.description].join(" "),words)));
+  const per=REP.days>=3650?"за всё время":`за ${REP.days===365?"год":"полгода"}`;
+  $("#rstat").innerHTML=hstat("wrench",rubK(sum(parts,p=>p.price+p.labor)),"Запчасти и работа")+hstat("coin",rubK(sum(exp,x=>x.amount)),words.length?"Расходы по поиску":"Все расходы");
+  let found="";
+  if(words.length){const by={};
+    parts.forEach(p=>{const b=by[p.car]||(by[p.car]={car:p.car,last:"",n:0,sum:0,what:""});b.n++;b.sum+=p.price+p.labor;if(p.date>b.last){b.last=p.date;b.what=[p.name,p.brand,p.position].filter(Boolean).join(" · ");}});
+    exp.forEach(x=>{const b=by[x.car]||(by[x.car]={car:x.car,last:"",n:0,sum:0,what:""});b.n++;b.sum+=x.amount;if(x.date>b.last){b.last=x.date;b.what=x.description||x.category;}});
+    const rows=Object.values(by).sort((a,b)=>b.last.localeCompare(a.last));
+    const ago=d=>{const n=Math.round((TODAY-new Date(d))/864e5);return n<1?"сегодня":n<45?n+" дн. назад":n<730?Math.round(n/30.4)+" мес. назад":Math.round(n/365)+" г. назад";};
+    found=`<section class="panel glass"><header><h2>«${esc(RQ.q.trim())}» — по машинам</h2><span class="sub">${rows.length} маш. · ${parts.length+exp.length} записей ${per}</span></header>
+    <div class="tbl-wrap"><table><thead><tr><th>Машина</th><th>Последний раз</th><th>Что именно</th><th class="r">Раз</th><th class="r">Всего</th></tr></thead><tbody>
+    ${rows.map(r=>`<tr><td><b>${esc(r.car||"—")}</b></td><td class="num" style="white-space:nowrap">${d2(r.last)} <span style="color:var(--muted)">· ${ago(r.last)}</span></td><td style="white-space:normal">${esc(r.what)}</td><td class="r">${r.n}</td><td class="r">${money(-r.sum)}</td></tr>`).join("")||`<tr><td colspan="5" style="color:var(--muted)">Ничего не найдено ${per}${REP.days<3650?" — попробуйте период «Всё время»":""}</td></tr>`}
+    </tbody></table></div></section>`;}
+  box.innerHTML=found+`
+  <section class="panel glass"><header><h2>Запчасти</h2><span class="sub">${per} · ${parts.length}</span></header>
     <div class="tbl-wrap"><table><thead><tr><th>Дата</th><th>Машина</th><th>Запчасть</th><th>Статус</th><th class="r">Цена</th><th class="r">Работа</th></tr></thead><tbody>
     ${parts.map(p=>`<tr><td class="num">${d2(p.date)}</td><td>${esc(p.car)}</td><td>${esc([p.name,p.brand,p.position].filter(Boolean).join(" · "))}</td><td>${esc(p.status)}</td><td class="r">${money(-p.price)}</td><td class="r">${p.labor?money(-p.labor):"—"}</td></tr>`).join("")||`<tr><td colspan="6" style="color:var(--muted)">Нет записей</td></tr>`}
     </tbody></table></div></section>
-  <section class="panel glass"><header><h2>Расходы</h2><span class="sub">последние ${REP.days} дней · ${exp.length}</span></header>
+  <section class="panel glass"><header><h2>Расходы</h2><span class="sub">${per} · ${exp.length}</span></header>
     <div class="tbl-wrap"><table><thead><tr><th>Дата</th><th>Машина</th><th>Категория</th><th>Описание</th><th class="r">Сумма</th></tr></thead><tbody>
     ${exp.map(x=>`<tr><td class="num">${d2(x.date)}</td><td>${esc(x.car)}</td><td>${esc(x.category)}</td><td style="max-width:380px;white-space:normal;color:var(--muted)">${esc(x.description)}</td><td class="r">${money(-x.amount)}</td></tr>`).join("")||`<tr><td colspan="5" style="color:var(--muted)">Нет записей</td></tr>`}
-    </tbody></table></div></section>`;
-  $("#rcar").addEventListener("change",e=>{rf=e.target.value;VIEWS.repairs();});};
+    </tbody></table></div></section>`;}
 
 const STUB={rent:["Аренда",["Активные аренды с условиями и датами действия","Индивидуальные графики (3×800 ₽, затем 1 857 ₽/сут)","Паузы, отсрочки, переплаты","Смена водителя: закрытие аренды по дате с фиксацией баланса"]],
  contracts:["Договоры",["Шаблоны и версии","Создание из карточки водителя","Отправка в Telegram со статусом доставки и повторной отправкой","Архив подписанных"]],
@@ -1233,6 +1263,7 @@ document.addEventListener("click",e=>{const t=e.target;
   if(t.closest("[data-close]")){closeLayer();return;}
   if(t.closest("[data-back]")){payModal(draft.kind);return;}
   const act=t.closest("[data-act]");if(act){const a=act.dataset.act,cp=act.dataset.carPay||"";if(a==="pay"||a==="expense"){cmdFocus(cp.replace(/^V-/,""));return;}if(a==="driver"){boardModal(null);return;}if(a==="ai"){aiOpen();return;}if(a==="task"){taskModal("");return;}toast(SOON[a]||"Действие доступно в FleetAI");return;}
+  const rqb=t.closest("[data-rq]");if(rqb){RQ.q=rqb.dataset.rq;$("#rq").value=RQ.q;repDraw();return;}
   const ah=t.closest("[data-aihint]");if(ah){aiSend(ah.dataset.aihint);return;}
   if(t.closest("[data-ainew]")){if(!AI.busy){AI.conv="";AI.msgs=[];aiDraw();}return;}
   const ao=t.closest("[data-aiop]");if(ao){const [i,n]=ao.dataset.aiop.split(":").map(Number);const p=AI.msgs[i]&&AI.msgs[i].proposals[n];if(p){closeLayer();const inp=$("#cmd");inp.value=p.message;window.scrollTo({top:0,behavior:"smooth"});cmdRun();}return;}

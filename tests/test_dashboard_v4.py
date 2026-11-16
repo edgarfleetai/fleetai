@@ -539,3 +539,11 @@ def test_wialon_batch_only_reads():
     from dashboard import wialon
     with pytest.raises(ValueError):
         wialon._call('core/batch', {'params': [{'svc': 'unit/exec_cmd', 'params': {}}]})
+
+
+def test_repairs_period_is_limited_to_known_values(fin_dash):
+    c = fin_dash.test_client()
+    login(c)
+    assert c.get('/api/v4/repairs?days=3650', base_url=BASE).get_json()['days'] == 3650
+    assert c.get('/api/v4/repairs?days=365', base_url=BASE).get_json()['days'] == 365
+    assert c.get('/api/v4/repairs?days=99999', base_url=BASE).get_json()['days'] == 180

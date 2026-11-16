@@ -259,7 +259,9 @@ def create_app(config=None):
     @app.get("/api/v4/repairs")
     def repairs_view():
         api_owner()
-        return jsonify(cached("repairs", lambda: finance.repairs(engine)))
+        days = int(request.args.get("days", 180) or 180)
+        days = days if days in (180, 365, 3650) else 180
+        return jsonify(cached(f"repairs:{days}", lambda: finance.repairs(engine, days)))
 
     @app.get("/api/v4/rent")
     def rent_view():
