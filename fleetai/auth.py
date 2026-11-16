@@ -36,17 +36,18 @@ def _hash(value):
     return sha256(value.encode('utf-8')).hexdigest()
 
 
-def _new_session(session, kind, **kwargs):
+def _new_session(session, kind, ttl=None, **kwargs):
     raw = secrets.token_urlsafe(32)
-    ttl = min(28800, max(1, int(current_app.config.get('AUTH_SESSION_TTL', 28800))))
+    if ttl is None:
+        ttl = min(28800, max(1, int(current_app.config.get('AUTH_SESSION_TTL', 28800))))
     row = AuthSession(token_hash=_hash(raw), kind=kind,
                       csrf_token=secrets.token_urlsafe(32), expires_at=time.time() + ttl, **kwargs)
     session.add(row)
     return raw
 
 
-def _cookie(response, raw):
-    response.set_cookie(COOKIE, raw, secure=True, httponly=True, samesite='Lax', path='/', max_age=28800)
+def _cookie(response, raw, max_age=28800):
+    response.set_cookie(COOKIE, raw, secure=True, httponly=True, samesite='Lax', path='/', max_age=max_age)
     return response
 
 
@@ -201,7 +202,28 @@ def _epoch(session, car_code):
     return session.scalar(select(DriverEpoch.epoch).where(DriverEpoch.car_code == car_code)) or 0
 
 
+# Drivers without Telegram enter by a one-time link the owner sends them. Their
+# tickets and sessions carry this marker instead of a Telegram chat id; every
+# other check (current assignment, epoch, revocation on reassignment) still applies.
+OWNER_LINK = 'owner-link'
+LINK_TICKET_TTL = 24 * 3600
+
+
+def link_session_ttl():
+    days = int(os.getenv('DRIVER_LINK_SESSION_DAYS', '30') or 30)
+    return max(1, min(days, 90)) * 86400
+
+
+def _access_valid(session, car_code, driver_name, chat_id):
+    """Telegram binding, or an owner-issued link for the current driver."""
+    if str(chat_id) == OWNER_LINK:
+        return bool(driver_name)
+    return _binding_valid(session, car_code, driver_name, chat_id)
+
+
 def _binding_valid(session, car_code, driver_name, chat_id):
+    if str(chat_id) == OWNER_LINK:
+        return False
     return bool(driver_name and session.execute(text(
         'SELECT 1 FROM driver_telegram_bindings WHERE car_code=:car '
         'AND driver_name=:driver AND telegram_chat_id=:chat LIMIT 1'),
@@ -240,7 +262,7 @@ def lock_driver_financial_car(session, principal, car_code):
             or row['expires_at'] <= time.time() or row['car_code'] != current.code
             or not current.driver or row['driver_name'] != current.driver
             or row['epoch'] != _epoch(session, current.code)
-            or not _binding_valid(session, current.code, current.driver, row['chat_id'])):
+            or not _access_valid(session, current.code, current.driver, row['chat_id'])):
         return None
     # Never switch back to the legacy trimmed-key lookup after locking an exact key.
     return session.scalar(select(Car).where(Car.code == current.code)
@@ -265,6 +287,47 @@ def issue_driver_login(session, car, chat_id):
                             driver_name=current.driver, chat_id=str(chat_id),
                             epoch=_epoch(session, current.code), expires_at=time.time() + 300))
     return raw
+
+
+def issue_driver_link(session, car_code):
+    """One-time 24-hour login link for the CURRENT driver of a car, issued by the owner.
+
+    For drivers without Telegram. Caller must be the owner and commit. The link
+    dies when used, after 24 hours, when the driver changes, or by revoke_driver_links.
+    Returns (raw_ticket, driver_name).
+    """
+    current = lock_driver_assignment(session, car_code)
+    if not current or not current.driver or not _driver_code_unambiguous(session, car_code):
+        raise ValueError('На машине нет водителя')
+    raw = secrets.token_urlsafe(32)
+    session.add(DriverTicket(token_hash=_hash(raw), car_code=current.code, driver_name=current.driver,
+                             chat_id=OWNER_LINK, epoch=_epoch(session, current.code),
+                             expires_at=time.time() + LINK_TICKET_TTL))
+    return raw, current.driver
+
+
+def revoke_driver_links(session, car_code):
+    """Close link access for a car: unused link tickets and open link sessions. Caller commits."""
+    now = time.time()
+    t = session.execute(update(DriverTicket).where(
+        DriverTicket.car_code == car_code, DriverTicket.chat_id == OWNER_LINK,
+        DriverTicket.consumed_at.is_(None), DriverTicket.revoked_at.is_(None)).values(revoked_at=now)).rowcount
+    s_ = session.execute(update(AuthSession).where(
+        AuthSession.kind == 'driver', AuthSession.car_code == car_code, AuthSession.chat_id == OWNER_LINK,
+        AuthSession.revoked_at.is_(None)).values(revoked_at=now)).rowcount
+    return t + s_
+
+
+def driver_link_status(session, car_code):
+    """How many link sessions are open and whether an unused link exists (no secrets)."""
+    now = time.time()
+    sessions = session.scalar(select(func.count()).select_from(AuthSession).where(
+        AuthSession.kind == 'driver', AuthSession.car_code == car_code, AuthSession.chat_id == OWNER_LINK,
+        AuthSession.revoked_at.is_(None), AuthSession.expires_at > now)) or 0
+    pending = session.scalar(select(func.count()).select_from(DriverTicket).where(
+        DriverTicket.car_code == car_code, DriverTicket.chat_id == OWNER_LINK, DriverTicket.consumed_at.is_(None),
+        DriverTicket.revoked_at.is_(None), DriverTicket.expires_at > now)) or 0
+    return {'sessions': int(sessions), 'pending_links': int(pending)}
 
 
 def authenticate_request():
@@ -293,7 +356,7 @@ def authenticate_request():
                 return None
             driver = session.scalar(select(Car.driver).where(Car.code == row.car_code))
             if (not driver or driver != row.driver_name or _epoch(session, row.car_code) != row.epoch
-                    or not _binding_valid(session, row.car_code, row.driver_name, row.chat_id)):
+                    or not _access_valid(session, row.car_code, row.driver_name, row.chat_id)):
                 return None
         elif row.kind != 'owner' or not session.get(Owner, row.owner_id):
             return None
@@ -448,8 +511,14 @@ def init_auth(app):
     def driver_landing():
         if request.query_string:
             return jsonify(error='Tickets must use URL fragments, never query strings'), 400
-        return '''<!doctype html><title>Driver login</title>
-<button id="confirm" type="button">Confirm driver login</button><p id="status"></p>
+        return '''<!doctype html><html lang="ru"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Клевер Парк — вход водителя</title>
+<style>body{margin:0;background:#f4f7f6;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#17211d}
+.w{max-width:420px;margin:12vh auto;padding:24px;background:#fff;border-radius:18px;box-shadow:0 6px 24px rgba(0,0,0,.06);text-align:center}
+button{width:100%;padding:15px;border:0;border-radius:12px;background:#17211d;color:#fff;font-size:17px;font-weight:700;cursor:pointer}
+#status{color:#c23b32;min-height:1.2em}</style>
+<div class="w"><h2>🍀 Клевер Парк</h2><p>Личный кабинет водителя</p>
+<button id="confirm" type="button">Войти в кабинет</button><p id="status"></p></div>
 <script>
 const fragment = location.hash.slice(1);
 const ticket = new URLSearchParams(fragment).get('token') || fragment;
@@ -459,7 +528,7 @@ document.getElementById('confirm').onclick = async () => {
     headers:{'Content-Type':'application/json'}, body:JSON.stringify({ticket}),
     credentials:'same-origin', redirect:'follow'});
   if (r.redirected) location.assign(r.url);
-  else document.getElementById('status').textContent='Login link is invalid or expired';
+  else document.getElementById('status').textContent='Ссылка недействительна или уже использована. Попросите новую у диспетчера.';
 };
 </script>'''
 
@@ -485,7 +554,7 @@ document.getElementById('confirm').onclick = async () => {
                 return jsonify(error='invalid ticket'), 401
             if (not current or not _driver_code_unambiguous(session, ticket.car_code)
                     or current.driver != ticket.driver_name or _epoch(session, ticket.car_code) != ticket.epoch
-                    or not _binding_valid(session, ticket.car_code, ticket.driver_name, ticket.chat_id)):
+                    or not _access_valid(session, ticket.car_code, ticket.driver_name, ticket.chat_id)):
                 return jsonify(error='invalid ticket'), 401
             used = session.execute(update(DriverTicket).where(
                 DriverTicket.token_hash == ticket.token_hash, DriverTicket.consumed_at.is_(None),
@@ -493,11 +562,13 @@ document.getElementById('confirm').onclick = async () => {
             ).values(consumed_at=now))
             if used.rowcount != 1:
                 return jsonify(error='invalid ticket'), 401
-            session_raw = _new_session(session, 'driver', car_code=ticket.car_code,
+            by_link = ticket.chat_id == OWNER_LINK
+            ttl = link_session_ttl() if by_link else None
+            session_raw = _new_session(session, 'driver', ttl=ttl, car_code=ticket.car_code,
                                        driver_name=ticket.driver_name, chat_id=ticket.chat_id, epoch=ticket.epoch)
             target = '/driver?code=' + quote(ticket.car_code, safe='')
             session.commit()
-        return _cookie(redirect(target, code=303), session_raw)
+        return _cookie(redirect(target, code=303), session_raw, max_age=ttl or 28800)
 
     @bp.get('/session')
     def whoami():
