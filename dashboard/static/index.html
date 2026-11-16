@@ -142,6 +142,9 @@ button.row:hover{background:var(--glass-3)}
 .row .t div:first-child{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .row .t div+div{font-size:12px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .row .amt{font-weight:700;white-space:nowrap}
+.aimsg{align-self:flex-start;max-width:92%;background:var(--glass-3);border:1px solid var(--stroke);border-radius:16px 16px 16px 4px;padding:10px 13px;font-size:14px;line-height:1.45;overflow-wrap:anywhere}
+.aimsg.me{align-self:flex-end;background:var(--lime);color:var(--lime-fg);border-color:transparent;border-radius:16px 16px 4px 16px;white-space:pre-wrap}
+.aimsg.err{border-color:var(--bad);color:var(--bad)}.aimsg.wait{color:var(--muted);font-style:italic}
 .plate{font:700 12px var(--f-ui);border:1px solid var(--stroke-2);border-radius:7px;padding:2px 7px;background:var(--glass-3);white-space:nowrap;font-variant-numeric:tabular-nums}
 .in{color:var(--ok)} .out{color:var(--bad)}
 .dotx{width:8px;height:8px;border-radius:50%;flex:none}
@@ -333,7 +336,7 @@ td.r,th.r{text-align:right}
     <button class="rbtn" data-act="task" aria-label="Новая задача">__I_check__<span class="tip">Новая задача</span></button>
     <div class="rsep"></div>
     <button class="rbtn" data-act="tg" aria-label="Отправить в Telegram">__I_send__<span class="tip">Договор в Telegram</span></button>
-    <button class="rbtn" data-act="ai" aria-label="AI-ассистент">__I_spark__<span class="tip">AI-ассистент · скоро</span></button>
+    <button class="rbtn" data-act="ai" aria-label="AI-ассистент">__I_spark__<span class="tip">ИИ-помощник</span></button>
     <div class="grow"></div>
     <button class="rbtn" data-x="theme" aria-label="Сменить тему">__I_moon__<span class="tip" id="themeTip">Тема</span></button>
   </aside>
@@ -342,7 +345,7 @@ td.r,th.r{text-align:right}
       <div class="brand"><span class="logo">FA</span><span>FleetAI</span></div>
       <nav class="pillnav" id="nav" aria-label="Разделы"><span class="ind" id="ind"></span></nav>
       <div class="tools">
-        <button class="btn lime" data-x="op" aria-label="Новая операция" style="padding:7px 12px">__I_plus__ Операция</button><button class="ibtn" data-x="search" aria-label="Поиск">__I_search__</button>
+        <button class="btn" data-x="ai" aria-label="ИИ-помощник" style="padding:7px 12px">__I_spark__ Помощник</button><button class="btn lime" data-x="op" aria-label="Новая операция" style="padding:7px 12px">__I_plus__ Операция</button><button class="ibtn" data-x="search" aria-label="Поиск">__I_search__</button>
         <button class="ibtn" data-x="logout" aria-label="Выйти" title="Выйти">__I_arrow__</button>
         <button class="ibtn hide-sm" data-x="theme" aria-label="Сменить тему">__I_moon__</button>
         <span class="avatar" title="Владелец" id="me">··</span>
@@ -350,7 +353,7 @@ td.r,th.r{text-align:right}
     </div>
     <div class="cmdbar glass"><span class="ic">__I_plus__</span><input id="cmd" autocomplete="off" spellcheck="false" placeholder="Напишите операцию: 404 получил 13000 · 621 ремонт колодки 2500 · 550 мойка 500" aria-label="Операция"><button class="btn" id="cmdGo">Проверить</button><div id="cmdPv" class="cmdpv" hidden></div></div>
     <main class="view" id="page" style="display:flex;flex-direction:column;gap:16px"></main>
-    <div class="proto" id="proto">FleetAI 4.0 · только просмотр · данные из базы FleetAI и Wialon</div>
+    <div class="proto" id="proto">FleetAI 4.0 · данные из базы FleetAI и Wialon · ИИ-помощник на Claude</div>
   </div>
 </div>
 <div id="layer"></div>
@@ -1057,13 +1060,15 @@ function oilCell(o){if(!o)return `<span style="color:var(--muted)">замен м
   if(o.since_km==null)return `<span style="color:var(--muted)">замена ${d2(o.date)}: пока не по чему считать — внесите пробег («пробег 152000») или подождите, пока накопятся показания трекера</span>`;
   const cls=o.status==="overdue"?"t-bad":o.status==="soon"?"t-warn":"t-ok";
   return `${tag(o.status==="overdue"?`просрочено на ${km(o.since_km-o.interval_km)}`:`через ${km(o.due_in_km)}`,cls)} <span style="color:var(--muted);font-size:12.5px">пройдено ${km(o.since_km)} из ${km(o.interval_km)} · замена ${d2(o.date)}${o.how?` · по ${esc(o.how)}`:""}</span>`;}
-VIEWS.tasks=async function(){shell("Задачи");try{await needSvc();}catch(e){if(onView("tasks"))failed("Задачи",e);return;}
+VIEWS.tasks=async function(){shell("Задачи");try{await Promise.all([needSvc(),tasksLoad(),HIST?0:getJSON("/api/v4/history?days=30").then(d=>{HIST=d.events;})]);}catch(e){if(onView("tasks"))failed("Задачи",e);return;}
   if(!onView("tasks"))return;
   const t=SVC.tasks,parts=SVC.parts;
   $("#page").innerHTML=`
   <div class="phead"><h1><span>Задачи</span><span>и ТО</span></h1>${hstat("alert",t.length,"задач по обслуживанию")}${hstat("wrench",SVC.cars.filter(c=>c.oil&&c.oil.since_km!=null).length,"машин со счётчиком масла")}</div>
+  <section class="panel glass"><header><h2>Мои задачи</h2><span class="sub">${TASKS.filter(x=>x.status==="open").length} открыто</span><button class="btn lime" data-newtask style="margin-left:auto">${ico("plus",14)} Задача</button></header>
+    <div class="list">${TASKS.filter(x=>x.status==="open").map(taskRow).join("")||`<div class="empty"><h2>Открытых задач нет</h2><span>Добавьте задачу кнопкой выше или попросите помощника.</span></div>`}${TASKS.filter(x=>x.status==="done").slice(0,10).map(taskRow).join("")}</div></section>
   ${SVC.error?`<section class="panel glass"><div class="pbody" style="padding-top:14px"><div class="note warn">Wialon: ${esc(SVC.error)} — пробег по трекерам временно недоступен, используются записи FleetAI.</div></div></section>`:""}
-  <section class="panel glass"><header><h2>Нужно сделать</h2><span class="sub">${t.length}</span></header>
+  <section class="panel glass"><header><h2>Обслуживание</h2><span class="sub">${t.length}</span></header>
     <div class="list">${t.map(x=>`<button class="row" data-car="V-${esc(x.car)}"><i class="dotx" style="background:var(--${x.sev})"></i><div class="t"><div>${esc(x.title)}</div><div>${esc(x.detail)}</div></div></button>`).join("")||`<div class="empty"><h2>Всё в порядке</h2><span>Замены масла пока не подходят. Задача появится за ${km(1000)} до ${km(SVC.oil_interval_km)}.</span></div>`}</div></section>
   <section class="panel glass"><header><h2>Пробег и масло</h2><span class="sub">масло каждые ${km(SVC.oil_interval_km)}</span></header>
     <div class="tbl-wrap"><table><thead><tr><th>Машина</th><th class="r">Одометр</th><th class="r">Сегодня</th><th class="r">За месяц</th><th>Масло</th></tr></thead><tbody>
@@ -1073,7 +1078,9 @@ VIEWS.tasks=async function(){shell("Задачи");try{await needSvc();}catch(e)
     <div class="tbl-wrap"><table><thead><tr><th>Машина</th><th>Запчасть</th><th class="r">Замен</th><th>Последняя</th><th class="r">В среднем раз в</th></tr></thead><tbody>
     ${parts.map(p=>`<tr><td>${esc(p.car)}</td><td>${esc(p.part)}</td><td class="r num">${p.count}</td><td class="num">${d2(p.last_date)}${p.last_km?` · ${km(p.last_km)}`:""}</td><td class="r num">${[p.avg_km?km(p.avg_km):"",p.avg_days?p.avg_days+" дн":""].filter(Boolean).join(" · ")||"—"}</td></tr>`).join("")||`<tr><td colspan="5" style="color:var(--muted)">Записей о запчастях пока нет</td></tr>`}
     </tbody></table></div></section>
-  <section class="panel glass"><div class="pbody" style="padding-top:16px"><div class="note">Счётчик масла стартует от последней записи о замене масла (например «621 замена масла 2500 фильтр 500»). Пробег на момент замены берётся из команды («пробег 152000»), из трекера Wialon на дату замены или из записей пробега FleetAI. Для машин без трекера одометр — по записям пробега.</div></div></section>`;};
+  <section class="panel glass"><div class="pbody" style="padding-top:16px"><div class="note">Счётчик масла стартует от последней записи о замене масла (например «621 замена масла 2500 фильтр 500»). Пробег на момент замены берётся из команды («пробег 152000»), из трекера Wialon на дату замены или из записей пробега FleetAI. Для машин без трекера одометр — по записям пробега.</div></div></section>
+  <section class="panel glass"><header><h2>История изменений</h2><span class="sub">30 дней · дашборд, бот и старый сайт</span></header>
+    <div class="tbl-wrap"><table><thead><tr><th>Когда</th><th>Машина</th><th>Что изменилось</th><th>Кто / где</th></tr></thead><tbody>${histRows(HIST||[])}</tbody></table></div></section>`;};
 VIEWS.repairs=async function(){shell("Ремонты");try{if(!REP)REP=await once("/api/v4/repairs");}catch(e){if(onView("repairs"))failed("Ремонты",e);return;}
   if(!onView("repairs"))return;
   const parts=REP.parts.filter(p=>!rf||p.car===rf),exp=REP.expenses.filter(x=>!rf||x.car===rf);
@@ -1101,7 +1108,9 @@ function stub(v){return function(){const [t,items]=STUB[v];$("#page").innerHTML=
 function closeLayer(){const had=!!$("#layer").innerHTML;$("#layer").innerHTML="";document.body.style.overflow="";if(had&&typeof OPD!=="undefined"&&OPD.res&&OPD.res.some(r=>r.ok)){OPD.res=null;const v=(location.hash||"#home").slice(1);(VIEWS[v]||VIEWS.home)();}}
 function openLayer(html){$("#layer").innerHTML=`<div class="scrim" data-close></div>${html}`;document.body.style.overflow="hidden";const f=$("#layer [autofocus]")||$("#layer button, #layer input");f&&f.focus();}
 function carDrawer(id,tab="overview"){const c=carById(id),d=drvById(c.driver),ops=ledger.filter(e=>e.car===id);
-  const tabs=[["overview","Обзор"],["fin","Финансы"],["to","ТО и пробег"],["plates","Госномера"],["wialon","Wialon"]];let body="";
+  const tabs=[["overview","Обзор"],["fin","Финансы"],["to","ТО и пробег"],["hist","История"],["plates","Госномера"],["wialon","Wialon"]];let body="";
+  if(tab==="hist"){if(!c.hist){getJSON("/api/v4/history?days=365&car="+encodeURIComponent(c.code)).then(d=>{c.hist=d.events;carDrawer(id,"hist");}).catch(()=>{});body=`<div class="note">Загрузка…</div>`;}
+    else body=`<div class="glass"><div class="tbl-wrap"><table><thead><tr><th>Когда</th><th>Что изменилось</th><th>Где</th></tr></thead><tbody>${c.hist.length?c.hist.map(e=>`<tr><td class="num" style="white-space:nowrap">${esc(e.ts.replace("T"," "))}</td><td style="white-space:normal">${esc(e.summary)}</td><td style="color:var(--muted)">${e.source==="outside"?"бот / старый сайт":e.source==="assistant"?"помощник":"дашборд"}</td></tr>`).join(""):`<tr><td colspan="3" style="color:var(--muted)">Изменений пока нет — журнал ведётся с момента обновления</td></tr>`}</tbody></table></div></div>`;}
   if(tab==="overview")body=`${c.flag?`<div class="note warn">${esc(c.flag)}</div>`:""}<div class="kv">
     <div><div class="l">Внутренний ID</div><div class="v num">${c.id}</div></div><div><div class="l">Госномер</div><div class="v num">${esc(c.plate)}</div></div>
     <div><div class="l">Модель / год</div><div class="v">${esc(c.model)}${c.year?", "+c.year:""}</div></div><div><div class="l">VIN</div><div class="v" style="color:var(--faint)">не заполнен</div></div>
@@ -1164,13 +1173,72 @@ function palette(){openLayer(`<div class="modal palette" role="dialog" aria-moda
   let res=draw();$("#pq").addEventListener("input",()=>{idx=0;res=draw();});
   $("#pq").addEventListener("keydown",e=>{if(e.key==="ArrowDown"){idx=Math.min(idx+1,res.length-1);res=draw();e.preventDefault();}if(e.key==="ArrowUp"){idx=Math.max(idx-1,0);res=draw();e.preventDefault();}if(e.key==="Enter"&&res[idx])res[idx].go();});}
 
+/* ===== AI-помощник, задачи, история изменений ===== */
+let AI={conv:"",msgs:[],busy:false,status:null,job:""};
+const AI_TOOLS={fleet:"машины",finance:"финансы",rent:"аренду и долги",operations:"журнал операций",maintenance:"пробег и масло",repairs:"ремонты",change_history:"историю изменений",positions:"GPS",tasks:"задачи",create_task:"ставлю задачу",propose_operation:"готовлю запись"};
+const AI_HINTS=["Что сегодня важно по парку?","Кто из водителей должен и сколько?","Когда менять масло?","Что менялось за неделю?","Какая машина приносит больше всего прибыли?"];
+function aiFmt(t){let h=esc(t);h=h.replace(/\*\*(.+?)\*\*/g,"<b>$1</b>");
+  return h.split(/\n/).map(l=>/^\s*[-•*]\s+/.test(l)?`<div style="padding-left:14px;text-indent:-10px">• ${l.replace(/^\s*[-•*]\s+/,"")}</div>`:/^#{1,4}\s+/.test(l)?`<div style="font-weight:700;margin-top:6px">${l.replace(/^#{1,4}\s+/,"")}</div>`:l?`<div>${l}</div>`:`<div style="height:6px"></div>`).join("");}
+function aiMsgHTML(m,i){if(m.role==="user")return `<div class="aimsg me">${esc(m.text)}</div>`;
+  const props=(m.proposals||[]).map((p,n)=>`<div class="note" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap"><div style="flex:1;min-width:160px"><b>Записать?</b> <span class="num">${esc(p.message)}</span><div style="font-size:12px">${p.items.map(x=>`${esc(x.car)} · ${esc(x.label)} · ${x.amount.toLocaleString("ru-RU")} ₽`).join("<br>")}</div></div><button class="btn lime" data-aiop="${i}:${n}">Проверить и сохранить</button></div>`).join("");
+  const tks=(m.tasks||[]).map(t=>`<div class="note">✓ ${t.created?"Задача поставлена":"Задача уже была"}: <b>${esc(t.title)}</b>${t.car?" · "+esc(t.car):""} <a href="#tasks" data-close>открыть задачи</a></div>`).join("");
+  return `<div class="aimsg${m.error?" err":""}">${m.error?esc(m.error):aiFmt(m.text||"")}</div>${props}${tks}`;}
+function aiDraw(){const box=$("#aiLog");if(!box)return;
+  box.innerHTML=(AI.msgs.length?AI.msgs.map(aiMsgHTML).join(""):`<div class="note">Спросите что угодно о парке: деньги, долги, пробег, ремонты, что и когда менялось. Помощник может поставить задачу и подготовить запись операции — сохраняете её вы сами.</div><div style="display:flex;gap:6px;flex-wrap:wrap">${AI_HINTS.map(h=>`<button class="btn" data-aihint="${esc(h)}">${esc(h)}</button>`).join("")}</div>`)
+    +(AI.busy?`<div class="aimsg wait">Думаю…${AI.tools&&AI.tools.length?" смотрю "+[...new Set(AI.tools)].map(x=>AI_TOOLS[x]||x).join(", "):""}</div>`:"");
+  box.scrollTop=box.scrollHeight;const b=$("#aiGo");if(b){b.disabled=AI.busy;b.textContent=AI.busy?"…":"Спросить";}}
+async function aiOpen(){openLayer(`<aside class="drawer" role="dialog" aria-modal="true" aria-label="ИИ-помощник"><header><div style="flex:1;min-width:0"><h1 style="font-size:22px">${ico("spark",20)} Помощник</h1><div style="color:var(--muted);font-size:12.5px">Видит данные парка · записи сохраняете вы</div></div><button class="ibtn" data-ainew aria-label="Новый разговор" title="Новый разговор">${ico("plus",16)}</button><button class="ibtn" data-close aria-label="Закрыть">✕</button></header>
+  <div class="body" id="aiLog" style="flex:1"></div>
+  <div style="padding:12px 20px 18px;display:flex;gap:8px;border-top:1px solid var(--stroke)"><textarea id="aiIn" rows="2" placeholder="Например: сколько заработала 404 в этом периоде?" aria-label="Вопрос помощнику" style="flex:1;resize:none;font:inherit;color:var(--fg);background:var(--glass-3);border:1px solid var(--stroke);border-radius:14px;padding:10px 12px" autofocus></textarea><button class="btn lime" id="aiGo">Спросить</button></div></aside>`);
+  aiDraw();$("#aiGo").addEventListener("click",aiSend);
+  $("#aiIn").addEventListener("keydown",e=>{if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();aiSend();}});
+  if(AI.status===null){try{AI.status=await getJSON("/api/v4/assistant");}catch(_){AI.status={enabled:true};}}
+  if(!AI.status.enabled&&$("#aiLog")){AI.msgs=AI.msgs.length?AI.msgs:[{role:"assistant",error:"Помощник пока не подключён: нужен ключ ANTHROPIC_API_KEY в настройках Render (сервис fleetai-dashboard → Environment)."}];aiDraw();}}
+async function aiSend(text){const inp=$("#aiIn");const q=(typeof text==="string"?text:(inp&&inp.value)||"").trim();if(!q||AI.busy)return;
+  AI.msgs.push({role:"user",text:q});if(inp)inp.value="";AI.busy=true;AI.tools=[];aiDraw();
+  try{const r=await opPost("/api/v4/assistant",{message:q,conv:AI.conv});
+    if(!r.data.ok)throw new Error(r.data.message||"Ошибка");AI.conv=r.data.conv;AI.job=r.data.job;
+    const t0=Date.now();let j;
+    for(;;){await new Promise(res=>setTimeout(res,1500));
+      try{j=await getJSON("/api/v4/assistant/job/"+encodeURIComponent(AI.job));}catch(e){if(Date.now()-t0>300000)throw e;continue;}
+      AI.tools=j.tools||[];aiDraw();if(j.status!=="running")break;
+      if(Date.now()-t0>300000)throw new Error("Помощник долго не отвечает — спросите ещё раз");}
+    if(j.status==="error")AI.msgs.push({role:"assistant",error:j.error});
+    else AI.msgs.push({role:"assistant",text:j.reply,proposals:j.proposals,tasks:j.tasks});
+    if(j.tasks&&j.tasks.length){TASKS=null;if(onView("tasks"))VIEWS.tasks();}}
+  catch(e){AI.msgs.push({role:"assistant",error:e.message});}
+  AI.busy=false;aiDraw();const n=$("#aiIn");n&&n.focus();}
+
+let TASKS=null,HIST=null;
+async function tasksLoad(force){if(!TASKS||force){TASKS=(await getJSON("/api/v4/tasks")).tasks;}return TASKS;}
+const SRCN={owner:"вы",assistant:"помощник"};
+function taskRow(t){const late=t.status==="open"&&t.due_date&&t.due_date<new Date().toISOString().slice(0,10);
+  return `<div class="row" style="cursor:default"><i class="dotx" style="background:var(--${t.status==="done"?"ok":late?"bad":"warn"})"></i><div class="t"><div style="${t.status==="done"?"text-decoration:line-through;color:var(--muted)":""}">${t.car?`<b>${esc(t.car)}</b> · `:""}${esc(t.title)}</div><div>${t.detail?esc(t.detail)+" · ":""}${t.due_date?`срок ${esc(t.due_date)}${late?" — просрочено":""} · `:""}поставил ${esc(SRCN[t.source]||t.source)} ${d2(t.created_at)}</div></div>
+  <button class="btn" data-task="${t.id}" data-tw="${t.status==="done"?"open":"done"}">${t.status==="done"?"Вернуть":"Готово"}</button><button class="ibtn" data-task="${t.id}" data-tw="delete" aria-label="Удалить задачу" title="Удалить">✕</button></div>`;}
+function histRows(ev){return ev.length?ev.map(e=>`<tr><td class="num" style="white-space:nowrap">${esc(e.ts.replace("T"," "))}</td><td>${esc(e.car||"—")}</td><td style="white-space:normal">${esc(e.summary)}</td><td style="color:var(--muted)">${e.source==="outside"?"бот / старый сайт":e.source==="assistant"?"помощник":esc(e.actor||"дашборд")}</td></tr>`).join(""):`<tr><td colspan="4" style="color:var(--muted)">Пока изменений нет. Журнал ведётся с момента обновления дашборда.</td></tr>`;}
+function taskModal(prefCar){openLayer(`<div class="modal" role="dialog" aria-modal="true" aria-label="Новая задача"><div style="padding:20px;display:flex;flex-direction:column;gap:12px"><h2 style="margin:0">Новая задача</h2>
+  <label class="field">Что сделать<input class="inp" id="tkT" maxlength="300" autofocus></label>
+  <label class="field">Машина<select class="inp" id="tkC"><option value="">— без машины —</option>${cars.map(c=>`<option value="${esc(c.code)}"${c.code===prefCar?" selected":""}>${esc(c.code)} · ${esc(c.plate)}</option>`).join("")}</select></label>
+  <label class="field">Срок<input class="inp" id="tkD" type="date"></label><label class="field">Подробности<input class="inp" id="tkX" maxlength="500"></label>
+  <div style="display:flex;gap:8px;justify-content:flex-end"><button class="btn" data-close>Отмена</button><button class="btn lime" id="tkGo">Добавить</button></div></div></div>`);
+  $("#tkGo").addEventListener("click",async()=>{const b=$("#tkGo");b.disabled=true;
+    try{const r=await opPost("/api/v4/tasks",{data:{title:$("#tkT").value,car_code:$("#tkC").value,due_date:$("#tkD").value,detail:$("#tkX").value}});
+      if(!r.data.ok)throw new Error(r.data.message||"Ошибка");closeLayer();TASKS=null;HIST=null;toast(r.data.message);if(onView("tasks"))VIEWS.tasks();else location.hash="#tasks";}
+    catch(e){b.disabled=false;toast(e.message);}});}
+async function taskChange(id,what){try{const r=await opPost(`/api/v4/tasks/${id}/${what}`,{data:{}});if(!r.data.ok)throw new Error(r.data.message||"Ошибка");TASKS=null;HIST=null;toast(r.data.message);if(onView("tasks"))VIEWS.tasks();}catch(e){toast("Не сохранилось: "+e.message);}}
+
 /* ===== events ===== */
 const SOON={task:"Создание задачи — в FleetAI",repair:"Планирование ремонта — в FleetAI",addcar:"Добавление автомобиля — в FleetAI",driver:"Регистрация водителя — в FleetAI",tg:"Отправка договора в Telegram — в FleetAI",ai:"AI-ассистент — после основных разделов"};
 document.addEventListener("click",e=>{const t=e.target;
   if(t.closest("[data-close]")){closeLayer();return;}
   if(t.closest("[data-back]")){payModal(draft.kind);return;}
-  const act=t.closest("[data-act]");if(act){const a=act.dataset.act,cp=act.dataset.carPay||"";if(a==="pay"||a==="expense"){cmdFocus(cp.replace(/^V-/,""));return;}if(a==="driver"){boardModal(null);return;}toast(SOON[a]||"Действие доступно в FleetAI");return;}
-  const x=t.closest("[data-x]");if(x){const xv=x.dataset.x;if(xv==="op"){cmdFocus("");return;}if(xv==="logout"){fetch("/logout",{method:"POST",credentials:"same-origin",headers:{"X-CSRF":CSRF}}).finally(()=>location.href="/login");return;}xv==="search"?palette():cycleTheme();return;}
+  const act=t.closest("[data-act]");if(act){const a=act.dataset.act,cp=act.dataset.carPay||"";if(a==="pay"||a==="expense"){cmdFocus(cp.replace(/^V-/,""));return;}if(a==="driver"){boardModal(null);return;}if(a==="ai"){aiOpen();return;}if(a==="task"){taskModal("");return;}toast(SOON[a]||"Действие доступно в FleetAI");return;}
+  const ah=t.closest("[data-aihint]");if(ah){aiSend(ah.dataset.aihint);return;}
+  if(t.closest("[data-ainew]")){if(!AI.busy){AI.conv="";AI.msgs=[];aiDraw();}return;}
+  const ao=t.closest("[data-aiop]");if(ao){const [i,n]=ao.dataset.aiop.split(":").map(Number);const p=AI.msgs[i]&&AI.msgs[i].proposals[n];if(p){closeLayer();const inp=$("#cmd");inp.value=p.message;window.scrollTo({top:0,behavior:"smooth"});cmdRun();}return;}
+  const tk=t.closest("[data-task]");if(tk){taskChange(tk.dataset.task,tk.dataset.tw);return;}
+  if(t.closest("[data-newtask]")){taskModal("");return;}
+  const x=t.closest("[data-x]");if(x){const xv=x.dataset.x;if(xv==="op"){cmdFocus("");return;}if(xv==="ai"){aiOpen();return;}if(xv==="logout"){fetch("/logout",{method:"POST",credentials:"same-origin",headers:{"X-CSRF":CSRF}}).finally(()=>location.href="/login");return;}xv==="search"?palette():cycleTheme();return;}
   const mc=t.closest("[data-city]");if(mc){goCity(mc.dataset.city);return;}
   const mz=t.closest("[data-mz]");if(mz){const m=mz.dataset.mz;m==="fit"?fitAll():zoomAt(m==="in"?1/1.4:1.4);return;}
   const mk=t.closest("[data-mk]");if(mk){monSel=mk.dataset.mk;VIEWS.monitor();return;}
