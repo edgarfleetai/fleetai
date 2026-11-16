@@ -761,6 +761,7 @@ VIEWS.monitor=function(){
   $("#monQ").addEventListener("input",e=>{monQ=e.target.value;const p=e.target.selectionStart;VIEWS.monitor();const n=$("#monQ");n.focus();n.setSelectionRange(p,p);});};
 const LATER=t=>function(){$("#page").innerHTML=`<div class="phead"><h1><span>${t}</span></h1></div><section class="panel glass"><div class="empty"><h2>Раздел подключается</h2><span>Данные возьмём из базы FleetAI и перед показом сверим со старым FleetAI. Тестовых цифр здесь нет.</span></div></section>`;};
 /* ===== Финансы, инвесторы, ремонты: реальные данные (те же расчёты, что в FleetAI) ===== */
+let UNP=null;const TODAY_ISO=new Date(Date.now()+3*3600e3).toISOString().slice(0,10);
 let FIN=null,FINP="current",JRN=null,REP=null,jf={car:"",dir:""},rf="";const RQ={q:"",days:180,t:0};
 const AGREED={ilya:75,ravshan:70,mark:75};
 async function getJSON(u){const r=await fetch(u,{credentials:"same-origin",cache:"no-store"});if(r.status===401){location.href="/login";throw new Error("401");}if(!r.ok)throw new Error("HTTP "+r.status);return r.json();}
@@ -821,14 +822,15 @@ VIEWS.investors=async function(){shell("Инвесторы");try{await needFin()
 let RENT=null,CTR=null;
 const CIT_SHORT={RU:"РФ",UZ:"Узбекистан",TJ:"Таджикистан",KG:"Кыргызстан",TM:"Туркменистан",OTHER:"Другое"};
 const CST={ready:["Заполнен","t-info"],draft:["Черновик","t-mute"],sent:["Отправлен","t-info"],signed:["Подписан","t-ok"],cancelled:["Отменён","t-bad"],expired:["Истёк","t-warn"]};
-VIEWS.rent=async function(){shell("Аренда");try{if(!RENT)RENT=await once("/api/v4/rent");}catch(e){if(onView("rent"))failed("Аренда",e);return;}
+VIEWS.rent=async function(){shell("Аренда");try{if(!RENT)RENT=await once("/api/v4/rent");if(!UNP)UNP=(await getJSON("/api/v4/rent/unposted")).payments;}catch(e){if(onView("rent"))failed("Аренда",e);return;}
   if(!onView("rent"))return;
   const r=RENT.rentals,owe=x=>Math.max(-x.wallet,0)+x.debt_total,debtors=r.filter(x=>owe(x)>0);
   $("#page").innerHTML=`
   <div class="phead"><h1><span>Аренда</span></h1>${hstat("car",r.length,"активных аренд")}${hstat("alert",debtors.length,"водителей с долгом")}${hstat("coin",rubK(sum(r,owe)),"общий долг водителей")}</div>
+  ${UNP.length?unpHTML():""}
   <section class="panel glass"><header><h2>Активные аренды</h2><span class="sub">баланс по данным FleetAI</span></header>
     <div class="tbl-wrap"><table><thead><tr><th>Машина</th><th>Водитель</th><th>Тариф</th><th class="r">Депозит</th><th class="r">Баланс аренды</th><th class="r">Отдельный долг</th><th class="r">Итого долг</th></tr></thead><tbody>
-    ${r.map(x=>`<tr data-car="V-${esc(x.code)}" tabindex="0" style="cursor:pointer"><td>${carLabel(x.code)}</td><td>${esc(x.driver)}</td><td class="num">${x.weekly_payment?rub(x.weekly_payment)+"/нед":x.daily_rent?rub(x.daily_rent)+"/сут":"—"}</td><td class="r">${x.deposit?money(x.deposit,""):"—"}</td><td class="r">${money(x.wallet,x.wallet<0?"out":x.wallet>0?"in":"")}</td><td class="r">${x.debt_total?money(-x.debt_total):"—"}</td><td class="r">${owe(x)?`<b>${money(-owe(x))}</b>`:`<span class="tag t-ok">нет</span>`}</td></tr>`).join("")||`<tr><td colspan="7" style="color:var(--muted)">Активных аренд нет</td></tr>`}
+    ${r.map(x=>`<tr data-car="V-${esc(x.code)}" tabindex="0" style="cursor:pointer"><td>${carLabel(x.code)}</td><td>${esc(x.driver)}</td><td class="num">${x.weekly_payment?rub(x.weekly_payment)+"/нед":x.daily_rent?rub(x.daily_rent)+"/сут":"—"}</td><td class="r">${x.deposit?money(x.deposit,""):"—"}</td><td class="r">${money(x.wallet,x.wallet<0?"out":x.wallet>0?"in":"")}${x.accrued_to&&x.accrued_to<TODAY_ISO?`<div style="font-size:11.5px;color:var(--warn)">начислено по ${d2(x.accrued_to)}</div>`:""}</td><td class="r">${x.debt_total?money(-x.debt_total):"—"}</td><td class="r">${owe(x)?`<b>${money(-owe(x))}</b>`:`<span class="tag t-ok">нет</span>`}</td></tr>`).join("")||`<tr><td colspan="7" style="color:var(--muted)">Активных аренд нет</td></tr>`}
     </tbody></table></div></section>
   ${r.some(x=>x.debts.length)?`<section class="panel glass"><header><h2>Отдельные долги водителей</h2></header><div class="list">${r.flatMap(x=>x.debts.map(d=>`<div class="row"><i class="dotx" style="background:var(--bad)"></i><div class="t"><div>${esc(x.driver)} · ${esc(x.code)}</div><div>${esc(d.reason||"без причины")} · ${d2(d.created_at)}</div></div><span class="amt num out">${rub(-d.amount)}</span></div>`)).join("")}</div></section>`:""}
   <section class="panel glass"><div class="pbody" style="padding-top:16px"><div class="note">«Баланс аренды» — кошелёк водителя в FleetAI: плюс — оплачено вперёд, минус — долг по аренде. Данные на последнее начисление, которое сделал FleetAI; дашборд сам ничего не начисляет.</div></div></section>`;};
@@ -885,7 +887,7 @@ function opModal(prefCar){OPD={msg:"",key:(crypto.randomUUID?crypto.randomUUID()
     try{const {data}=await opPost("/api/v4/ops/preview",{message:m});OPD.msg=m;OPD.pv=data;}catch(e){OPD.pv={ok:false,items:[{label:"Ошибка",car:"",category:"",share:"",amount:0,parts:[],problem:e.message}]};}opRender();});
   $("#opSave").addEventListener("click",async()=>{if(!OPD.pv||!OPD.pv.ok||OPD.busy)return;OPD.busy=true;$("#opSave").disabled=true;
     try{const {data}=await opPost("/api/v4/ops/commit",{message:OPD.msg,fingerprint:OPD.pv.fingerprint,key:OPD.key});OPD.res=data.results||[{ok:false,message:"Ошибка"}];
-      if(data.ok){FIN=null;JRN=null;REP=null;RENT=null;SVC=null;toast("Операция сохранена");}}catch(e){OPD.res=[{ok:false,message:e.message}];}
+      if(data.ok){FIN=null;JRN=null;REP=null;RENT=null;UNP=null;SVC=null;toast("Операция сохранена");}}catch(e){OPD.res=[{ok:false,message:e.message}];}
     OPD.busy=false;opRender();});
   opRender();$("#opCar").focus();}
 /* ===== Одна строка для всех операций: Enter — проверить, Enter ещё раз — сохранить ===== */
@@ -913,7 +915,7 @@ async function cmdSave(m){const items=CMD.pv.items,res=[];
 async function cmdRun(){const inp=$("#cmd"),m=inp.value.trim();if(!m||CMD.busy)return;
   if(CMD.pv&&CMD.pv.ok&&CMD.msg===m){CMD.busy=true;$("#cmdGo").textContent="Сохраняю…";
     try{const {ok,res}=await cmdSave(m);
-      if(ok){cmdShow(`<div class="note">✓ ${res.map(r=>esc(r.message)).join(" · ")}</div>`);inp.value="";CMD={pv:null,msg:"",key:"",busy:false,mode:{},pay:{}};FIN=null;JRN=null;REP=null;RENT=null;SVC=null;const v=(location.hash||"#home").slice(1);(VIEWS[v]||VIEWS.home)();setTimeout(()=>{if(!CMD.pv)cmdShow("");},6000);}
+      if(ok){cmdShow(`<div class="note">✓ ${res.map(r=>esc(r.message)).join(" · ")}</div>`);inp.value="";CMD={pv:null,msg:"",key:"",busy:false,mode:{},pay:{}};FIN=null;JRN=null;REP=null;RENT=null;UNP=null;SVC=null;const v=(location.hash||"#home").slice(1);(VIEWS[v]||VIEWS.home)();setTimeout(()=>{if(!CMD.pv)cmdShow("");},6000);}
       else cmdShow(res.map(r=>`<div class="note ${r.ok?"":"warn"}">${r.ok?"✓":"✕"} ${esc(r.message)}</div>`).join(""));}catch(e){cmdShow(`<div class="note warn">${esc(e.message)}</div>`);}
     CMD.busy=false;cmdLabel();return;}
   CMD.busy=true;$("#cmdGo").textContent="Проверяю…";
@@ -966,7 +968,7 @@ async function actGo(){if(!ACT||ACT.busy)return;const a=ACTS[ACT.name];
   const payload=Object.assign({},ACT.data,(ACT.c.code&&ACT.name!=="add_car")?{car_code:ACT.c.code}:{});
   try{const {data:b}=await opPost("/api/v4/act/"+ACT.name,{key:ACT.key,data:payload});
     ACT.res=b;$("#actPv").innerHTML=`<div class="note ${b.ok?"":"warn"}">${b.ok?"✓":"✕"} ${esc(b.message||(b.ok?"Готово":"Ошибка"))}</div>`;
-    if(b.ok){if(ACT.boardId){try{await opPost(`/api/v4/board/${ACT.boardId}/delete`,{data:{}});}catch(_){}await boardLoad(true);}FIN=null;JRN=null;REP=null;RENT=null;SVC=null;try{const f=await getJSON("/api/v4/fleet");cars=f.cars;drivers=f.drivers;}catch(_){}$("#actGo").textContent="Готово";OPD.res=[{ok:true}];}
+    if(b.ok){if(ACT.boardId){try{await opPost(`/api/v4/board/${ACT.boardId}/delete`,{data:{}});}catch(_){}await boardLoad(true);}FIN=null;JRN=null;REP=null;RENT=null;UNP=null;SVC=null;try{const f=await getJSON("/api/v4/fleet");cars=f.cars;drivers=f.drivers;}catch(_){}$("#actGo").textContent="Готово";OPD.res=[{ok:true}];}
     else{ACT.data=null;$("#actGo").textContent="Далее";}}
   catch(e){$("#actPv").innerHTML=`<div class="note warn">${esc(e.message)}</div>`;ACT.data=null;$("#actGo").textContent="Далее";}
   ACT.busy=false;}
@@ -990,7 +992,7 @@ async function opeGo(){if(!OPE||OPE.busy)return;if(OPE.done){closeLayer();return
   OPE.busy=true;$("#opeGo").textContent="Сохраняю…";
   try{const {data:b}=await opPost(`/api/v4/op/${OPE.id}/${OPE.what}`,{key:OPE.key,data});
     $("#opeRes").innerHTML=`<div class="note ${b.ok?"":"warn"}">${b.ok?"✓":"✕"} ${esc(b.message||(b.ok?"Готово":"Ошибка"))}</div>`;
-    if(b.ok){OPE.done=true;$("#opeGo").textContent="Готово";FIN=null;JRN=null;REP=null;RENT=null;SVC=null;OPD.res=[{ok:true}];}else $("#opeGo").textContent=OPE.what==="delete"?"Удалить":"Сохранить";}
+    if(b.ok){OPE.done=true;$("#opeGo").textContent="Готово";FIN=null;JRN=null;REP=null;RENT=null;UNP=null;SVC=null;OPD.res=[{ok:true}];}else $("#opeGo").textContent=OPE.what==="delete"?"Удалить":"Сохранить";}
   catch(e){$("#opeRes").innerHTML=`<div class="note warn">${esc(e.message)}</div>`;$("#opeGo").textContent="Повторить";}
   OPE.busy=false;}
 /* ===== Путь водителя: кандидаты хранятся в dashboard_driver_board, арендаторы — из машин ===== */
@@ -1348,6 +1350,24 @@ async function ctSigned(){if(!confirm("Отметить, что договор �
   try{const {data:r}=await opPost(`/api/v4/contracts/${encodeURIComponent(CT.id)}/signed`,{data:{}});if(!r.ok){toast(r.message);return;}
     CTR=null;const fresh=await getJSON("/api/v4/contracts/"+encodeURIComponent(CT.id));CT.d=fresh.data;ctDraw();toast("Договор подписан");if(onView("contracts"))VIEWS.contracts();}catch(e){toast(e.message);}}
 
+
+/* ===== payments that never reached the driver's wallet ===== */
+document.addEventListener("change",e=>{const u=e.target.closest&&e.target.closest("[data-unp]");if(!u||!UNP)return;UNP[+u.dataset.unp].on=u.checked;
+  const sel=UNP.filter(x=>x.on!==false&&(x.on||!x.maybe_duplicate)),b=$("#unpGo");if(b){b.disabled=!sel.length;b.textContent=`Зачесть выбранные: ${sel.length} на ${rub(sum(sel,x=>x.amount))}`;}});
+function unpHTML(){const sel=UNP.filter(x=>x.on!==false&&(x.on||!x.maybe_duplicate));
+  return `<section class="panel glass" style="border-color:var(--warn)"><header><h2>Оплаты не попали в баланс водителя</h2><span class="sub">${UNP.length} шт.</span></header>
+  <div class="pbody" style="padding-top:4px"><div class="note">Эти оплаты записаны командой «… получил …» до 15.11: в доходах парка они есть, а в балансе водителя — нет, поэтому водитель выглядит должником. «Зачесть» добавит сумму в баланс водителя; новых доходов не появится. Показаны оплаты с момента, когда текущий водитель взял машину. Похожие на дубль (та же сумма в те же 15 минут) не отмечены — проверьте их.</div></div>
+  <div class="tbl-wrap"><table><thead><tr><th></th><th>Дата</th><th>Машина</th><th>Водитель</th><th>Запись</th><th class="r">Сумма</th></tr></thead><tbody>
+  ${UNP.map((x,n)=>`<tr><td><input type="checkbox" data-unp="${n}" ${x.on!==false&&(x.on||!x.maybe_duplicate)?"checked":""} aria-label="Зачесть"></td><td class="num">${d2(x.date)} <span style="color:var(--muted)">${x.date.slice(11,16)}</span></td><td>${esc(x.car)}</td><td>${esc(x.driver)}</td><td style="color:var(--muted)">${esc(x.raw)}${x.maybe_duplicate?` <span class="tag t-warn">возможно дубль</span>`:""}</td><td class="r">${money(x.amount,"in")}</td></tr>`).join("")}
+  </tbody></table></div>
+  <div class="pbody" style="display:flex;gap:8px;align-items:center;justify-content:flex-end;flex-wrap:wrap"><span id="unpRes" style="margin-right:auto"></span><button class="btn lime" id="unpGo" ${sel.length?"":"disabled"}>Зачесть выбранные: ${sel.length} на ${rub(sum(sel,x=>x.amount))}</button></div></section>`;}
+async function unpCredit(){const ids=UNP.filter(x=>x.on!==false&&(x.on||!x.maybe_duplicate)).map(x=>x.id);if(!ids.length)return;
+  const total=sum(UNP.filter(x=>ids.includes(x.id)),x=>x.amount);
+  if(!confirm(`Зачесть ${ids.length} оплат на ${rub(total)} в балансы водителей?`))return;
+  const b=$("#unpGo");b.disabled=true;
+  try{const {data:r}=await opPost("/api/v4/rent/unposted",{data:{ids}});toast(r.message);RENT=null;UNP=null;VIEWS.rent();}
+  catch(e){$("#unpRes").innerHTML=`<span style="color:var(--bad)">${esc(e.message)}</span>`;b.disabled=false;}}
+
 /* ===== events ===== */
 const SOON={task:"Создание задачи — в FleetAI",repair:"Планирование ремонта — в FleetAI",addcar:"Добавление автомобиля — в FleetAI",driver:"Регистрация водителя — в FleetAI",tg:"Отправка договора в Telegram — в FleetAI",ai:"AI-ассистент — после основных разделов"};
 document.addEventListener("click",e=>{const t=e.target;
@@ -1355,6 +1375,7 @@ document.addEventListener("click",e=>{const t=e.target;
   if(t.closest("[data-back]")){payModal(draft.kind);return;}
   const act=t.closest("[data-act]");if(act){const a=act.dataset.act,cp=act.dataset.carPay||"";if(a==="pay"||a==="expense"){cmdFocus(cp.replace(/^V-/,""));return;}if(a==="driver"){boardModal(null);return;}if(a==="ai"){aiOpen();return;}if(a==="task"){taskModal("");return;}toast(SOON[a]||"Действие доступно в FleetAI");return;}
   const rqb=t.closest("[data-rq]");if(rqb){RQ.q=rqb.dataset.rq;$("#rq").value=RQ.q;repDraw();return;}
+  if(t.closest("#unpGo")){unpCredit();return;}
   if(t.closest("[data-ctrnew]")){ctOpen(null);return;}
   const dl=t.closest("[data-dlink]");if(dl){closeLayer();dlinkOpen(dl.dataset.dlink);return;}
   const cp=t.closest("[data-copy]");if(cp){navigator.clipboard.writeText(cp.dataset.copy).then(()=>toast("Скопировано"),()=>toast("Выделите ссылку и скопируйте вручную"));return;}

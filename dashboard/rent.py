@@ -41,6 +41,9 @@ def rent_overview(engine):
                 func.trim(DriverWalletTransaction.car_code) == code).order_by(
                 DriverWalletTransaction.date.desc(), DriverWalletTransaction.id.desc()).limit(8).all()
             debt_total = sum(int(d.get("balance") or 0) for d in debts)
+            accrued = s.query(func.max(DriverWalletTransaction.date)).filter(
+                func.trim(DriverWalletTransaction.car_code) == code,
+                DriverWalletTransaction.transaction_type == "daily_rent").scalar()
             out.append({
                 "code": code, "driver": (car.driver or "").strip(),
                 "daily_rent": int(effective_daily_rent(car) or 0) * KOP,
@@ -54,6 +57,7 @@ def rent_overview(engine):
                 "next_payment_date": calc.get("next_payment_date") or "",
                 "period_start": _iso(calc.get("period_start")), "period_end": _iso(calc.get("period_end")),
                 "debt_total": debt_total * KOP,
+                "accrued_to": accrued.date().isoformat() if accrued else "",
                 "debts": [{"amount": int(d.get("balance") or 0) * KOP, "reason": d.get("reason") or "",
                            "created_at": d.get("created_at") or ""} for d in debts],
                 "transactions": [{"date": _iso(t.date), "amount": int(t.amount or 0) * KOP,

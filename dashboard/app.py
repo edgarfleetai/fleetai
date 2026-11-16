@@ -21,7 +21,7 @@ from urllib.parse import urlsplit
 from flask import Flask, abort, jsonify, redirect, request, send_file, session
 from werkzeug.security import check_password_hash
 
-from . import actions, assistant, board, contracts, data, finance, history, ops, rent, service, tasks, wialon
+from . import actions, assistant, board, contracts, data, finance, history, ops, payfix, rent, service, tasks, wialon
 
 STATIC = Path(__file__).resolve().parent / "static"
 ACTION_NAMES = {"topup": "Пополнение кошелька водителя", "fine": "Штраф водителю", "assign": "Назначение водителя",
@@ -267,6 +267,27 @@ def create_app(config=None):
     def rent_view():
         api_owner()
         return jsonify(cached("rent", lambda: rent.rent_overview(engine)))
+
+    @app.get("/api/v4/rent/unposted")
+    def rent_unposted():
+        api_owner()
+        return jsonify(ok=True, payments=payfix.unposted(engine))
+
+    @app.post("/api/v4/rent/unposted")
+    def rent_unposted_credit():
+        write_guard()
+        ids = (request.get_json(silent=True) or {}).get("data", {}).get("ids") or []
+        try:
+            ids = [int(x) for x in ids][:200]
+        except (TypeError, ValueError):
+            return jsonify(ok=False, message="Неверный список"), 400
+        done = payfix.credit(engine, ids)
+        for op_id, car, amount in done:
+            audit("wallet_fix", f"Зачтена в баланс водителя оплата #{op_id}: {car} {amount} ₽", car=car, op_ids=[op_id])
+        clear_cache()
+        total = sum(a for _, _, a in done)
+        return jsonify(ok=True, count=len(done), total=total * 100,
+                       message=f"Зачтено оплат: {len(done)} на {total:,} ₽".replace(",", " ") if done else "Нечего зачитывать")
 
     @app.get("/api/v4/contracts")
     def contracts_view():

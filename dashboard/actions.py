@@ -158,6 +158,10 @@ def delete_operation(app, engine, op_id, key, views=None):
         if status < 400 and TOPUP_MARK in (op["raw_message"] or ""):
             _reverse_topup(op)
             body = dict(body, message=body.get("message", "") + " Кошелёк водителя уменьшен на эту сумму.")
+        elif status < 400:
+            from . import payfix
+            if payfix.reverse_for_operation(op_id):
+                body = dict(body, message=body.get("message", "") + " Зачёт в кошелёк водителя отменён.")
         return status, body
     return _once("del:" + key, run)
 
@@ -199,5 +203,7 @@ def edit_operation(app, engine, op_id, data, key, views=None, save=None):
                              views=views, operation_id=int(op_id))
         if st >= 400:
             return st, {"ok": False, "message": "Новая запись сохранена, но старую удалить не удалось: " + body.get("message", "")}
+        from . import payfix
+        payfix.reverse_for_operation(op_id)
         return 200, {"ok": True, "message": "Исправлено: " + " · ".join(r.get("message", "") for r in results)}
     return _once("edit:" + key, run)
