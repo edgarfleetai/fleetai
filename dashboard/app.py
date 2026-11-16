@@ -294,6 +294,45 @@ def create_app(config=None):
             return jsonify(ok=False, message="Договор не найден"), 404
         return jsonify(ok=True, data=found, countries={k: [v[0], v[1], v[2]] for k, v in contracts.COUNTRIES.items()})
 
+    @app.get("/api/v4/contracts/<cid>/link")
+    def contract_link(cid):
+        api_owner()
+        url = contracts.driver_url(engine, cid, OLD_SITE)
+        if not url:
+            return jsonify(ok=False, message="Договор не найден"), 404
+        return jsonify(ok=True, url=url)
+
+    @app.get("/api/v4/cars/<code>/driver-link")
+    @app.post("/api/v4/cars/<code>/driver-link")
+    @app.post("/api/v4/cars/<code>/driver-link/<what>")
+    def driver_link(code, what=None):
+        """One-time 24 h link into the driver's cabinet (old FleetAI) for drivers without Telegram."""
+        from fleetai import auth as fleet_auth
+        from fleetai import db as fleet_db
+        if request.method == "GET":
+            api_owner()
+            with fleet_db.Session() as s:
+                return jsonify(ok=True, **fleet_auth.driver_link_status(s, code))
+        write_guard()
+        if what not in (None, "revoke"):
+            return jsonify(ok=False, message="Неверный запрос"), 400
+        with fleet_db.Session() as s:
+            if what == "revoke":
+                n = fleet_auth.revoke_driver_links(s, code)
+                s.commit()
+                audit("driver_link", f"Закрыт доступ в кабинет по ссылке: {code}", car=code)
+                return jsonify(ok=True, message="Доступ закрыт" if n else "Открытых ссылок не было")
+            try:
+                raw, driver = fleet_auth.issue_driver_link(s, code)
+            except ValueError as error:
+                s.rollback()
+                return jsonify(ok=False, message=str(error)), 400
+            s.commit()
+        from urllib.parse import quote
+        audit("driver_link", f"Выдана ссылка в кабинет водителя {code}", car=code)
+        return jsonify(ok=True, url=OLD_SITE + "/auth/driver#token=" + quote(raw, safe=""), driver=driver,
+                       message="Ссылка действует 24 часа и открывается один раз")
+
     @app.get("/api/v4/contracts/<cid>/pdf")
     def contract_pdf(cid):
         api_owner()

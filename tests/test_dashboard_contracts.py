@@ -85,3 +85,34 @@ def test_contract_money_is_whole_rubles_and_unknown_car_is_refused(fin_dash):
     assert post(c, '/api/v4/contracts/nope/save', RU).status_code == 404
     pre = c.get('/api/v4/contracts/prefill?car=897', base_url=BASE).get_json()
     assert pre['ok'] and pre['data']['car_code'] == '897' and set(pre['countries']) >= {'RU', 'UZ', 'TJ', 'KG', 'TM'}
+
+
+def test_driver_cabinet_link_is_issued_once_and_can_be_revoked(fin_dash):
+    from sqlalchemy import create_engine, text
+    c = make_app(fin_dash.engine_url).test_client()
+    login(c)
+    assert c.post('/api/v4/cars/897/driver-link', base_url=BASE, json={'data': {}}).status_code == 403   # no CSRF
+    r = post(c, '/api/v4/cars/897/driver-link', {}).get_json()
+    assert r['ok'] and r['url'].startswith('https://fleetai-1.onrender.com/auth/driver#token=')
+    raw = r['url'].split('#token=')[1]
+    eng = create_engine(fin_dash.engine_url)
+    with eng.connect() as conn:
+        rows = conn.execute(text("SELECT token_hash, chat_id FROM auth_driver_tickets")).all()
+    assert [x[1] for x in rows] == ['owner-link'] and raw not in str(rows)                   # only the hash is stored
+    assert c.get('/api/v4/cars/897/driver-link', base_url=BASE).get_json()['pending_links'] == 1
+    hist = ' '.join(e['summary'] for e in c.get('/api/v4/history', base_url=BASE).get_json()['events'])
+    assert 'Выдана ссылка в кабинет водителя 897' in hist and raw not in hist
+    assert post(c, '/api/v4/cars/897/driver-link/revoke', {}).get_json()['message'] == 'Доступ закрыт'
+    assert c.get('/api/v4/cars/897/driver-link', base_url=BASE).get_json()['pending_links'] == 0
+    assert post(c, '/api/v4/cars/000/driver-link', {}).status_code == 400
+
+
+def test_contract_link_for_the_driver(fin_dash):
+    c = make_app(fin_dash.engine_url).test_client()
+    login(c)
+    cid = post(c, '/api/v4/contracts', {'car_code': '621', 'citizenship': 'TJ', 'draft': 1}).get_json()['id']
+    url = c.get(f'/api/v4/contracts/{cid}/link', base_url=BASE).get_json()['url']
+    assert url.startswith('https://fleetai-1.onrender.com/driver-contract?token=') and len(url.split('=')[1]) > 30
+    assert c.get('/api/v4/contracts/nope/link', base_url=BASE).status_code == 404
+    lst = c.get('/api/v4/contracts', base_url=BASE).get_data(as_text=True)
+    assert url.split('=')[1] not in lst                                                    # token only on request

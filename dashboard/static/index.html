@@ -842,7 +842,7 @@ VIEWS.contracts=async function(){shell("Договоры");try{if(!CTR)CTR=await
     <div class="tbl-wrap"><table><thead><tr><th>Создан</th><th>Машина</th><th>Водитель</th><th>Гражданство</th><th>Статус</th><th>Начало аренды</th><th class="r">Аренда в сутки</th><th class="r">Депозит</th><th>Подписан</th></tr></thead><tbody>
     ${c.map(x=>`<tr data-ctr="${esc(x.id)}" style="cursor:pointer"><td class="num">${d2(x.created_at)}</td><td>${esc(x.car)}</td><td>${esc(x.driver||"—")}</td><td>${esc(CIT_SHORT[x.citizenship]||x.citizenship)}</td><td>${tag((CST[x.status]||[x.status])[0],(CST[x.status]||[0,"t-mute"])[1])}</td><td class="num">${esc(x.start||"—")}</td><td class="r">${x.daily_rent?money(x.daily_rent,""):"—"}</td><td class="r">${x.deposit?money(x.deposit,""):"—"}</td><td class="num">${x.signed_at?d2(x.signed_at):"—"}</td></tr>`).join("")||`<tr><td colspan="9" style="color:var(--muted)">Договоров нет</td></tr>`}
     </tbody></table></div></section>
-  <section class="panel glass"><div class="pbody" style="padding-top:16px"><div class="note">Нажмите на договор, чтобы открыть, дозаполнить или скачать PDF. Паспортные данные видите только вы — в список, историю и помощнику они не попадают. Подписание по звонку водителя пока работает в старом FleetAI.</div></div></section>`;};
+  <section class="panel glass"><div class="pbody" style="padding-top:16px"><div class="note">Нажмите на договор, чтобы открыть, дозаполнить или скачать PDF. Паспортные данные видите только вы — в список, историю и помощнику они не попадают. Кнопка «Ссылка водителю» в договоре — водитель сам заполнит и подпишет звонком.</div></div></section>`;};
 
 /* ===== Внесение операций: та же команда и та же запись, что в старом FleetAI ===== */
 let OPD={msg:"",key:"",pv:null,busy:false,res:null};
@@ -1142,7 +1142,7 @@ function carDrawer(id,tab="overview"){const c=carById(id),d=drvById(c.driver),op
   const tabs=[["overview","Обзор"],["fin","Финансы"],["to","ТО и пробег"],["hist","История"],["plates","Госномера"],["wialon","Wialon"]];let body="";
   if(tab==="hist"){if(!c.hist){getJSON("/api/v4/history?days=365&car="+encodeURIComponent(c.code)).then(d=>{c.hist=d.events;carDrawer(id,"hist");}).catch(()=>{});body=`<div class="note">Загрузка…</div>`;}
     else body=`<div class="glass"><div class="tbl-wrap"><table><thead><tr><th>Когда</th><th>Что изменилось</th><th>Где</th></tr></thead><tbody>${c.hist.length?c.hist.map(e=>`<tr><td class="num" style="white-space:nowrap">${esc(e.ts.replace("T"," "))}</td><td style="white-space:normal">${esc(e.summary)}</td><td style="color:var(--muted)">${e.source==="outside"?"бот / старый сайт":e.source==="assistant"?"помощник":"дашборд"}</td></tr>`).join(""):`<tr><td colspan="3" style="color:var(--muted)">Изменений пока нет — журнал ведётся с момента обновления</td></tr>`}</tbody></table></div></div>`;}
-  if(tab==="overview")body=`${c.flag?`<div class="note warn">${esc(c.flag)}</div>`:""}<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">${c.driver?`<a class="btn" href="${OLD_SITE}/driver?code=${encodeURIComponent(c.code)}" target="_blank" rel="noopener">Кабинет водителя ↗</a>`:""}<button class="btn" data-ctrcar="${esc(c.code)}">Новый договор</button></div><div class="kv">
+  if(tab==="overview")body=`${c.flag?`<div class="note warn">${esc(c.flag)}</div>`:""}<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">${c.driver?`<a class="btn" href="${OLD_SITE}/driver?code=${encodeURIComponent(c.code)}" target="_blank" rel="noopener">Кабинет водителя ↗</a><button class="btn" data-dlink="${esc(c.code)}">Ссылка водителю в кабинет</button>`:""}<button class="btn" data-ctrcar="${esc(c.code)}">Новый договор</button></div><div class="kv">
     <div><div class="l">Внутренний ID</div><div class="v num">${c.id}</div></div><div><div class="l">Госномер</div><div class="v num">${esc(c.plate)}</div></div>
     <div><div class="l">Модель / год</div><div class="v">${esc(c.model)}${c.year?", "+c.year:""}</div></div><div><div class="l">VIN</div><div class="v" style="color:var(--faint)">не заполнен</div></div>
     <div><div class="l">Собственник</div><div class="v">${esc(owners[c.owner][0])}</div></div><div><div class="l">Водитель</div><div class="v">${d?esc(d.name):"—"}</div></div>
@@ -1290,6 +1290,7 @@ function ctDraw(){const d=CT.d,locked=d.status==="signed",cit=d.citizenship||"RU
     <div id="ctRes"></div>
     <div style="display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap;position:sticky;bottom:0;padding-top:8px;background:inherit">
       ${CT.id?`<a class="btn" href="/api/v4/contracts/${encodeURIComponent(CT.id)}/pdf" target="_blank" rel="noopener" style="margin-right:auto">PDF</a>`:""}
+      ${locked?"":`<button class="btn" id="ctLink">Ссылка водителю</button>`}
       ${CT.id&&d.status==="ready"?`<button class="btn" id="ctSigned">Подписан на бумаге</button>`:""}
       <button class="btn" data-close>Закрыть</button>${locked?"":`<button class="btn" id="ctDraft">Сохранить черновик</button><button class="btn lime" id="ctSave">Готово</button>`}</div></div></div>`);
   if(locked)document.querySelectorAll("#ctForm [data-c],#ctCar").forEach(el=>el.disabled=true);
@@ -1297,7 +1298,27 @@ function ctDraw(){const d=CT.d,locked=d.status==="signed",cit=d.citizenship||"RU
   $("#ctCit").addEventListener("change",ctShow);$("#ctForm").addEventListener("change",e=>{if(e.target.dataset.c==="work_doc"||e.target.dataset.c==="license_country")ctShow();});
   if($("#ctCar"))$("#ctCar").addEventListener("change",ctPrefill);
   if($("#ctSave")){$("#ctSave").addEventListener("click",()=>ctSave(false));$("#ctDraft").addEventListener("click",()=>ctSave(true));}
-  if($("#ctSigned"))$("#ctSigned").addEventListener("click",ctSigned);}
+  if($("#ctSigned"))$("#ctSigned").addEventListener("click",ctSigned);
+  if($("#ctLink"))$("#ctLink").addEventListener("click",ctLink);}
+function linkBox(url,note){return `<div class="glass" style="padding:10px 12px;border-radius:12px;display:flex;flex-direction:column;gap:8px"><div style="display:flex;gap:6px"><input class="inp" readonly value="${esc(url)}" style="flex:1;min-width:0" onclick="this.select()"><button class="btn lime" data-copy="${esc(url)}">Скопировать</button></div><div style="font-size:12.5px;color:var(--muted)">${note}</div></div>`;}
+async function ctLink(){if(CT.busy)return;
+  if(!CT.id){await ctSave(true);if(!CT.id)return;}
+  try{const r=await getJSON("/api/v4/contracts/"+encodeURIComponent(CT.id)+"/link");
+    $("#ctRes").innerHTML=linkBox(r.url,"Отправьте водителю в WhatsApp или SMS. По ссылке он проверит и дозаполнит данные, откроет договор и подпишет его звонком со своего номера. Ссылку не публикуйте: в ней доступ к договору.");}
+  catch(e){$("#ctRes").innerHTML=`<div class="note warn">${esc(e.message)}</div>`;}}
+async function dlinkOpen(code){let st={sessions:0,pending_links:0};try{st=await getJSON("/api/v4/cars/"+encodeURIComponent(code)+"/driver-link");}catch(_){}
+  const c=cars.find(x=>x.code===code)||{};
+  openLayer(`<div class="modal" role="dialog" aria-modal="true" aria-label="Ссылка в кабинет" style="width:min(520px,calc(100% - 32px))"><div style="padding:20px;display:flex;flex-direction:column;gap:12px"><h2 style="margin:0">Кабинет водителя · ${esc(code)}</h2>
+    <div class="note">Для водителя без Telegram. Ссылка открывается <b>один раз</b> и действует <b>24 часа</b>; после входа кабинет остаётся открытым на телефоне водителя 30 дней. При смене водителя на машине доступ закрывается сам.</div>
+    <div style="font-size:13.5px">Водитель: <b>${esc(((drvById(c.driver)||{}).name)||c.driver||"—")}</b> · открытых входов по ссылке: <b>${st.sessions}</b> · неиспользованных ссылок: <b>${st.pending_links}</b></div>
+    <div id="dlRes"></div>
+    <div style="display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap">${st.sessions||st.pending_links?`<button class="btn" id="dlRevoke" style="margin-right:auto">Закрыть доступ</button>`:""}<button class="btn" data-close>Закрыть</button><button class="btn lime" id="dlGo">Создать ссылку</button></div></div></div>`);
+  $("#dlGo").addEventListener("click",async()=>{const b=$("#dlGo");b.disabled=true;
+    try{const {data:r}=await opPost("/api/v4/cars/"+encodeURIComponent(code)+"/driver-link",{data:{}});
+      $("#dlRes").innerHTML=r.ok?linkBox(r.url,esc(r.message)+". Отправьте водителю в WhatsApp или SMS."):`<div class="note warn">${esc(r.message)}</div>`;}
+    catch(e){$("#dlRes").innerHTML=`<div class="note warn">${esc(e.message)}</div>`;}finally{b.disabled=false;}});
+  if($("#dlRevoke"))$("#dlRevoke").addEventListener("click",async()=>{if(!confirm("Закрыть водителю вход в кабинет по ссылке? Telegram-вход это не затронет."))return;
+    try{const {data:r}=await opPost("/api/v4/cars/"+encodeURIComponent(code)+"/driver-link/revoke",{data:{}});toast(r.message);dlinkOpen(code);}catch(e){toast(e.message);}});}
 function ctShow(){const cit=$("#ctCit").value,fx=cit!=="RU",wd=(document.querySelector('#ctForm [data-c="work_doc"]')||{}).value;
   if(fx&&CT.countries[cit]&&!CT.wdTouched){const def=CT.countries[cit][1];const sel=document.querySelector('#ctForm [data-c="work_doc"]');if(def&&sel&&!CT.d.work_doc)sel.value=def;}
   const w=(document.querySelector('#ctForm [data-c="work_doc"]')||{}).value;
@@ -1335,6 +1356,8 @@ document.addEventListener("click",e=>{const t=e.target;
   const act=t.closest("[data-act]");if(act){const a=act.dataset.act,cp=act.dataset.carPay||"";if(a==="pay"||a==="expense"){cmdFocus(cp.replace(/^V-/,""));return;}if(a==="driver"){boardModal(null);return;}if(a==="ai"){aiOpen();return;}if(a==="task"){taskModal("");return;}toast(SOON[a]||"Действие доступно в FleetAI");return;}
   const rqb=t.closest("[data-rq]");if(rqb){RQ.q=rqb.dataset.rq;$("#rq").value=RQ.q;repDraw();return;}
   if(t.closest("[data-ctrnew]")){ctOpen(null);return;}
+  const dl=t.closest("[data-dlink]");if(dl){closeLayer();dlinkOpen(dl.dataset.dlink);return;}
+  const cp=t.closest("[data-copy]");if(cp){navigator.clipboard.writeText(cp.dataset.copy).then(()=>toast("Скопировано"),()=>toast("Выделите ссылку и скопируйте вручную"));return;}
   const ctc=t.closest("[data-ctrcar]");if(ctc){closeLayer();ctOpen(null,ctc.dataset.ctrcar);return;}
   const ctr=t.closest("[data-ctr]");if(ctr){ctOpen(ctr.dataset.ctr);return;}
   const ah=t.closest("[data-aihint]");if(ah){aiSend(ah.dataset.aihint);return;}
