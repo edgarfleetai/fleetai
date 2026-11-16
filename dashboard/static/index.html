@@ -819,7 +819,8 @@ VIEWS.investors=async function(){shell("Инвесторы");try{await needFin()
     <section class="panel glass"><div class="pbody" style="padding-top:16px"><div class="note">«Доля инвестора» = (доход − общие расходы за период) × процент из базы FleetAI. «К выплате за период» = доля − расходы только инвестора − уже выплаченное − GPS 500 ₽ за машину − гараж 3 000 ₽ в месяц, поделённый на все машины (если эти расходы ещё не внесены в FleetAI). Долги прошлых периодов показаны отдельно и в сумму за период не входят.</div></div></section>`;};
 
 let RENT=null,CTR=null;
-const CST={draft:["Черновик","t-mute"],sent:["Отправлен","t-info"],signed:["Подписан","t-ok"],cancelled:["Отменён","t-bad"],expired:["Истёк","t-warn"]};
+const CIT_SHORT={RU:"РФ",UZ:"Узбекистан",TJ:"Таджикистан",KG:"Кыргызстан",TM:"Туркменистан",OTHER:"Другое"};
+const CST={ready:["Заполнен","t-info"],draft:["Черновик","t-mute"],sent:["Отправлен","t-info"],signed:["Подписан","t-ok"],cancelled:["Отменён","t-bad"],expired:["Истёк","t-warn"]};
 VIEWS.rent=async function(){shell("Аренда");try{if(!RENT)RENT=await once("/api/v4/rent");}catch(e){if(onView("rent"))failed("Аренда",e);return;}
   if(!onView("rent"))return;
   const r=RENT.rentals,owe=x=>Math.max(-x.wallet,0)+x.debt_total,debtors=r.filter(x=>owe(x)>0);
@@ -834,14 +835,14 @@ VIEWS.rent=async function(){shell("Аренда");try{if(!RENT)RENT=await once("
 
 VIEWS.contracts=async function(){shell("Договоры");try{if(!CTR)CTR=await getJSON("/api/v4/contracts");}catch(e){if(onView("contracts"))failed("Договоры",e);return;}
   if(!onView("contracts"))return;
-  const c=CTR.contracts,signed=c.filter(x=>x.status==="signed");
+  const c=CTR.contracts,signed=c.filter(x=>x.status==="signed");if(CTR.old_site)OLD_SITE=CTR.old_site;
   $("#page").innerHTML=`
-  <div class="phead"><h1><span>Договоры</span></h1>${hstat("check",signed.length,"подписано")}${hstat("alert",c.length-signed.length,"не подписано")}</div>
+  <div class="phead"><h1><span>Договоры</span></h1>${hstat("check",signed.length,"подписано")}${hstat("alert",c.length-signed.length,"не подписано")}<div class="acts"><button class="btn lime" data-ctrnew>${ico("plus",14)} Новый договор</button></div></div>
   <section class="panel glass"><header><h2>Договоры аренды</h2><span class="sub">${c.length}</span></header>
-    <div class="tbl-wrap"><table><thead><tr><th>Создан</th><th>Машина</th><th>Водитель</th><th>Статус</th><th>Начало аренды</th><th class="r">Аренда в сутки</th><th class="r">Депозит</th><th>Подписан</th></tr></thead><tbody>
-    ${c.map(x=>`<tr><td class="num">${d2(x.created_at)}</td><td>${esc(x.car)}</td><td>${esc(x.driver||"—")}</td><td>${tag((CST[x.status]||[x.status])[0],(CST[x.status]||[0,"t-mute"])[1])}</td><td class="num">${esc(x.start||"—")}</td><td class="r">${x.daily_rent?money(x.daily_rent,""):"—"}</td><td class="r">${x.deposit?money(x.deposit,""):"—"}</td><td class="num">${x.signed_at?d2(x.signed_at):"—"}</td></tr>`).join("")||`<tr><td colspan="8" style="color:var(--muted)">Договоров нет</td></tr>`}
+    <div class="tbl-wrap"><table><thead><tr><th>Создан</th><th>Машина</th><th>Водитель</th><th>Гражданство</th><th>Статус</th><th>Начало аренды</th><th class="r">Аренда в сутки</th><th class="r">Депозит</th><th>Подписан</th></tr></thead><tbody>
+    ${c.map(x=>`<tr data-ctr="${esc(x.id)}" style="cursor:pointer"><td class="num">${d2(x.created_at)}</td><td>${esc(x.car)}</td><td>${esc(x.driver||"—")}</td><td>${esc(CIT_SHORT[x.citizenship]||x.citizenship)}</td><td>${tag((CST[x.status]||[x.status])[0],(CST[x.status]||[0,"t-mute"])[1])}</td><td class="num">${esc(x.start||"—")}</td><td class="r">${x.daily_rent?money(x.daily_rent,""):"—"}</td><td class="r">${x.deposit?money(x.deposit,""):"—"}</td><td class="num">${x.signed_at?d2(x.signed_at):"—"}</td></tr>`).join("")||`<tr><td colspan="9" style="color:var(--muted)">Договоров нет</td></tr>`}
     </tbody></table></div></section>
-  <section class="panel glass"><div class="pbody" style="padding-top:16px"><div class="note">Паспортные данные, телефоны и PDF договоров в дашборд не загружаются. Создание и отправка договоров — в FleetAI.</div></div></section>`;};
+  <section class="panel glass"><div class="pbody" style="padding-top:16px"><div class="note">Нажмите на договор, чтобы открыть, дозаполнить или скачать PDF. Паспортные данные видите только вы — в список, историю и помощнику они не попадают. Подписание по звонку водителя пока работает в старом FleetAI.</div></div></section>`;};
 
 /* ===== Внесение операций: та же команда и та же запись, что в старом FleetAI ===== */
 let OPD={msg:"",key:"",pv:null,busy:false,res:null};
@@ -1141,7 +1142,7 @@ function carDrawer(id,tab="overview"){const c=carById(id),d=drvById(c.driver),op
   const tabs=[["overview","Обзор"],["fin","Финансы"],["to","ТО и пробег"],["hist","История"],["plates","Госномера"],["wialon","Wialon"]];let body="";
   if(tab==="hist"){if(!c.hist){getJSON("/api/v4/history?days=365&car="+encodeURIComponent(c.code)).then(d=>{c.hist=d.events;carDrawer(id,"hist");}).catch(()=>{});body=`<div class="note">Загрузка…</div>`;}
     else body=`<div class="glass"><div class="tbl-wrap"><table><thead><tr><th>Когда</th><th>Что изменилось</th><th>Где</th></tr></thead><tbody>${c.hist.length?c.hist.map(e=>`<tr><td class="num" style="white-space:nowrap">${esc(e.ts.replace("T"," "))}</td><td style="white-space:normal">${esc(e.summary)}</td><td style="color:var(--muted)">${e.source==="outside"?"бот / старый сайт":e.source==="assistant"?"помощник":"дашборд"}</td></tr>`).join(""):`<tr><td colspan="3" style="color:var(--muted)">Изменений пока нет — журнал ведётся с момента обновления</td></tr>`}</tbody></table></div></div>`;}
-  if(tab==="overview")body=`${c.flag?`<div class="note warn">${esc(c.flag)}</div>`:""}<div class="kv">
+  if(tab==="overview")body=`${c.flag?`<div class="note warn">${esc(c.flag)}</div>`:""}<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">${c.driver?`<a class="btn" href="${OLD_SITE}/driver?code=${encodeURIComponent(c.code)}" target="_blank" rel="noopener">Кабинет водителя ↗</a>`:""}<button class="btn" data-ctrcar="${esc(c.code)}">Новый договор</button></div><div class="kv">
     <div><div class="l">Внутренний ID</div><div class="v num">${c.id}</div></div><div><div class="l">Госномер</div><div class="v num">${esc(c.plate)}</div></div>
     <div><div class="l">Модель / год</div><div class="v">${esc(c.model)}${c.year?", "+c.year:""}</div></div><div><div class="l">VIN</div><div class="v" style="color:var(--faint)">не заполнен</div></div>
     <div><div class="l">Собственник</div><div class="v">${esc(owners[c.owner][0])}</div></div><div><div class="l">Водитель</div><div class="v">${d?esc(d.name):"—"}</div></div>
@@ -1257,6 +1258,75 @@ function taskModal(prefCar){openLayer(`<div class="modal" role="dialog" aria-mod
     catch(e){b.disabled=false;toast(e.message);}});}
 async function taskChange(id,what){try{const r=await opPost(`/api/v4/tasks/${id}/${what}`,{data:{}});if(!r.data.ok)throw new Error(r.data.message||"Ошибка");TASKS=null;HIST=null;toast(r.data.message);if(onView("tasks"))VIEWS.tasks();}catch(e){toast("Не сохранилось: "+e.message);}}
 
+
+/* ===== contracts: owner fills, any citizenship ===== */
+let CT=null;
+const CTF={RU:"ru",UZ:"fx",TJ:"fx",KG:"fx",TM:"fx",OTHER:"fx"};
+function ctIn(k,label,v,o={}){const val=v==null?"":String(v);const date=o.date&&(!val||/^\d{4}-\d{2}-\d{2}$/.test(val));
+  return `<label class="field" ${o.show?`data-show="${o.show}"`:""} ${o.wide?'style="grid-column:1/-1"':""}>${label}${o.req?' <span style="color:var(--bad)">*</span>':""}<input class="inp" data-c="${k}" value="${esc(val)}" ${date?'type="date"':""} ${o.ph?`placeholder="${esc(o.ph)}"`:""} ${o.mode?`inputmode="${o.mode}"`:""} autocomplete="off"></label>`;}
+function ctSec(t,inner,show){return `<div ${show?`data-show="${show}"`:""} style="display:flex;flex-direction:column;gap:8px"><h3 style="margin:10px 0 0;font-size:14px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em">${t}</h3><div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:8px">${inner}</div></div>`;}
+let OLD_SITE="https://fleetai-1.onrender.com";
+async function ctOpen(id,car){let r;
+  try{r=id?await getJSON("/api/v4/contracts/"+encodeURIComponent(id)):{data:{citizenship:"RU",car_code:car||""},countries:null};}catch(e){toast(e.message);return;}
+  if(!r.countries){try{const p=await getJSON("/api/v4/contracts/prefill?car="+encodeURIComponent((cars.find(c=>c.in_db!==false)||{}).code||""));r.countries=p.countries;}catch(_){r.countries={RU:["Российская Федерация","",""],UZ:["Республика Узбекистан","patent",""],TJ:["Республика Таджикистан","patent",""],KG:["Кыргызская Республика","eaeu",""],TM:["Туркменистан","permit",""],OTHER:["","",""]};}}
+  CT={id:id||null,d:r.data,countries:r.countries,busy:false};ctDraw();if(!id&&car)ctPrefill();}
+function ctDraw(){const d=CT.d,locked=d.status==="signed",cit=d.citizenship||"RU";
+  const carSel=CT.id?`<div class="note">Машина <b>${esc(d.car_code)}</b> · договор ${esc(CT.id)} · ${tag((CST[d.status]||[d.status])[0],(CST[d.status]||[0,"t-mute"])[1])}</div>`
+    :`<label class="field">Машина <span style="color:var(--bad)">*</span><select class="inp" id="ctCar"><option value="">— выберите —</option>${cars.filter(c=>c.in_db!==false).map(c=>`<option value="${esc(c.code)}" ${d.car_code===c.code?"selected":""}>${esc(c.code)} · ${esc(c.plate||"")}</option>`).join("")}</select></label>`;
+  const cOpts=Object.entries(CT.countries).map(([k,v])=>`<option value="${k}" ${cit===k?"selected":""}>${k==="OTHER"?"Другое государство":esc(v[0])}</option>`).join("");
+  const wd=d.work_doc||(CT.countries[cit]||[])[1]||"";
+  openLayer(`<div class="modal" role="dialog" aria-modal="true" aria-labelledby="ctT" style="width:min(820px,calc(100% - 32px))"><header style="padding:18px 20px 0"><h1 id="ctT" style="font-size:22px">${CT.id?"Договор аренды":"Новый договор аренды"}</h1></header><div class="mb" id="ctForm" style="max-height:calc(100vh - 160px);overflow:auto">
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:8px">${carSel}<label class="field">Гражданство водителя<select class="inp" id="ctCit" data-c="citizenship">${cOpts}</select></label></div>
+    <div class="note" id="ctHint" data-show="fx"></div>
+    ${ctSec("Водитель",ctIn("driver_name","ФИО (как в паспорте, кириллицей)",d.driver_name,{req:1,wide:1})+ctIn("name_latin","ФИО латиницей",d.name_latin,{show:"fx"})+ctIn("country_name","Страна",d.country_name,{show:"other",req:1})+ctIn("driver_birth_date","Дата рождения",d.driver_birth_date,{date:1,req:1})+ctIn("phone","Телефон",d.phone,{req:1,mode:"tel",ph:"+7 900 000-00-00"}))}
+    ${ctSec("Паспорт РФ",ctIn("passport_series","Серия",d.passport_series,{req:1,mode:"numeric"})+ctIn("passport_number","Номер",d.passport_number,{req:1,mode:"numeric"})+ctIn("passport_issue_date","Дата выдачи",d.passport_issue_date,{date:1,req:1})+ctIn("passport_department_code","Код подразделения",d.passport_department_code,{req:1,ph:"160-000"})+ctIn("passport_issued_by","Кем выдан",d.passport_issued_by,{req:1,wide:1})+ctIn("registration_address","Адрес регистрации (прописка)",d.registration_address,{req:1,wide:1}),"ru")}
+    ${ctSec("Паспорт иностранного гражданина",ctIn("passport_series","Серия (если есть)",d.passport_series)+ctIn("passport_number","Номер",d.passport_number,{req:1})+ctIn("passport_issue_date","Дата выдачи",d.passport_issue_date,{date:1,req:1})+ctIn("passport_expires","Действителен до",d.passport_expires,{date:1,req:1})+ctIn("passport_issued_by","Кем выдан",d.passport_issued_by,{req:1,wide:1}),"fx")}
+    ${ctSec("Миграционные документы",ctIn("migration_card","Миграционная карта, №",d.migration_card,{req:1})+ctIn("migration_card_date","Дата въезда",d.migration_card_date,{date:1})+ctIn("stay_until","Миграционный учёт до",d.stay_until,{date:1,req:1})+ctIn("stay_address","Адрес места пребывания (по учёту)",d.stay_address,{req:1,wide:1})+ctIn("actual_address","Где живёт фактически (если другой адрес)",d.actual_address,{wide:1})+ctIn("inn","ИНН (если есть)",d.inn,{mode:"numeric"}),"fx")}
+    ${ctSec("Право на работу",`<label class="field">Документ<select class="inp" data-c="work_doc">${Object.entries({patent:"Патент",permit:"Разрешение на работу",eaeu:"Не требуется (ЕАЭС)"}).map(([k,v])=>`<option value="${k}" ${wd===k?"selected":""}>${v}</option>`).join("")}</select></label>`+ctIn("work_doc_number","Номер",d.work_doc_number,{show:"wd"})+ctIn("work_doc_date","Дата выдачи",d.work_doc_date,{date:1,show:"wd"})+ctIn("work_doc_expires","Оплачен / действует до",d.work_doc_expires,{date:1,show:"wd"}),"fx")}
+    ${ctSec("Водительское удостоверение",ctIn("license_number","Номер",d.license_number,{req:1})+ctIn("license_expires","Действует до",d.license_expires,{date:1,req:1})+`<label class="field" data-show="fx">Кем выдано<select class="inp" data-c="license_country"><option value="Российская Федерация" ${d.license_country==="Российская Федерация"?"selected":""}>Российское</option><option value="national" ${d.license_country&&d.license_country!=="Российская Федерация"?"selected":""}>Национальное (своей страны)</option></select></label>`)}
+    <div class="note warn" id="ctLic" data-show="fx" style="display:none">Для работы в такси с национальными правами Узбекистана, Таджикистана или Туркменистана обычно нужны российские права. Права Кыргызстана, где русский язык официальный, как правило, подходят. Проверьте перед выдачей машины.</div>
+    ${ctSec("Условия аренды",ctIn("rental_start_date","Начало аренды",d.rental_start_date,{date:1,req:1})+ctIn("daily_rent","Аренда в сутки, ₽",d.daily_rent,{mode:"numeric"})+ctIn("deposit","Залог, ₽",d.deposit,{mode:"numeric"}))}
+    ${ctSec("Автомобиль",ctIn("car_make","Марка",d.car_make)+ctIn("car_model","Модель",d.car_model)+ctIn("car_plate","Госномер",d.car_plate)+ctIn("car_year","Год",d.car_year,{mode:"numeric"})+ctIn("car_vin","VIN",d.car_vin)+ctIn("car_sts","СТС",d.car_sts))}
+    <div id="ctRes"></div>
+    <div style="display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap;position:sticky;bottom:0;padding-top:8px;background:inherit">
+      ${CT.id?`<a class="btn" href="/api/v4/contracts/${encodeURIComponent(CT.id)}/pdf" target="_blank" rel="noopener" style="margin-right:auto">PDF</a>`:""}
+      ${CT.id&&d.status==="ready"?`<button class="btn" id="ctSigned">Подписан на бумаге</button>`:""}
+      <button class="btn" data-close>Закрыть</button>${locked?"":`<button class="btn" id="ctDraft">Сохранить черновик</button><button class="btn lime" id="ctSave">Готово</button>`}</div></div></div>`);
+  if(locked)document.querySelectorAll("#ctForm [data-c],#ctCar").forEach(el=>el.disabled=true);
+  ctShow();
+  $("#ctCit").addEventListener("change",ctShow);$("#ctForm").addEventListener("change",e=>{if(e.target.dataset.c==="work_doc"||e.target.dataset.c==="license_country")ctShow();});
+  if($("#ctCar"))$("#ctCar").addEventListener("change",ctPrefill);
+  if($("#ctSave")){$("#ctSave").addEventListener("click",()=>ctSave(false));$("#ctDraft").addEventListener("click",()=>ctSave(true));}
+  if($("#ctSigned"))$("#ctSigned").addEventListener("click",ctSigned);}
+function ctShow(){const cit=$("#ctCit").value,fx=cit!=="RU",wd=(document.querySelector('#ctForm [data-c="work_doc"]')||{}).value;
+  if(fx&&CT.countries[cit]&&!CT.wdTouched){const def=CT.countries[cit][1];const sel=document.querySelector('#ctForm [data-c="work_doc"]');if(def&&sel&&!CT.d.work_doc)sel.value=def;}
+  const w=(document.querySelector('#ctForm [data-c="work_doc"]')||{}).value;
+  document.querySelectorAll("#ctForm [data-show]").forEach(el=>{const sh=el.dataset.show;
+    const on=sh==="ru"?!fx:sh==="fx"?fx:sh==="other"?cit==="OTHER":sh==="wd"?fx&&w!=="eaeu":true;
+    el.style.display=on?"":"none";el.querySelectorAll("[data-c]").forEach(i=>i.disabled=!on||CT.d.status==="signed");});
+  const lic=(document.querySelector('#ctForm [data-c="license_country"]')||{}).value;
+  $("#ctLic").style.display=fx&&lic==="national"&&cit!=="KG"?"":"none";
+  $("#ctHint").textContent=fx?((CT.countries[cit]||[])[2]||""):"";}
+async function ctPrefill(){const code=$("#ctCar").value;if(!code)return;
+  try{const r=await getJSON("/api/v4/contracts/prefill?car="+encodeURIComponent(code));const cur=ctCollect();
+    for(const [k,v] of Object.entries(r.data)){if(!cur[k]||["car_make","car_model","car_plate","car_vin","car_year","car_sts","daily_rent","deposit"].includes(k))cur[k]=v;}
+    cur.citizenship=$("#ctCit").value;CT.d=Object.assign(CT.d,cur);ctDraw();}catch(e){toast(e.message);}}
+function ctCollect(){const out={};document.querySelectorAll("#ctForm [data-c]").forEach(el=>{if(el.disabled)return;out[el.dataset.c]=el.value.trim();});
+  if(out.license_country==="national")out.license_country=CT.countries[out.citizenship]&&CT.countries[out.citizenship][0]||(out.country_name||"страна гражданства");
+  if($("#ctCar"))out.car_code=$("#ctCar").value;return out;}
+async function ctSave(draft){if(CT.busy)return;CT.busy=true;const data=Object.assign(ctCollect(),draft?{draft:1}:{});
+  document.querySelectorAll("#ctForm .inp").forEach(el=>el.style.borderColor="");
+  try{const {data:r}=await opPost(CT.id?`/api/v4/contracts/${encodeURIComponent(CT.id)}/save`:"/api/v4/contracts",{data});
+    (r.missing||[]).forEach(k=>{const el=document.querySelector(`#ctForm [data-c="${k}"]:not([disabled])`);if(el)el.style.borderColor="var(--bad)";});
+    if(!r.ok){$("#ctRes").innerHTML=`<div class="note warn">${esc(r.message)}${(r.missing||[]).length?" — поля отмечены красным":""}</div>`;return;}
+    CTR=null;CT.id=r.id;const fresh=await getJSON("/api/v4/contracts/"+encodeURIComponent(r.id));CT.d=fresh.data;ctDraw();
+    $("#ctRes").innerHTML=`<div class="note">✓ ${esc(r.message)}${r.missing&&r.missing.length?` — не заполнено полей: ${r.missing.length}`:" — можно открыть PDF и распечатать"}</div>`;
+    if(onView("contracts"))VIEWS.contracts();}
+  catch(e){$("#ctRes").innerHTML=`<div class="note warn">${esc(e.message)}</div>`;}finally{CT.busy=false;}}
+async function ctSigned(){if(!confirm("Отметить, что договор подписан на бумаге? После этого его нельзя будет изменить."))return;
+  try{const {data:r}=await opPost(`/api/v4/contracts/${encodeURIComponent(CT.id)}/signed`,{data:{}});if(!r.ok){toast(r.message);return;}
+    CTR=null;const fresh=await getJSON("/api/v4/contracts/"+encodeURIComponent(CT.id));CT.d=fresh.data;ctDraw();toast("Договор подписан");if(onView("contracts"))VIEWS.contracts();}catch(e){toast(e.message);}}
+
 /* ===== events ===== */
 const SOON={task:"Создание задачи — в FleetAI",repair:"Планирование ремонта — в FleetAI",addcar:"Добавление автомобиля — в FleetAI",driver:"Регистрация водителя — в FleetAI",tg:"Отправка договора в Telegram — в FleetAI",ai:"AI-ассистент — после основных разделов"};
 document.addEventListener("click",e=>{const t=e.target;
@@ -1264,6 +1334,9 @@ document.addEventListener("click",e=>{const t=e.target;
   if(t.closest("[data-back]")){payModal(draft.kind);return;}
   const act=t.closest("[data-act]");if(act){const a=act.dataset.act,cp=act.dataset.carPay||"";if(a==="pay"||a==="expense"){cmdFocus(cp.replace(/^V-/,""));return;}if(a==="driver"){boardModal(null);return;}if(a==="ai"){aiOpen();return;}if(a==="task"){taskModal("");return;}toast(SOON[a]||"Действие доступно в FleetAI");return;}
   const rqb=t.closest("[data-rq]");if(rqb){RQ.q=rqb.dataset.rq;$("#rq").value=RQ.q;repDraw();return;}
+  if(t.closest("[data-ctrnew]")){ctOpen(null);return;}
+  const ctc=t.closest("[data-ctrcar]");if(ctc){closeLayer();ctOpen(null,ctc.dataset.ctrcar);return;}
+  const ctr=t.closest("[data-ctr]");if(ctr){ctOpen(ctr.dataset.ctr);return;}
   const ah=t.closest("[data-aihint]");if(ah){aiSend(ah.dataset.aihint);return;}
   if(t.closest("[data-ainew]")){if(!AI.busy){AI.conv="";AI.msgs=[];aiDraw();}return;}
   const ao=t.closest("[data-aiop]");if(ao){const [i,n]=ao.dataset.aiop.split(":").map(Number);const p=AI.msgs[i]&&AI.msgs[i].proposals[n];if(p){closeLayer();const inp=$("#cmd");inp.value=p.message;window.scrollTo({top:0,behavior:"smooth"});cmdRun();}return;}

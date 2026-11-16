@@ -21,7 +21,7 @@ from urllib.parse import urlsplit
 from flask import Flask, abort, jsonify, redirect, request, send_file, session
 from werkzeug.security import check_password_hash
 
-from . import actions, assistant, board, data, finance, history, ops, rent, service, tasks, wialon
+from . import actions, assistant, board, contracts, data, finance, history, ops, rent, service, tasks, wialon
 
 STATIC = Path(__file__).resolve().parent / "static"
 ACTION_NAMES = {"topup": "Пополнение кошелька водителя", "fine": "Штраф водителю", "assign": "Назначение водителя",
@@ -271,7 +271,66 @@ def create_app(config=None):
     @app.get("/api/v4/contracts")
     def contracts_view():
         api_owner()
-        return jsonify(rent.contracts(engine))
+        out = rent.contracts(engine)
+        cit = contracts.citizenships(engine)
+        for c in out["contracts"]:
+            c["citizenship"] = cit.get(c["id"], "RU")
+        out["old_site"] = OLD_SITE
+        return jsonify(out)
+
+    @app.get("/api/v4/contracts/prefill")
+    def contract_prefill():
+        api_owner()
+        found = contracts.prefill(engine, request.args.get("car"))
+        if not found:
+            return jsonify(ok=False, message="Машина не найдена"), 404
+        return jsonify(ok=True, data=found, countries={k: [v[0], v[1], v[2]] for k, v in contracts.COUNTRIES.items()})
+
+    @app.get("/api/v4/contracts/<cid>")
+    def contract_one(cid):
+        api_owner()
+        found = contracts.contract(engine, cid)
+        if not found:
+            return jsonify(ok=False, message="Договор не найден"), 404
+        return jsonify(ok=True, data=found, countries={k: [v[0], v[1], v[2]] for k, v in contracts.COUNTRIES.items()})
+
+    @app.get("/api/v4/contracts/<cid>/pdf")
+    def contract_pdf(cid):
+        api_owner()
+        body = contracts.pdf(engine, cid)
+        if body is None:
+            abort(404)
+        name = "dogovor_" + "".join(ch for ch in cid if ch.isalnum() or ch == "-") + ".pdf"
+        return app.response_class(body, mimetype="application/pdf",
+                                  headers={"Content-Disposition": f'inline; filename="{name}"'})
+
+    @app.post("/api/v4/contracts")
+    @app.post("/api/v4/contracts/<cid>/<what>")
+    def contract_change(cid=None, what=None):
+        write_guard()
+        body = (request.get_json(silent=True) or {}).get("data") or {}
+        try:
+            if what == "signed":
+                c = contracts.mark_signed(engine, cid)
+                audit("contract", f"Договор {cid} подписан на бумаге", car=str(c.get("car_code") or "").strip())
+                return jsonify(ok=True, id=cid, message="Отмечен как подписанный")
+            if cid is not None and what != "save":
+                return jsonify(ok=False, message="Неверный запрос"), 400
+            new_id, missing = contracts.save(engine, body, contract_id=cid, allow_incomplete=bool(body.get("draft")))
+            audit("contract", ("Изменён" if cid else "Создан") + f" договор {new_id}"
+                  + (" (черновик)" if missing else ""), car=str(body.get("car_code") or new_id.split("-")[2]))
+            return jsonify(ok=True, id=new_id, missing=missing,
+                           message="Черновик сохранён" if missing else "Договор готов")
+        except LookupError as error:
+            return jsonify(ok=False, message=str(error)), 404
+        except ValueError as error:
+            try:
+                fields = contracts._clean(body)[3] if what != "signed" else []
+            except ValueError:
+                fields = []
+            return jsonify(ok=False, message=str(error), missing=fields), 400
+
+    OLD_SITE = str(app.config.get("OLD_SITE_URL") or os.getenv("FLEETAI_OLD_URL") or "https://fleetai-1.onrender.com").rstrip("/")
 
     def audit(kind, summary, car="", op_ids=None):
         if not writes_enabled or ops_save:
