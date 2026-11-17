@@ -828,12 +828,12 @@ VIEWS.rent=async function(){shell("Аренда");try{if(!RENT)RENT=await once("
   $("#page").innerHTML=`
   <div class="phead"><h1><span>Аренда</span></h1>${hstat("car",r.length,"активных аренд")}${hstat("alert",debtors.length,"водителей с долгом")}${hstat("coin",rubK(sum(r,owe)),"общий долг водителей")}</div>
   ${UNP.length?unpHTML():""}
-  <section class="panel glass"><header><h2>Активные аренды</h2><span class="sub">баланс по данным FleetAI</span></header>
+  <section class="panel glass"><header><h2>Активные аренды</h2><span class="sub">баланс по данным FleetAI</span><button class="btn" id="accrueGo" style="margin-left:auto">Досписать аренду сейчас</button></header>
     <div class="tbl-wrap"><table><thead><tr><th>Машина</th><th>Водитель</th><th>Тариф</th><th class="r">Депозит</th><th class="r">Баланс аренды</th><th class="r">Отдельный долг</th><th class="r">Итого долг</th></tr></thead><tbody>
     ${r.map(x=>`<tr data-car="V-${esc(x.code)}" tabindex="0" style="cursor:pointer"><td>${carLabel(x.code)}</td><td>${esc(x.driver)}</td><td class="num">${x.weekly_payment?rub(x.weekly_payment)+"/нед":x.daily_rent?rub(x.daily_rent)+"/сут":"—"}</td><td class="r">${x.deposit?money(x.deposit,""):"—"}</td><td class="r">${money(x.wallet,x.wallet<0?"out":x.wallet>0?"in":"")}${x.accrued_to&&x.accrued_to<TODAY_ISO?`<div style="font-size:11.5px;color:var(--warn)">начислено по ${d2(x.accrued_to)}</div>`:""}</td><td class="r">${x.debt_total?money(-x.debt_total):"—"}</td><td class="r">${owe(x)?`<b>${money(-owe(x))}</b>`:`<span class="tag t-ok">нет</span>`}</td></tr>`).join("")||`<tr><td colspan="7" style="color:var(--muted)">Активных аренд нет</td></tr>`}
     </tbody></table></div></section>
   ${r.some(x=>x.debts.length)?`<section class="panel glass"><header><h2>Отдельные долги водителей</h2></header><div class="list">${r.flatMap(x=>x.debts.map(d=>`<div class="row"><i class="dotx" style="background:var(--bad)"></i><div class="t"><div>${esc(x.driver)} · ${esc(x.code)}</div><div>${esc(d.reason||"без причины")} · ${d2(d.created_at)}</div></div><span class="amt num out">${rub(-d.amount)}</span></div>`)).join("")}</div></section>`:""}
-  <section class="panel glass"><div class="pbody" style="padding-top:16px"><div class="note">«Баланс аренды» — кошелёк водителя в FleetAI: плюс — оплачено вперёд, минус — долг по аренде. Данные на последнее начисление, которое сделал FleetAI; дашборд сам ничего не начисляет.</div></div></section>`;};
+  <section class="panel glass"><div class="pbody" style="padding-top:16px"><div class="note">«Баланс аренды» — кошелёк водителя в FleetAI: плюс — оплачено вперёд, минус — долг по аренде. Суточную аренду дашборд списывает сам каждые полчаса по всем машинам с водителем — один раз за день, дни простоя не списываются.</div></div></section>`;};
 
 VIEWS.contracts=async function(){shell("Договоры");try{if(!CTR)CTR=await getJSON("/api/v4/contracts");}catch(e){if(onView("contracts"))failed("Договоры",e);return;}
   if(!onView("contracts"))return;
@@ -1376,6 +1376,7 @@ document.addEventListener("click",e=>{const t=e.target;
   const act=t.closest("[data-act]");if(act){const a=act.dataset.act,cp=act.dataset.carPay||"";if(a==="pay"||a==="expense"){cmdFocus(cp.replace(/^V-/,""));return;}if(a==="driver"){boardModal(null);return;}if(a==="ai"){aiOpen();return;}if(a==="task"){taskModal("");return;}toast(SOON[a]||"Действие доступно в FleetAI");return;}
   const rqb=t.closest("[data-rq]");if(rqb){RQ.q=rqb.dataset.rq;$("#rq").value=RQ.q;repDraw();return;}
   if(t.closest("#unpGo")){unpCredit();return;}
+  if(t.closest("#accrueGo")){const b=$("#accrueGo");b.disabled=true;opPost("/api/v4/rent/accrue",{data:{}}).then(({data:r})=>{toast(r.message);RENT=null;UNP=null;VIEWS.rent();}).catch(e=>{toast(e.message);b.disabled=false;});return;}
   if(t.closest("[data-ctrnew]")){ctOpen(null);return;}
   const dl=t.closest("[data-dlink]");if(dl){closeLayer();dlinkOpen(dl.dataset.dlink);return;}
   const cp=t.closest("[data-copy]");if(cp){navigator.clipboard.writeText(cp.dataset.copy).then(()=>toast("Скопировано"),()=>toast("Выделите ссылку и скопируйте вручную"));return;}

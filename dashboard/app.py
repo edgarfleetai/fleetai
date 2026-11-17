@@ -21,7 +21,7 @@ from urllib.parse import urlsplit
 from flask import Flask, abort, jsonify, redirect, request, send_file, session
 from werkzeug.security import check_password_hash
 
-from . import actions, assistant, board, contracts, data, finance, history, ops, payfix, rent, service, tasks, wialon
+from . import accrual, actions, assistant, board, contracts, data, finance, history, ops, payfix, rent, service, tasks, wialon
 
 STATIC = Path(__file__).resolve().parent / "static"
 ACTION_NAMES = {"topup": "Пополнение кошелька водителя", "fine": "Штраф водителю", "assign": "Назначение водителя",
@@ -127,7 +127,18 @@ def create_app(config=None):
                 ("rent", lambda: rent.rent_overview(engine)),
                 ("journal:90", lambda: finance.journal(engine, 90)))
         cycle = 0
+        last_accrual = time.time() - 1740   # first run a minute after start, when the app is fully set up
         while True:
+            if writes_enabled and not ops_save and app.config.get("RENT_ACCRUAL", True) \
+                    and time.time() - last_accrual > 1800:
+                last_accrual = time.time()
+                try:   # daily rent for every car with a driver (FleetAI's cron stopped)
+                    done = accrual.accrue_all()
+                    if done:
+                        accrual_audit(done, "автоматически")
+                        clear_cache()
+                except Exception as error:
+                    app.logger.warning("rent accrual failed: %s", type(error).__name__)
             # mileage/maintenance reads Wialon history: every ~10 minutes is enough
             extra = (("service", lambda: service_data()),) if cycle % 12 == 0 else ()
             if writes_enabled and not ops_save:
@@ -267,6 +278,33 @@ def create_app(config=None):
     def rent_view():
         api_owner()
         return jsonify(cached("rent", lambda: rent.rent_overview(engine)))
+
+    def accrual_audit(done, how):
+        for x in done:
+            parts = []
+            if x["charged"]:
+                parts.append(f"списано {x['charged']} дн. × {x['daily']} ₽")
+            if x["downtime"]:
+                parts.append(f"простой {x['downtime']} дн.")
+            history.log("rent_accrual", f"Аренда {x['car']} ({how}): " + ", ".join(parts), car_code=x["car"],
+                        actor=current_owner_safe(), source="dashboard")
+
+    def current_owner_safe():
+        try:
+            return current_owner() or "система"
+        except Exception:
+            return "система"
+
+    @app.post("/api/v4/rent/accrue")
+    def rent_accrue():
+        write_guard()
+        done = accrual.accrue_all()
+        accrual_audit(done, "вручную")
+        clear_cache()
+        days = sum(x["charged"] for x in done)
+        total = sum(x["charged"] * x["daily"] for x in done)
+        return jsonify(ok=True, cars=done, message=(f"Досписано: {days} дн. на {total:,} ₽ по {len(done)} маш.".replace(",", " ")
+                                                    if done else "Всё уже списано по сегодняшний день"))
 
     @app.get("/api/v4/rent/unposted")
     def rent_unposted():
