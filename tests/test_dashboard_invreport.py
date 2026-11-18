@@ -98,3 +98,37 @@ def test_invreport_module_has_no_write_sql():
     import dashboard.invreport as m
     src = inspect.getsource(m)
     assert not re.search(r"\b(INSERT|UPDATE|DELETE)\b|\.add\(|\.commit\(|\.delete\(", src)
+
+
+def test_duplicates_can_be_removed_from_the_report(fin_dash):
+    from test_dashboard_v4 import csrf_headers, op_change
+    eng = create_engine(fin_dash.engine_url)
+    t = now() - timedelta(hours=1)
+    for i in (21, 22):
+        add(eng, "INSERT INTO operations (id, date, car_code, type, category, description, amount, raw_message) "
+                 "VALUES (:i, :d, '621', 'income', 'Доход', 'Доход', 12000, '621 получил 12000')", i=i, d=t)
+        add(eng, "INSERT INTO income (operation_id, car_code, date, amount, income_type) VALUES (:i, '621', :d, 12000, 'x')",
+            i=i, d=t)
+    for i in (31, 32):
+        add(eng, "INSERT INTO operations (id, date, car_code, type, category, description, amount, raw_message) "
+                 "VALUES (:i, :d, '621', 'investor_payout', 'Выплата', 'Выплата инвестору', 4000, '621 выплата илье 4000')", i=i, d=t)
+        add(eng, "INSERT INTO investor_payouts (operation_id, date, investor_name, car_code, amount) VALUES (:i, :d, 'Илья', '621', 4000)",
+            i=i, d=t)
+    c = fin_dash.test_client()
+    assert c.get('/api/v4/op/21', base_url=BASE).status_code == 401
+    login(c)
+    h = csrf_headers(c)
+    by = {x['title']: x for x in report(c)['checks']}
+    assert by['Доход записан дважды?']['ops'] == [[21, 22]]
+    assert by['Похоже на двойную выплату']['ops'] == [[31, 32]]
+    row = c.get('/api/v4/op/22', base_url=BASE).get_json()
+    assert row['id'] == 22 and row['amount'] == 1_200_000 and row['label'] == 'Доход'
+    assert c.get('/api/v4/op/999', base_url=BASE).status_code == 404
+    assert op_change(c, h, 22, 'delete', {}, 'inv-del-0000000001').status_code == 200
+    assert op_change(c, h, 32, 'delete', {}, 'inv-del-0000000002').status_code == 200
+    rep = report(c)
+    titles_now = titles(rep)
+    assert 'Доход записан дважды?' not in titles_now and 'Похоже на двойную выплату' not in titles_now
+    assert [p['op'] for p in rep['lines']['payouts']] == [31]
+    hist = ' '.join(e['summary'] for e in c.get('/api/v4/history', base_url=BASE).get_json()['events'])
+    assert 'Удалена операция #22' in hist and 'Удалена операция #32' in hist

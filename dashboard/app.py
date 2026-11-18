@@ -508,6 +508,14 @@ def create_app(config=None):
                   op_ids=history.op_ids_since(engine, before))
         return jsonify(result), status
 
+    @app.get("/api/v4/op/<int:op_id>")
+    def operation_view(op_id):
+        api_owner()
+        row = finance.operation(engine, op_id)
+        if not row:
+            abort(404)
+        return jsonify(row)
+
     @app.post("/api/v4/op/<int:op_id>/<what>")
     def change_operation(op_id, what):
         write_guard()

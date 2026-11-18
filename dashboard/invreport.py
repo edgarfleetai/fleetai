@@ -229,8 +229,12 @@ def _lines(d, codes, a, b):
     }
 
 
-def _check(level, title, detail, items=None, amount=0):
-    return {"level": level, "title": title, "detail": detail, "items": items or [], "amount": amount}
+def _check(level, title, detail, items=None, amount=0, ops=None):
+    """ops[i] - operation ids behind items[i], so the page can offer edit/delete."""
+    items = items or []
+    ops = [[int(x) for x in (o or []) if x] for o in (ops or [])]
+    return {"level": level, "title": title, "detail": detail, "items": items, "amount": amount,
+            "ops": (ops + [[]] * len(items))[:len(items)]}
 
 
 def _checks(d, cars, rows, codes, a, b, now, daily, balance, key, lines):
@@ -267,16 +271,18 @@ def _checks(d, cars, rows, codes, a, b, now, daily, balance, key, lines):
 
     # 3. duplicate payouts
     pays = sorted(d.payouts, key=lambda r: r.date)
-    dup = []
+    dup, dup_ops = [], []
     for i, p in enumerate(pays):
         for q in pays[i + 1:]:
             if q.date - p.date > timedelta(days=3):
                 break
             if (q.amount or 0) == (p.amount or 0) and (a <= p.date < b or a <= q.date < b):
                 dup.append(f"{p.date:%d.%m %H:%M} и {q.date:%d.%m %H:%M}: {p.amount:,} ₽ · машины {_code(p.car_code) or '—'} / {_code(q.car_code) or '—'}".replace(",", " "))
+                dup_ops.append([p.operation_id, q.operation_id])
     if dup:
         out.append(_check("bad", "Похоже на двойную выплату",
-                          "Одинаковая сумма выплаты в пределах 3 дней. Если это одна выплата — одну запись нужно удалить.", dup))
+                          "Одинаковая сумма выплаты в пределах 3 дней. Если это одна выплата — одну запись нужно удалить.",
+                          dup, ops=dup_ops))
 
     # 4. payouts not counted on the investor's cars
     stray = [p for p in lines["payouts"] if not p["counted"]]
@@ -284,29 +290,30 @@ def _checks(d, cars, rows, codes, a, b, now, daily, balance, key, lines):
         out.append(_check("warn", "Выплаты инвестору записаны не на его машину",
                           "Эти выплаты не входят в расчёт по машинам инвестора — проверьте машину в записи. В «Истории» они учтены.",
                           [f"{p['date'][8:10]}.{p['date'][5:7]} · машина {p['car'] or '—'} · {p['amount'] // KOP:,} ₽ · {p['text']}".replace(",", " ") for p in stray],
-                          amount=sum(p["amount"] for p in stray)))
+                          amount=sum(p["amount"] for p in stray), ops=[[p["op"]] for p in stray]))
     foreign = [r for r in d.payouts if _code(r.car_code) in codes and a <= r.date < b and r.investor_name
                and owner_key("investor", r.investor_name) not in (key, "park")]
     if foreign:
         out.append(_check("warn", "Выплата на машину инвестора записана на другое имя",
                           "Сумма вычтена из доли этого инвестора, хотя в записи указан другой человек.",
                           [f"{r.date:%d.%m} · {_code(r.car_code)} · {r.investor_name} · {r.amount:,} ₽".replace(",", " ") for r in foreign],
-                          amount=_k(sum(r.amount or 0 for r in foreign))))
+                          amount=_k(sum(r.amount or 0 for r in foreign)), ops=[[r.operation_id] for r in foreign]))
 
     # 5. duplicate income (inflates the investor's share)
     inc = sorted((r for r in d.income if _code(r.car_code) in codes), key=lambda r: (_code(r.car_code), r.date))
-    dup_inc, extra = [], 0
+    dup_inc, dup_inc_ops, extra = [], [], 0
     for i, p in enumerate(inc):
         for q in inc[i + 1:]:
             if _code(q.car_code) != _code(p.car_code) or q.date - p.date > timedelta(hours=24):
                 break
             if (q.amount or 0) == (p.amount or 0) and (p.amount or 0) > 0 and a <= q.date < b:
                 dup_inc.append(f"{_code(p.car_code)} · {p.date:%d.%m %H:%M} и {q.date:%d.%m %H:%M} · {p.amount:,} ₽ · операции #{p.operation_id or '—'} и #{q.operation_id or '—'}".replace(",", " "))
+                dup_inc_ops.append([p.operation_id, q.operation_id])
                 extra += round((q.amount or 0) * pct_of[_code(q.car_code)] / 100)
     if dup_inc:
         out.append(_check("warn", "Доход записан дважды?",
                           "Одинаковая сумма по одной машине в пределах суток. Если это одна оплата, доля инвестора завышена на сумму справа.",
-                          dup_inc, amount=_k(extra)))
+                          dup_inc, amount=_k(extra), ops=dup_inc_ops))
 
     # 6. deposits counted as income
     dep = [x for x in lines["income"] if DEPOSIT_RE.search(x["text"] + " " + x["kind"])]
@@ -314,17 +321,18 @@ def _checks(d, cars, rows, codes, a, b, now, daily, balance, key, lines):
         out.append(_check("warn", "Залог водителя посчитан как доход",
                           "Залог возвращается водителю, но в расчёте он увеличивает долю инвестора.",
                           [f"{x['car']} · {x['date'][8:10]}.{x['date'][5:7]} · {x['amount'] // KOP:,} ₽ · {x['text']}".replace(",", " ") for x in dep],
-                          amount=sum(round(x["amount"] * pct_of[x["car"]] / 100) for x in dep)))
+                          amount=sum(round(x["amount"] * pct_of[x["car"]] / 100) for x in dep), ops=[[x["op"]] for x in dep]))
 
     # 7. income whose text names another car
-    other = []
+    other, other_ops = [], []
     for x in lines["income"]:
         m = LEAD_CODE_RE.match(x["text"])
         if m and m.group(1) != x["car"] and RETIRED_CODES.get(m.group(1)) != x["car"]:
             other.append(f"{x['car']} · {x['date'][8:10]}.{x['date'][5:7]} · {x['amount'] // KOP:,} ₽ · «{x['text']}»".replace(",", " "))
+            other_ops.append([x["op"]])
     if other:
         out.append(_check("warn", "В тексте операции другая машина",
-                          "Доход записан на машину инвестора, а в команде указан другой номер.", other))
+                          "Доход записан на машину инвестора, а в команде указан другой номер.", other, ops=other_ops))
 
     # 8. more income than the car could earn in rent
     end = min(b, now)
@@ -351,21 +359,24 @@ def _checks(d, cars, rows, codes, a, b, now, daily, balance, key, lines):
     if retired:
         out.append(_check("info", "Записи на старый номер 119 не входят в расчёт",
                           "В базе осталась машина 119 (сейчас 665). Эти суммы не попали в долю инвестора.",
-                          [f"{r.date:%d.%m} · {'доход' if isinstance(r, Income) else 'расход'} {r.amount:,} ₽ · {d.raw(r.operation_id)}".replace(",", " ") for r in retired]))
+                          [f"{r.date:%d.%m} · {'доход' if isinstance(r, Income) else 'расход'} {r.amount:,} ₽ · {d.raw(r.operation_id)}".replace(",", " ") for r in retired],
+                          ops=[[r.operation_id] for r in retired]))
 
     # 10. duplicate expenses
     exs = sorted((r for r in d.expense if _code(r.car_code) in codes and a <= r.date < b),
                  key=lambda r: (_code(r.car_code), r.date))
-    dup_exp = []
+    dup_exp, dup_exp_ops = [], []
     for i, p in enumerate(exs):
         for q in exs[i + 1:]:
             if _code(q.car_code) != _code(p.car_code) or q.date - p.date > timedelta(hours=24):
                 break
             if (q.amount or 0) == (p.amount or 0) and (p.amount or 0) > 0 and (q.category or "") == (p.category or ""):
                 dup_exp.append(f"{_code(p.car_code)} · {p.date:%d.%m} · {p.category or '—'} · {p.amount:,} ₽ · операции #{p.operation_id or '—'} и #{q.operation_id or '—'}".replace(",", " "))
+                dup_exp_ops.append([p.operation_id, q.operation_id])
     if dup_exp:
-        out.append(_check("info", "Расход записан дважды?",
-                          "Одинаковый расход по одной машине в те же сутки. Лишний расход уменьшает долю инвестора.", dup_exp))
+        out.append(_check("warn", "Расход записан дважды?",
+                          "Одинаковый расход по одной машине в те же сутки. Лишний расход уменьшает долю инвестора.",
+                          dup_exp, ops=dup_exp_ops))
 
     # 11. investor-only and large shared expenses - to look at
     io = [x for x in lines["expenses"] if x["share"] == "investor_only"]
@@ -373,12 +384,13 @@ def _checks(d, cars, rows, codes, a, b, now, daily, balance, key, lines):
         out.append(_check("info", "Расходы только за счёт инвестора",
                           "Вычтены целиком из доли инвестора.",
                           [f"{x['car']} · {x['date'][8:10]}.{x['date'][5:7]} · {x['category']} · {x['amount'] // KOP:,} ₽".replace(",", " ") for x in io],
-                          amount=sum(x["amount"] for x in io)))
+                          amount=sum(x["amount"] for x in io), ops=[[x["op"]] for x in io]))
     big = [x for x in lines["expenses"] if x["share"] == "shared" and x["amount"] >= BIG_EXPENSE_RUB * KOP]
     if big:
         out.append(_check("info", f"Крупные общие расходы (от {BIG_EXPENSE_RUB:,} ₽)".replace(",", " "),
                           "Делятся между инвестором и парком — стоит проверить, что они по этой машине.",
-                          [f"{x['car']} · {x['date'][8:10]}.{x['date'][5:7]} · {x['category']} · {x['amount'] // KOP:,} ₽ · {x['text']}".replace(",", " ") for x in big]))
+                          [f"{x['car']} · {x['date'][8:10]}.{x['date'][5:7]} · {x['category']} · {x['amount'] // KOP:,} ₽ · {x['text']}".replace(",", " ") for x in big],
+                          ops=[[x["op"]] for x in big]))
 
     # 12. GPS / garage
     booked = [r["code"] for r in rows if r["recurring_booked"]]

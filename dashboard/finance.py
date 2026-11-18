@@ -99,23 +99,33 @@ def journal(engine, days=90, now=None):
         ops = conn.execute(text(
             "SELECT id, date, car_code, type, category, description, amount, raw_message FROM operations "
             "WHERE date >= :since ORDER BY date DESC, id DESC LIMIT 1000"), {"since": since}).mappings().all()
-    out = []
-    for o in ops:
-        code = str(o["car_code"] or "").strip()
-        label, direction = OP_LABELS.get((o["type"] or "").strip(), (o["type"] or "—", "info"))
-        d = o["date"]
-        out.append({
-            "id": o["id"], "date": d.isoformat() if isinstance(d, datetime) else str(d or ""),
-            "car": ("665" if code in RETIRED_CODES else code), "car_raw": code,
-            "type": o["type"] or "", "label": label, "dir": direction,
-            "category": o["category"] or "", "description": (o["description"] or "")[:300],
-            "amount": _k(o["amount"]),
-            "raw": (o["raw_message"] or "")[:500],
-            "topup": "[DRIVER_TOPUP:" in (o["raw_message"] or ""),
-            "edit": ("inplace" if (o["type"] or "") in ("repair", "service", "expense") else
-                     "topup" if "[DRIVER_TOPUP:" in (o["raw_message"] or "") else "replace"),
-        })
-    return {"days": days, "operations": out}
+    return {"days": days, "operations": [_op_row(o) for o in ops]}
+
+
+def operation(engine, op_id):
+    """One journal row by id (any date) - for editing from the investor report."""
+    with engine.connect() as conn:
+        o = conn.execute(text(
+            "SELECT id, date, car_code, type, category, description, amount, raw_message FROM operations "
+            "WHERE id = :i"), {"i": int(op_id)}).mappings().first()
+    return _op_row(o) if o else None
+
+
+def _op_row(o):
+    code = str(o["car_code"] or "").strip()
+    label, direction = OP_LABELS.get((o["type"] or "").strip(), (o["type"] or "—", "info"))
+    d = o["date"]
+    return {
+        "id": o["id"], "date": d.isoformat() if isinstance(d, datetime) else str(d or ""),
+        "car": ("665" if code in RETIRED_CODES else code), "car_raw": code,
+        "type": o["type"] or "", "label": label, "dir": direction,
+        "category": o["category"] or "", "description": (o["description"] or "")[:300],
+        "amount": _k(o["amount"]),
+        "raw": (o["raw_message"] or "")[:500],
+        "topup": "[DRIVER_TOPUP:" in (o["raw_message"] or ""),
+        "edit": ("inplace" if (o["type"] or "") in ("repair", "service", "expense") else
+                 "topup" if "[DRIVER_TOPUP:" in (o["raw_message"] or "") else "replace"),
+    }
 
 
 def repairs(engine, days=180, now=None):
