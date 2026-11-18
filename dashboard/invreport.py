@@ -21,7 +21,7 @@ from sqlalchemy.orm import Session
 from fleetai.finance import (INVESTOR_ONLY_TYPES, PARK_ONLY_TYPES, moscow_now,
                              period_bounds_for_car)
 from fleetai.models import (Car, Downtime, Expense, Income, InvestorInvestment,
-                            InvestorPayout, InvestorSettlement, Operation)
+                            InvestorPayout, InvestorSettlement, Operation, Part)
 
 from .data import RETIRED_CODES, owner_key
 
@@ -77,6 +77,10 @@ class _Data:
         want = set(codes) | set(RETIRED_CODES)
         self.income = [r for r in s.query(Income).all() if _code(r.car_code) in want and r.date]
         self.expense = [r for r in s.query(Expense).all() if _code(r.car_code) in want and r.date]
+        self.parts = defaultdict(list)
+        for r in s.query(Part).all():
+            if r.operation_id and _code(r.car_code) in want:
+                self.parts[r.operation_id].append(r)
         for r in self.expense:
             r._kind = _expense_kind(r, op_types)
         self.payouts = [r for r in s.query(InvestorPayout).all() if r.date and (
@@ -84,6 +88,21 @@ class _Data:
         self.invested = [r for r in s.query(InvestorInvestment).all() if r.date and _code(r.car_code) in codes]
         self.settle = [r for r in s.query(InvestorSettlement).all() if r.date and _code(r.car_code) in codes]
         self.downtime = [r for r in s.query(Downtime).all() if _code(r.car_code) in codes]
+
+    def what(self, op_id):
+        """Plain words for the investor: what the money was spent on."""
+        o = self.ops.get(op_id) if op_id else None
+        if not o:
+            return ""
+        desc = (o.description or "").strip()
+        if not desc or desc.lower() in ("расход", "ремонт", "доход"):
+            desc = re.sub(r"\[[A-Z_]+:[^\]]*\]", "", o.raw_message or "")
+            desc = re.sub(r"^\s*\d{3}\.?\s*", "", desc).strip()
+        return desc[:200]
+
+    def part_list(self, op_id):
+        return [{"name": (p.part_name or "").strip(), "brand": (p.brand or "").strip(), "position": (p.position or "").strip(),
+                 "price": _k(p.price), "labor": _k(p.labor)} for p in self.parts.get(op_id, [])] if op_id else []
 
     def raw(self, op_id):
         o = self.ops.get(op_id) if op_id else None
@@ -220,7 +239,8 @@ def _lines(d, codes, a, b):
 
     def exp(r):
         return {"id": r.id, "op": r.operation_id, "date": r.date.isoformat(timespec="minutes"), "car": _code(r.car_code),
-                "amount": _k(r.amount), "category": r.category or "", "share": r._kind, "text": d.raw(r.operation_id)}
+                "amount": _k(r.amount), "category": r.category or "", "share": r._kind, "text": d.raw(r.operation_id),
+                "what": d.what(r.operation_id), "parts": d.part_list(r.operation_id)}
 
     def pay(r):
         return {"id": r.id, "op": r.operation_id, "date": r.date.isoformat(timespec="minutes"), "car": _code(r.car_code),

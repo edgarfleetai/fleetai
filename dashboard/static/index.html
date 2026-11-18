@@ -99,7 +99,7 @@ h2{font-size:15px;font-weight:700} h3{font-size:14px;font-weight:700}
 .note.warn{background:var(--warn-soft);color:var(--warn);border-color:transparent}
 .note.bad-n{background:var(--bad-soft);color:var(--bad);border-color:transparent}.note.ok-n{background:var(--ok-soft);color:var(--ok);border-color:transparent}
 #irDoc{display:none}
-@media print{body.irprint>*:not(#irDoc){display:none!important}body.irprint{background:#fff!important;color:#000!important;font:12pt/1.4 Arial,sans-serif}body.irprint #irDoc{display:block!important;color:#000}#irDoc h1{font-size:18pt;margin:0 0 2pt}#irDoc h2{font-size:13pt;margin:16pt 0 4pt}#irDoc .sub{color:#555;margin-bottom:10pt}#irDoc table{width:100%;border-collapse:collapse}#irDoc th,#irDoc td{border-bottom:1px solid #ccc;padding:4pt 6pt;text-align:left;vertical-align:top}#irDoc th{font-size:9pt;text-transform:uppercase;color:#555}#irDoc .r{text-align:right;white-space:nowrap}#irDoc tr.car td{border-bottom:0}#irDoc tr.why td{color:#333;font-style:italic;padding-top:0}#irDoc tr.tot td{font-weight:700;border-top:2px solid #000}#irDoc .pay{margin-top:10pt;font-size:12pt}#irDoc tr{break-inside:avoid}}
+@media print{body.irprint>*:not(#irDoc){display:none!important}body.irprint{background:#fff!important;color:#000!important;font:12pt/1.4 Arial,sans-serif}body.irprint #irDoc{display:block!important;color:#000}#irDoc h1{font-size:18pt;margin:0 0 2pt}#irDoc h2{font-size:13pt;margin:16pt 0 4pt}#irDoc .sub{color:#555;margin-bottom:10pt}#irDoc table{width:100%;border-collapse:collapse}#irDoc th,#irDoc td{border-bottom:1px solid #ccc;padding:4pt 6pt;text-align:left;vertical-align:top}#irDoc th{font-size:9pt;text-transform:uppercase;color:#555}#irDoc .r{text-align:right;white-space:nowrap}#irDoc tr.car td{border-bottom:0}#irDoc tr.why td{color:#333;font-style:italic;padding-top:0}#irDoc tr.tot td{font-weight:700;border-top:2px solid #000}#irDoc .pay{margin-top:10pt;font-size:12pt}#irDoc tr{break-inside:avoid}#irDoc tr.grp td{background:#f1f1f1;border-bottom:1px solid #999}#irDoc tr.sub td{color:#333;font-weight:600}#irDoc .parts{color:#444;font-size:10pt;margin-top:2pt}#irDoc .cat{color:#666}}
 @media print{.rail,.topbar,.cmdbar,.proto,.no-print,#layer{display:none!important}body{background:#fff!important;color:#000}.glass,.panel{background:#fff!important;box-shadow:none!important;backdrop-filter:none!important;border:1px solid #ccc!important;break-inside:avoid}.tbl-wrap{overflow:visible!important}}
 /* panels */
 .panel>header{display:flex;align-items:center;gap:10px;padding:16px 18px 6px;flex-wrap:wrap}
@@ -842,7 +842,7 @@ async function irView(){shell("Отчёт инвестору",`<div class="acts"
     ${L.income.map(x=>`<tr><td class="num">${d2(x.date)} ${esc(x.date.slice(11,16))}</td><td>${esc(x.car)}</td><td style="white-space:normal;color:var(--muted)">${esc(x.text||x.kind)}${x.op?` · #${x.op}`:""}</td><td class="r">${money(x.amount,"in")}</td>${irCell(x.op)}</tr>`).join("")||`<tr><td colspan="5" style="color:var(--muted)">Доходов нет</td></tr>`}</tbody></table></div></section>
   <section class="panel glass"><header><h2>Расходы</h2><span class="sub">${L.expenses.length} записей · ${rub(sum(L.expenses,x=>x.amount))}</span></header>
     <div class="tbl-wrap"><table><thead><tr><th>Дата</th><th>Машина</th><th>Категория</th><th>Кто платит</th><th>Запись</th><th class="r">Сумма</th><th class="no-print"></th></tr></thead><tbody>
-    ${L.expenses.map(x=>`<tr><td class="num">${d2(x.date)}</td><td>${esc(x.car)}</td><td>${esc(x.category)}</td><td>${x.share==="investor_only"?tag("инвестор","t-warn"):x.share==="park_only"?tag("парк","t-info"):tag("по долям","t-mute")}</td><td style="white-space:normal;color:var(--muted)">${esc(x.text)}${x.op?` · #${x.op}`:""}</td><td class="r">${money(-x.amount)}</td>${irCell(x.op)}</tr>`).join("")||`<tr><td colspan="7" style="color:var(--muted)">Расходов нет</td></tr>`}</tbody></table></div></section>
+    ${L.expenses.map(x=>`<tr><td class="num">${d2(x.date)}</td><td>${esc(x.car)}</td><td>${esc(x.category)}</td><td>${x.share==="investor_only"?tag("инвестор","t-warn"):x.share==="park_only"?tag("парк","t-info"):tag("по долям","t-mute")}</td><td style="white-space:normal;color:var(--muted)">${esc(x.what||x.text)}${x.parts&&x.parts.length?`<div style="font-size:12px">${esc(irParts(x.parts))}</div>`:""}${x.op?` · #${x.op}`:""}</td><td class="r">${money(-x.amount)}</td>${irCell(x.op)}</tr>`).join("")||`<tr><td colspan="7" style="color:var(--muted)">Расходов нет</td></tr>`}</tbody></table></div></section>
   <section class="panel glass"><div class="pbody" style="padding-top:16px"><div class="note">Доля считается так же, как в старом FleetAI: (доход − общие расходы) × процент из базы. Из доли вычитаются расходы только инвестора, GPS 500 ₽ за машину и доля гаража 3 000 ₽ в месяц (если эти расходы не внесены в базу). «Сальдо» — всё начисленное минус всё выплаченное с первого периода с данными (не дальше 24 периодов назад); выплаты, записанные на чужую машину, в нём учтены. Здесь подробный отчёт для вас; инвестору уходит короткий: по машинам получено, расход, прибыль, доля, ваши объяснения и расходы.</div></div></section>`;
   $("#irPer").addEventListener("change",e=>{IRP.p=+e.target.value;irView();});}
 function irSave(kind){const R=IRP.cache[IRP.inv+":"+IRP.p];if(!R)return;const N=R.notes||{};
@@ -867,12 +867,21 @@ function irDoc(R){const T=R.total||{},N=R.notes||{},fixed=(T.gps||0)+(T.garage||
   ${cars.map(x=>`<tr class="car"><td><b>${esc(x.label)}</b></td><td class="r">${r(x.income)}</td><td class="r">${r(x.expenses)}</td><td class="r">${r(x.profit)}</td><td class="r"><b>${r(x.investor_part)}</b> (${x.percent}%)</td></tr>${N[x.code]&&N[x.code].text?`<tr class="why"><td colspan="5">${esc(N[x.code].text)}</td></tr>`:""}`).join("")}
   <tr class="tot"><td>Итого</td><td class="r">${r(T.income)}</td><td class="r">${r(T.expenses)}</td><td class="r">${r(T.profit)}</td><td class="r">${r(T.investor_part)}</td></tr></tbody></table>
   <div class="pay">Доля инвестора ${r(T.investor_part)}${fixed?` − GPS и гараж ${r(fixed)}`:""}${T.payouts?` − выплачено в периоде ${r(T.payouts)}`:""} = <b>к выплате ${r(toPay)}</b></div>
-  <h2>Расходы</h2><table><thead><tr><th>Дата</th><th>Машина</th><th>Что</th><th class="r">Сумма</th></tr></thead><tbody>
-  ${R.lines.expenses.map(e=>`<tr><td>${d2(e.date)}</td><td>${esc(e.car)}</td><td>${esc(e.category)}${e.share==="investor_only"?" (за счёт инвестора)":""}</td><td class="r">${r(e.amount)}</td></tr>`).join("")||`<tr><td colspan="4">Расходов не было</td></tr>`}</tbody></table>`;
+  <h2>На что потрачены деньги</h2>${irExpDoc(R,r)}`;
   document.body.appendChild(el);document.body.classList.add("irprint");
   const done=()=>{document.body.classList.remove("irprint");el.remove();window.removeEventListener("afterprint",done);};
   window.addEventListener("afterprint",done);setTimeout(()=>window.print(),100);}
 const cars_find=code=>cars.find(c=>c.code===code);
+/* Expenses for the investor, by car: what was done, parts with prices, labour. */
+const irParts=ps=>(ps||[]).map(p=>[p.name,p.brand,p.position].filter(Boolean).join(" ")+(p.price?` — ${rub(p.price)}`:"")+(p.labor?`, работа ${rub(p.labor)}`:"")).join("; ");
+function irExpDoc(R,r){const ex=R.lines.expenses;if(!ex.length)return `<p>Расходов за период не было.</p>`;
+  const codes=[...new Set(ex.map(e=>e.car))];
+  return `<table><thead><tr><th>Дата</th><th>На что</th><th class="r">Сумма</th></tr></thead><tbody>${codes.map(code=>{const list=ex.filter(e=>e.car===code),c=cars_find(code);
+    return `<tr class="grp"><td colspan="3"><b>${esc(code)}${c?" · "+esc(c.model):""}</b></td></tr>${list.map(e=>{const parts=irParts(e.parts),what=e.what||e.text||e.category;
+      return `<tr><td>${d2(e.date)}</td><td><div>${esc(what)}${e.category&&!what.toLowerCase().includes(e.category.toLowerCase())?` <span class="cat">(${esc(e.category.toLowerCase())})</span>`:""}${e.share==="investor_only"?" — <b>за счёт инвестора</b>":e.share==="park_only"?" — за счёт парка":""}</div>${parts?`<div class="parts">${esc(parts)}</div>`:""}</td><td class="r">${r(e.amount)}</td></tr>`;}).join("")}
+    <tr class="sub"><td></td><td>Всего по ${esc(code)}</td><td class="r">${r(sum(list,e=>e.amount))}</td></tr>`;}).join("")}
+    <tr class="tot"><td></td><td>Всего расходов</td><td class="r">${r(sum(ex,e=>e.amount))}</td></tr></tbody></table>`;}
+
 function irCsv(R){const n=k=>((k||0)/100).toFixed(2).replace(".",","),q=v=>`"${String(v??"").replace(/"/g,'""')}"`,rows=[],T=R.total||{},N=R.notes||{};
   const fixed=(T.gps||0)+(T.garage||0);
   rows.push(["Отчёт инвестору",R.name,"период",d2(R.start)+" — "+d2(R.end)]);rows.push([]);
@@ -881,7 +890,7 @@ function irCsv(R){const n=k=>((k||0)/100).toFixed(2).replace(".",","),q=v=>`"${S
   rows.push(["Итого",n(T.income),n(T.expenses),n(T.profit),n(T.investor_part)]);rows.push([]);
   rows.push(["Доля инвестора",n(T.investor_part)]);if(fixed)rows.push(["GPS и гараж",n(-fixed)]);if(T.payouts)rows.push(["Выплачено в периоде",n(-T.payouts)]);
   rows.push(["К выплате",n((T.investor_part||0)-fixed-(T.payouts||0))]);rows.push([]);
-  rows.push(["Расходы","Дата","Машина","Категория","Кто платит","Запись","Сумма"]);R.lines.expenses.forEach(x=>rows.push(["",d2(x.date),x.car,x.category,x.share==="investor_only"?"инвестор":x.share==="park_only"?"парк":"по долям",x.text,n(x.amount)]));
+  rows.push(["Расходы","Дата","Машина","Вид расхода","На что","Запчасти и работа","Кто платит","Сумма"]);R.lines.expenses.forEach(x=>rows.push(["",d2(x.date),x.car,x.category,x.what||x.text,irParts(x.parts),x.share==="investor_only"?"инвестор":x.share==="park_only"?"парк":"по долям",n(x.amount)]));
   const blob=new Blob(["﻿"+rows.map(r=>r.map(q).join(";")).join("\r\n")],{type:"text/csv;charset=utf-8"});
   const a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download=`Отчёт ${R.name} ${R.start} — ${R.end}.csv`;document.body.appendChild(a);a.click();setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove();},1000);}
 VIEWS.investors=async function(){if(IRP.on)return irView();shell("Инвесторы");try{await needFin();}catch(e){if(onView("investors"))failed("Инвесторы",e);return;}

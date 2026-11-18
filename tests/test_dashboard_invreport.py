@@ -154,3 +154,14 @@ def test_explanations_per_car_are_saved_for_the_report(fin_dash):
     assert c.get(f"{url}?investor=ilya&start=bad", base_url=BASE).status_code == 400
     hist = ' '.join(e['summary'] for e in c.get('/api/v4/history', base_url=BASE).get_json()['events'])
     assert 'Объяснение для отчёта Илья' in hist and 'машина 621' in hist
+
+
+def test_expenses_say_what_the_money_was_spent_on(fin_dash):
+    eng = create_engine(fin_dash.engine_url)
+    add(eng, "INSERT INTO parts (car_code, operation_id, part_name, brand, position, price, labor) "
+             "VALUES ('621', 2, 'Колодки', 'TRW', 'перед', 1500, 500)")
+    c = fin_dash.test_client()
+    login(c)
+    ex = report(c)['lines']['expenses']
+    assert ex[0]['what'] == 'колодки'
+    assert ex[0]['parts'] == [{'name': 'Колодки', 'brand': 'TRW', 'position': 'перед', 'price': 150_000, 'labor': 50_000}]
