@@ -165,3 +165,18 @@ def test_expenses_say_what_the_money_was_spent_on(fin_dash):
     ex = report(c)['lines']['expenses']
     assert ex[0]['what'] == 'колодки'
     assert ex[0]['parts'] == [{'name': 'Колодки', 'brand': 'TRW', 'position': 'перед', 'price': 150_000, 'labor': 50_000}]
+
+
+def test_investor_report_is_a_ready_pdf_file(fin_dash):
+    from test_dashboard_v4 import csrf_headers
+    c = fin_dash.test_client()
+    assert c.get('/api/v4/investors/report.pdf?investor=ilya', base_url=BASE).status_code == 401
+    login(c)
+    rep = report(c)
+    c.post('/api/v4/investors/notes', base_url=BASE, headers=csrf_headers(c),
+           json={'data': {'investor': 'ilya', 'start': rep['start'], 'notes': {'621': 'Поменяли колодки'}}})
+    r = c.get('/api/v4/investors/report.pdf?investor=ilya', base_url=BASE)
+    assert r.status_code == 200 and r.mimetype == 'application/pdf'
+    assert 'attachment' in r.headers['Content-Disposition']
+    assert r.data.startswith(b'%PDF') and len(r.data) > 1000
+    assert c.get('/api/v4/investors/report.pdf?investor=nobody', base_url=BASE).status_code == 404

@@ -21,7 +21,7 @@ from urllib.parse import urlsplit
 from flask import Flask, abort, jsonify, redirect, request, send_file, session
 from werkzeug.security import check_password_hash
 
-from . import accrual, actions, assistant, board, contracts, data, finance, history, invnotes, invreport, ops, payfix, rent, service, tasks, wialon
+from . import accrual, actions, assistant, board, contracts, data, finance, history, invnotes, invpdf, invreport, ops, payfix, rent, service, tasks, wialon
 
 STATIC = Path(__file__).resolve().parent / "static"
 ACTION_NAMES = {"topup": "Пополнение кошелька водителя", "fine": "Штраф водителю", "assign": "Назначение водителя",
@@ -299,6 +299,33 @@ def create_app(config=None):
             audit("investor_note", f"Объяснение для отчёта {invreport.NAMES[key]} ({body.get('start')}), машина {code}: "
                   + str(body["notes"].get(code) or "")[:200], car=code)
         return jsonify(ok=True, changed=changed, message="Объяснения сохранены" if changed else "Без изменений")
+
+    @app.get("/api/v4/investors/report.pdf")
+    def investor_report_pdf():
+        api_owner()
+        key = request.args.get("investor", "")
+        if key not in invreport.NAMES:
+            abort(404)
+        try:
+            idx = max(0, min(int(request.args.get("period", 0) or 0), invreport.MAX_PERIODS - 1))
+        except ValueError:
+            idx = 0
+        report = cached(f"invreport:{key}:{idx}", lambda: invreport.investor_report(engine, key, idx))
+        if not report.get("cars"):
+            abort(404)
+        notes = invnotes.load(engine, key, report["start"])
+        from sqlalchemy.orm import Session as _S
+        from fleetai.models import Car
+        with _S(engine) as s:
+            info = {invreport._code(c.code): " · ".join(x for x in (c.model, c.plate) if x)
+                    for c in s.query(Car).all()}
+        try:
+            pdf = invpdf.build(report, notes, info)
+        except RuntimeError as e:
+            return jsonify(ok=False, message=str(e)), 500
+        import io as _io
+        return send_file(_io.BytesIO(pdf), mimetype="application/pdf", as_attachment=True,
+                         download_name=f"Отчёт {report['name']} {report['start']} — {report['end']}.pdf")
 
     @app.get("/api/v4/journal")
     def journal_view():

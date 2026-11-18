@@ -848,39 +848,24 @@ async function irView(){shell("Отчёт инвестору",`<div class="acts"
 function irSave(kind){const R=IRP.cache[IRP.inv+":"+IRP.p];if(!R)return;const N=R.notes||{};
   openLayer(`<div class="modal" role="dialog" aria-modal="true" aria-labelledby="irNT" style="width:min(640px,calc(100% - 32px))"><header style="padding:18px 20px 0"><h1 id="irNT" style="font-size:22px">Отчёт для инвестора: объяснения</h1><div style="color:var(--muted);font-size:12.5px">${esc(R.name)} · ${d2(R.start)} — ${d2(R.end)} · напишите, почему по машине столько заработано. Текст попадёт в отчёт под машиной.</div></header><div class="mb" style="max-height:65vh;overflow:auto">
     ${R.cars.map(x=>`<label class="field"><span><b>${carLabel(x.code)}</b> · получено ${rub(x.income)} · расход ${rub(x.expenses)} · прибыль ${rub(x.profit)} · доля ${rub(x.investor_part)}</span><textarea class="inp" data-irnote="${esc(x.code)}" rows="3" maxlength="2000" placeholder="Например: водитель платил без пропусков, поменяли колодки; или: 10 дней в ремонте, поэтому дохода меньше">${esc(N[x.code]&&N[x.code].text||"")}</textarea></label>`).join("")}
-    <div id="irNRes"></div></div><div style="display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap;padding:0 20px 18px"><button class="btn" data-close>Отмена</button><button class="btn lime" id="irNGo">${kind==="pdf"?"Сохранить и открыть PDF":"Сохранить и скачать Excel"}</button></div></div>`);
+    <div id="irNRes"></div></div><div style="display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap;padding:0 20px 18px"><button class="btn" data-close>Отмена</button><button class="btn lime" id="irNGo">${kind==="pdf"?"Сохранить и скачать PDF":"Сохранить и скачать Excel"}</button></div></div>`);
   $("#irNGo").addEventListener("click",async()=>{const b=$("#irNGo");if(b.disabled)return;
     const notes={};document.querySelectorAll("[data-irnote]").forEach(t=>{notes[t.dataset.irnote]=t.value.trim();});
     const empty=R.cars.filter(x=>!notes[x.code]).map(x=>x.code);
     if(empty.length&&!b.dataset.ok){b.dataset.ok="1";$("#irNRes").innerHTML=`<div class="note warn">Нет объяснения по ${empty.length===1?"машине":"машинам"} ${esc(empty.join(", "))}. Нажмите ещё раз, чтобы сохранить так.</div>`;return;}
     b.disabled=true;b.textContent="Сохраняю…";
     try{const {data:r}=await opPost("/api/v4/investors/notes",{data:{investor:R.investor,start:R.start,notes}});if(!r.ok)throw new Error(r.message||"Ошибка");
-      R.notes=Object.fromEntries(Object.entries(notes).map(([k,v])=>[k,{text:v}]));closeLayer();
-      if(kind==="pdf")irDoc(R);else irCsv(R);}
+      R.notes=Object.fromEntries(Object.entries(notes).map(([k,v])=>[k,{text:v}]));b.textContent="Готовлю файл…";
+      if(kind==="pdf")await irPdf(R);else irCsv(R);closeLayer();}
     catch(e){$("#irNRes").innerHTML=`<div class="note warn">${esc(e.message)}</div>`;b.disabled=false;b.textContent="Повторить";}});}
-/* Short report for the investor: only it is printed (PDF), the detailed page stays on screen. */
-function irDoc(R){const T=R.total||{},N=R.notes||{},fixed=(T.gps||0)+(T.garage||0),toPay=(T.investor_part||0)-fixed-(T.payouts||0);
-  const r=k=>rub(k||0),cars=R.cars.map(x=>{const c=cars_find(x.code);return {...x,label:c?`${x.code} · ${c.model}${c.plate?" · "+c.plate:""}`:x.code};});
-  let el=document.getElementById("irDoc");if(el)el.remove();el=document.createElement("div");el.id="irDoc";
-  el.innerHTML=`<h1>Отчёт инвестору: ${esc(R.name)}</h1><div class="sub">Период ${d2(R.start)} — ${d2(R.end)}</div>
-  <table><thead><tr><th>Машина</th><th class="r">Получено</th><th class="r">Расход</th><th class="r">Прибыль</th><th class="r">Доля</th></tr></thead><tbody>
-  ${cars.map(x=>`<tr class="car"><td><b>${esc(x.label)}</b></td><td class="r">${r(x.income)}</td><td class="r">${r(x.expenses)}</td><td class="r">${r(x.profit)}</td><td class="r"><b>${r(x.investor_part)}</b> (${x.percent}%)</td></tr>${N[x.code]&&N[x.code].text?`<tr class="why"><td colspan="5">${esc(N[x.code].text)}</td></tr>`:""}`).join("")}
-  <tr class="tot"><td>Итого</td><td class="r">${r(T.income)}</td><td class="r">${r(T.expenses)}</td><td class="r">${r(T.profit)}</td><td class="r">${r(T.investor_part)}</td></tr></tbody></table>
-  <div class="pay">Доля инвестора ${r(T.investor_part)}${fixed?` − GPS и гараж ${r(fixed)}`:""}${T.payouts?` − выплачено в периоде ${r(T.payouts)}`:""} = <b>к выплате ${r(toPay)}</b></div>
-  <h2>На что потрачены деньги</h2>${irExpDoc(R,r)}`;
-  document.body.appendChild(el);document.body.classList.add("irprint");
-  const done=()=>{document.body.classList.remove("irprint");el.remove();window.removeEventListener("afterprint",done);};
-  window.addEventListener("afterprint",done);setTimeout(()=>window.print(),100);}
+/* Ready PDF file from the server: it is saved, not printed. */
+async function irPdf(R){const r=await fetch(`/api/v4/investors/report.pdf?investor=${encodeURIComponent(R.investor)}&period=${R.period_index||0}`,{credentials:"same-origin"});
+  if(r.status===401){location.href="/login";throw new Error("Нужен вход");}
+  if(!r.ok){const j=await r.json().catch(()=>null);throw new Error(j&&j.message||"Не удалось сделать PDF ("+r.status+")");}
+  const a=document.createElement("a");a.href=URL.createObjectURL(await r.blob());a.download=`Отчёт ${R.name} ${R.start} — ${R.end}.pdf`;document.body.appendChild(a);a.click();setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove();},1000);}
 const cars_find=code=>cars.find(c=>c.code===code);
-/* Expenses for the investor, by car: what was done, parts with prices, labour. */
+/* Parts with prices and labour, for the investor files. */
 const irParts=ps=>(ps||[]).map(p=>[p.name,p.brand,p.position].filter(Boolean).join(" ")+(p.price?` — ${rub(p.price)}`:"")+(p.labor?`, работа ${rub(p.labor)}`:"")).join("; ");
-function irExpDoc(R,r){const ex=R.lines.expenses;if(!ex.length)return `<p>Расходов за период не было.</p>`;
-  const codes=[...new Set(ex.map(e=>e.car))];
-  return `<table><thead><tr><th>Дата</th><th>На что</th><th class="r">Сумма</th></tr></thead><tbody>${codes.map(code=>{const list=ex.filter(e=>e.car===code),c=cars_find(code);
-    return `<tr class="grp"><td colspan="3"><b>${esc(code)}${c?" · "+esc(c.model):""}</b></td></tr>${list.map(e=>{const parts=irParts(e.parts),what=e.what||e.text||e.category;
-      return `<tr><td>${d2(e.date)}</td><td><div>${esc(what)}${e.category&&!what.toLowerCase().includes(e.category.toLowerCase())?` <span class="cat">(${esc(e.category.toLowerCase())})</span>`:""}${e.share==="investor_only"?" — <b>за счёт инвестора</b>":e.share==="park_only"?" — за счёт парка":""}</div>${parts?`<div class="parts">${esc(parts)}</div>`:""}</td><td class="r">${r(e.amount)}</td></tr>`;}).join("")}
-    <tr class="sub"><td></td><td>Всего по ${esc(code)}</td><td class="r">${r(sum(list,e=>e.amount))}</td></tr>`;}).join("")}
-    <tr class="tot"><td></td><td>Всего расходов</td><td class="r">${r(sum(ex,e=>e.amount))}</td></tr></tbody></table>`;}
 
 function irCsv(R){const n=k=>((k||0)/100).toFixed(2).replace(".",","),q=v=>`"${String(v??"").replace(/"/g,'""')}"`,rows=[],T=R.total||{},N=R.notes||{};
   const fixed=(T.gps||0)+(T.garage||0);
