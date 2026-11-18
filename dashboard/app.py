@@ -21,7 +21,7 @@ from urllib.parse import urlsplit
 from flask import Flask, abort, jsonify, redirect, request, send_file, session
 from werkzeug.security import check_password_hash
 
-from . import accrual, actions, assistant, board, contracts, data, finance, history, invreport, ops, payfix, rent, service, tasks, wialon
+from . import accrual, actions, assistant, board, contracts, data, finance, history, invnotes, invreport, ops, payfix, rent, service, tasks, wialon
 
 STATIC = Path(__file__).resolve().parent / "static"
 ACTION_NAMES = {"topup": "Пополнение кошелька водителя", "fine": "Штраф водителю", "assign": "Назначение водителя",
@@ -272,6 +272,33 @@ def create_app(config=None):
         except ValueError:
             idx = 0
         return jsonify(cached(f"invreport:{key}:{idx}", lambda: invreport.investor_report(engine, key, idx)))
+
+    @app.get("/api/v4/investors/notes")
+    def investor_notes_view():
+        api_owner()
+        key = request.args.get("investor", "")
+        if key not in invreport.NAMES:
+            abort(404)
+        try:
+            return jsonify(notes=invnotes.load(engine, key, request.args.get("start", "")))
+        except ValueError:
+            abort(400)
+
+    @app.post("/api/v4/investors/notes")
+    def investor_notes_save():
+        write_guard()
+        body = (request.get_json(silent=True) or {}).get("data") or {}
+        key = str(body.get("investor") or "")
+        if key not in invreport.NAMES or not isinstance(body.get("notes"), dict):
+            return jsonify(ok=False, message="Неверный запрос"), 400
+        try:
+            changed = invnotes.save(key, body.get("start"), body["notes"], invreport.car_codes(engine, key))
+        except ValueError:
+            return jsonify(ok=False, message="Неверный период"), 400
+        for code in changed:
+            audit("investor_note", f"Объяснение для отчёта {invreport.NAMES[key]} ({body.get('start')}), машина {code}: "
+                  + str(body["notes"].get(code) or "")[:200], car=code)
+        return jsonify(ok=True, changed=changed, message="Объяснения сохранены" if changed else "Без изменений")
 
     @app.get("/api/v4/journal")
     def journal_view():

@@ -132,7 +132,10 @@ def _car_period(d, car, a, b, garage_rub):
             "investor_only_expenses": inv_only, "park_only_expenses": park_only, "profit_for_split": profit,
             "share": share, "investor_paid": paid_in, "gps": 0 if fixed == 0 else GPS_PER_CAR_RUB,
             "garage": 0 if fixed == 0 else garage_rub, "recurring_booked": booked, "earned": earned,
-            "payouts": payouts, "due": earned - payouts, "active": active}
+            "payouts": payouts, "due": earned - payouts, "active": active,
+            # simple view for the report: received, all expenses, profit, investor's part
+            "expenses": shared + inv_only + park_only, "profit": income - shared - inv_only - park_only,
+            "investor_part": share - inv_only}
 
 
 def _k(v):
@@ -185,7 +188,8 @@ def investor_report(engine, investor_key, period_index=0, now=None):
 
     total = {k: sum(r[k] for r in rows) for k in ("income", "shared_expenses", "investor_only_expenses",
                                                   "park_only_expenses", "profit_for_split", "share",
-                                                  "investor_paid", "gps", "garage", "earned", "payouts", "due")}
+                                                  "investor_paid", "gps", "garage", "earned", "payouts", "due",
+                                                  "expenses", "profit", "investor_part")}
     return {
         "investor": investor_key, "name": NAMES[investor_key], "agreed_percent": AGREED.get(investor_key),
         "period_index": period_index, "start": _iso(a.date()), "end": _iso((b - timedelta(days=1)).date()),
@@ -196,6 +200,12 @@ def investor_report(engine, investor_key, period_index=0, now=None):
         "history": list(reversed(hist)), "balance": balance_at_end,
         "lines": lines, "checks": checks,
     }
+
+
+def car_codes(engine, investor_key):
+    with Session(engine) as s:
+        return {_code(c.code) for c in s.query(Car).all()
+                if _code(c.code) not in RETIRED_CODES and owner_key(c.owner_type, c.investor_name) == investor_key}
 
 
 def _daily(car):

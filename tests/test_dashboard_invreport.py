@@ -132,3 +132,25 @@ def test_duplicates_can_be_removed_from_the_report(fin_dash):
     assert [p['op'] for p in rep['lines']['payouts']] == [31]
     hist = ' '.join(e['summary'] for e in c.get('/api/v4/history', base_url=BASE).get_json()['events'])
     assert 'Удалена операция #22' in hist and 'Удалена операция #32' in hist
+
+
+def test_explanations_per_car_are_saved_for_the_report(fin_dash):
+    from test_dashboard_v4 import csrf_headers
+    c = fin_dash.test_client()
+    login(c)
+    rep = report(c)
+    car = {x['code']: x for x in rep['cars']}['621']
+    assert car['expenses'] == 200_000 and car['profit'] == 1_100_000 and car['investor_part'] == 825_000
+    url = '/api/v4/investors/notes'
+    body = {'data': {'investor': 'ilya', 'start': rep['start'],
+                     'notes': {'621': 'Поменяли колодки, водитель платил вовремя.', '897': 'чужая машина'}}}
+    assert c.post(url, base_url=BASE, json=body).status_code == 403                       # no CSRF
+    r = c.post(url, base_url=BASE, headers=csrf_headers(c), json=body).get_json()
+    assert r['ok'] and r['changed'] == ['621']                                            # 897 is not Ilya's
+    got = c.get(f"{url}?investor=ilya&start={rep['start']}", base_url=BASE).get_json()['notes']
+    assert got == {'621': {'text': 'Поменяли колодки, водитель платил вовремя.', 'updated_at': got['621']['updated_at']}}
+    again = c.post(url, base_url=BASE, headers=csrf_headers(c), json=body).get_json()
+    assert again['changed'] == []
+    assert c.get(f"{url}?investor=ilya&start=bad", base_url=BASE).status_code == 400
+    hist = ' '.join(e['summary'] for e in c.get('/api/v4/history', base_url=BASE).get_json()['events'])
+    assert 'Объяснение для отчёта Илья' in hist and 'машина 621' in hist
