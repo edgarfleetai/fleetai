@@ -21,7 +21,7 @@ from urllib.parse import urlsplit
 from flask import Flask, abort, jsonify, redirect, request, send_file, session
 from werkzeug.security import check_password_hash
 
-from . import accrual, actions, assistant, board, contracts, data, finance, history, invnotes, invpdf, invreport, ops, payfix, rent, service, tasks, wialon
+from . import accrual, actions, assistant, board, cabinet, contracts, data, finance, history, invnotes, invpdf, invreport, ops, payfix, rent, service, tasks, wialon
 
 STATIC = Path(__file__).resolve().parent / "static"
 ACTION_NAMES = {"topup": "Пополнение кошелька водителя", "fine": "Штраф водителю", "assign": "Назначение водителя",
@@ -242,6 +242,11 @@ def create_app(config=None):
             return redirect("/login")
         return send_file(STATIC / "index.html", mimetype="text/html", max_age=0)
 
+    # driver cabinet on this site (dashboard/cabinet.py)
+    driver_link_url = cabinet.register(app, engine, same_origin=same_origin, public_url=app.config["PUBLIC_URL"],
+                                       writes_enabled=writes_enabled and not ops_save, static_dir=STATIC,
+                                       current_owner=current_owner)
+
     def api_owner():
         owner = current_owner()
         if not owner:
@@ -431,7 +436,7 @@ def create_app(config=None):
     @app.post("/api/v4/cars/<code>/driver-link")
     @app.post("/api/v4/cars/<code>/driver-link/<what>")
     def driver_link(code, what=None):
-        """One-time 24 h link into the driver's cabinet (old FleetAI) for drivers without Telegram."""
+        """One-time 24 h link into the driver's cabinet (this site, /d) for drivers without Telegram."""
         from fleetai import auth as fleet_auth
         from fleetai import db as fleet_db
         if request.method == "GET":
@@ -453,9 +458,8 @@ def create_app(config=None):
                 s.rollback()
                 return jsonify(ok=False, message=str(error)), 400
             s.commit()
-        from urllib.parse import quote
         audit("driver_link", f"Выдана ссылка в кабинет водителя {code}", car=code)
-        return jsonify(ok=True, url=OLD_SITE + "/auth/driver#token=" + quote(raw, safe=""), driver=driver,
+        return jsonify(ok=True, url=driver_link_url(raw), driver=driver,
                        message="Ссылка действует 24 часа и открывается один раз")
 
     @app.get("/api/v4/contracts/<cid>/pdf")

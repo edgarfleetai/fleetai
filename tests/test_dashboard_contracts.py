@@ -93,7 +93,7 @@ def test_driver_cabinet_link_is_issued_once_and_can_be_revoked(fin_dash):
     login(c)
     assert c.post('/api/v4/cars/897/driver-link', base_url=BASE, json={'data': {}}).status_code == 403   # no CSRF
     r = post(c, '/api/v4/cars/897/driver-link', {}).get_json()
-    assert r['ok'] and r['url'].startswith('https://fleetai-1.onrender.com/auth/driver#token=')
+    assert r['ok'] and r['url'].startswith(BASE + '/d#token=')
     raw = r['url'].split('#token=')[1]
     eng = create_engine(fin_dash.engine_url)
     with eng.connect() as conn:

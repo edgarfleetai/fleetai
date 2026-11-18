@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="robots" content="noindex">
+<title>Кабинет водителя — Клевер Парк</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Manrope:wght@600;700;800&display=swap">
+<style>
+:root{
+  --bg:#080c0a; --glass:rgba(255,255,255,.05); --glass-2:rgba(255,255,255,.09); --stroke:rgba(255,255,255,.09);
+  --fg:#eef3ee; --muted:#a0aca4; --faint:#6e7a72; --lime:#c6f24e; --lime-fg:#121808; --lime-soft:rgba(198,242,78,.14);
+  --ok:#7fe0a4; --bad:#ff8f84; --bad-soft:rgba(255,143,132,.14); --warn:#f5c26b; --warn-soft:rgba(245,194,107,.14);
+  --f-ui:"Inter",system-ui,-apple-system,"Segoe UI",sans-serif; --f-d:"Manrope","Inter",system-ui,sans-serif; color-scheme:dark;
+}
+@media (prefers-color-scheme:light){:root:not([data-theme="dark"]){
+  --bg:#eef1ec; --glass:rgba(255,255,255,.7); --glass-2:rgba(255,255,255,.95); --stroke:rgba(20,40,20,.10);
+  --fg:#141a16; --muted:#55615a; --faint:#7d8a82; --lime:#bfee45; --lime-soft:rgba(140,200,20,.16);
+  --ok:#1f8a4c; --bad:#c23b32; --bad-soft:rgba(194,59,50,.10); --warn:#9a6400; --warn-soft:rgba(220,150,20,.14); color-scheme:light;
+}}
+:root[data-theme="dark"]{color-scheme:dark}
+*{box-sizing:border-box}
+body{margin:0;min-height:100vh;background:radial-gradient(900px 500px at 10% -10%,rgba(170,230,70,.12),transparent 60%),radial-gradient(700px 500px at 110% 10%,rgba(60,130,100,.18),transparent 60%),var(--bg);
+  color:var(--fg);font:15px/1.45 var(--f-ui);-webkit-font-smoothing:antialiased}
+.wrap{max-width:560px;margin:0 auto;padding:16px 16px 40px}
+header{display:flex;align-items:center;gap:10px;margin:4px 0 16px}
+.logo{width:34px;height:34px;border-radius:10px;background:var(--lime);color:var(--lime-fg);display:grid;place-items:center;font:800 14px var(--f-d)}
+header .t{flex:1;min-width:0}
+header b{display:block;font:700 16px var(--f-d)}
+header span{color:var(--muted);font-size:12.5px}
+.card{background:var(--glass);border:1px solid var(--stroke);border-radius:20px;padding:18px;margin-bottom:12px;backdrop-filter:blur(14px)}
+.lbl{color:var(--muted);font-size:12.5px;text-transform:uppercase;letter-spacing:.04em}
+.big{font:800 40px/1.1 var(--f-d);margin:6px 0 4px;letter-spacing:-.02em}
+.big.neg{color:var(--bad)}
+.sub{color:var(--muted);font-size:14px}
+.row{display:flex;justify-content:space-between;gap:12px;padding:9px 0;border-top:1px solid var(--stroke)}
+.row:first-of-type{border-top:0}
+.row .v{font-weight:600;white-space:nowrap}
+.btn{appearance:none;border:1px solid var(--stroke);background:var(--glass-2);color:var(--fg);border-radius:14px;padding:12px 16px;font:600 15px var(--f-ui);cursor:pointer;text-decoration:none;display:inline-flex;align-items:center;justify-content:center;gap:6px}
+.btn.lime{background:var(--lime);color:var(--lime-fg);border-color:transparent}
+.btn.wide{width:100%;padding:15px;font-size:16px}
+.btn:disabled{opacity:.55;cursor:default}
+.chips{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0}
+.chip{border:1px solid var(--stroke);background:transparent;color:var(--fg);border-radius:999px;padding:7px 12px;font:500 13.5px var(--f-ui);cursor:pointer}
+.chip.on{background:var(--lime-soft);border-color:var(--lime)}
+.inp{width:100%;background:var(--glass-2);border:1px solid var(--stroke);color:var(--fg);border-radius:14px;padding:13px 14px;font:600 18px var(--f-ui)}
+.inp:focus,.btn:focus-visible,.chip:focus-visible{outline:2px solid var(--lime);outline-offset:2px}
+.note{border-radius:14px;padding:11px 13px;font-size:14px;margin-bottom:12px;background:var(--glass-2);border:1px solid var(--stroke)}
+.note.bad{background:var(--bad-soft);border-color:transparent}
+.note.warn{background:var(--warn-soft);border-color:transparent}
+.note.ok{background:var(--lime-soft);border-color:transparent}
+h2{font:700 17px var(--f-d);margin:0 0 8px}
+.tx{display:flex;gap:12px;padding:10px 0;border-top:1px solid var(--stroke)}
+.tx:first-child{border-top:0}
+.tx .w{flex:1;min-width:0}
+.tx .w div:first-child{font-weight:600}
+.tx .w div+div{color:var(--muted);font-size:13px;overflow-wrap:anywhere}
+.tx .a{font-weight:700;white-space:nowrap}
+.tx .a.p{color:var(--ok)}
+.day{color:var(--faint);font-size:12px;margin:12px 0 2px;text-transform:uppercase;letter-spacing:.04em}
+.center{text-align:center;padding:40px 18px}
+.muted{color:var(--muted)}
+.foot{display:flex;justify-content:center;margin-top:18px}
+.skel{height:120px;border-radius:20px;background:var(--glass);margin-bottom:12px;animation:p 1.2s infinite alternate}
+@keyframes p{to{opacity:.5}}
+@media (prefers-reduced-motion:reduce){.skel{animation:none}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header><div class="logo">КП</div><div class="t"><b>Клевер Парк</b><span id="hsub">Кабинет водителя</span></div></header>
+  <main id="app"><div class="skel"></div><div class="skel"></div></main>
+</div>
+<script>
+const $=s=>document.querySelector(s);
+const esc=v=>String(v??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const rub=k=>{const v=Math.round((k||0)/100);return (v<0?"−":"")+Math.abs(v).toLocaleString("ru-RU")+" ₽";};
+const d2=s=>s?`${s.slice(8,10)}.${s.slice(5,7)}.${s.slice(0,4)}`:"";
+const days=n=>{const m=n%10,h=n%100;return n+" "+(m===1&&h!==11?"день":m>=2&&m<=4&&(h<12||h>14)?"дня":"дней");};
+const TYPES={topup:"Оплата",dispatcher_topup:"Оплата через диспетчера",daily_rent:"Аренда за день",rent_payment:"Зачтено в аренду",
+  fine:"Штраф",correction:"Корректировка",opening_balance:"Начальный баланс",driver_change_balance:"Перенос баланса",test_debt:"Проверка"};
+const params=new URLSearchParams(location.search);
+const PREVIEW=params.get("code");
+let ME=null,AMT=0;
+
+function show(html){$("#app").innerHTML=html;}
+
+async function start(){
+  const frag=new URLSearchParams(location.hash.slice(1)).get("token");
+  if(frag){
+    history.replaceState(null,"","/d");      // the one-time token never stays in the address bar
+    show(`<div class="card center"><h2>Вход в кабинет</h2><p class="muted">Ссылка открывается один раз. После входа кабинет останется открытым на этом телефоне.</p><button class="btn lime wide" id="go">Войти в кабинет</button><p id="err" class="muted"></p></div>`);
+    $("#go").onclick=async()=>{const b=$("#go");b.disabled=true;b.textContent="Вхожу…";
+      try{const r=await fetch("/d/login",{method:"POST",credentials:"same-origin",headers:{"Content-Type":"application/json"},body:JSON.stringify({ticket:frag})});
+        const j=await r.json().catch(()=>({}));
+        if(r.ok&&j.ok)return load();
+        $("#err").textContent=j.message||"Не получилось войти. Попросите новую ссылку у диспетчера.";}
+      catch(_){$("#err").textContent="Нет связи. Проверьте интернет и нажмите ещё раз.";}
+      b.disabled=false;b.textContent="Войти в кабинет";};
+    return;
+  }
+  load();
+}
+
+async function load(){
+  let r;
+  try{r=await fetch("/api/d/me"+(PREVIEW?"?code="+encodeURIComponent(PREVIEW):""),{credentials:"same-origin"});}
+  catch(_){return show(`<div class="card center"><h2>Нет связи</h2><p class="muted">Проверьте интернет.</p><button class="btn" onclick="load()">Повторить</button></div>`);}
+  if(r.status===401)return show(`<div class="card center"><h2>Нужна ссылка для входа</h2><p class="muted">Попросите у диспетчера ссылку в кабинет. Она откроется один раз, после этого кабинет будет открываться сам.</p></div>`);
+  const j=await r.json().catch(()=>null);
+  if(!r.ok||!j||!j.ok)return show(`<div class="card center"><h2>Не получилось открыть кабинет</h2><p class="muted">${esc(j&&j.message||"Попробуйте через минуту.")}</p><button class="btn" onclick="load()">Повторить</button></div>`);
+  ME=j;render();
+}
+
+function render(){
+  const m=ME,c=m.car,neg=m.balance<0;
+  $("#hsub").textContent=[c.code,[c.brand,c.model].filter(Boolean).join(" "),c.plate].filter(Boolean).join(" · ");
+  const debt=Math.max(-m.balance,0)+m.debts.reduce((a,d)=>a+d.balance,0);
+  let h="";
+  if(m.preview)h+=`<div class="note warn">Вы смотрите кабинет водителя ${esc(m.driver)} как владелец. Оплата здесь выключена.</div>`;
+  const pay=params.get("payment");
+  if(pay==="success")h+=`<div class="note ok">Банк принял оплату. Баланс обновится в течение нескольких минут.</div>`;
+  if(pay==="failed")h+=`<div class="note bad">Оплата не прошла. Деньги не списаны — попробуйте ещё раз.</div>`;
+  h+=`<section class="card"><div class="lbl">Баланс</div><div class="big ${neg?"neg":""}">${rub(m.balance)}</div>
+    <div class="sub">${neg?`Долг ${rub(-m.balance)} — пополните баланс`:m.days_left?`Хватит примерно на ${days(m.days_left)}`:m.daily_rent?"Пополните баланс, чтобы аренда не ушла в долг":""}</div></section>`;
+  h+=`<section class="card"><div class="row"><span class="muted">Водитель</span><span class="v">${esc(m.driver)}</span></div>
+    ${m.daily_rent?`<div class="row"><span class="muted">Аренда в день</span><span class="v">${rub(m.daily_rent)}</span></div>`:""}
+    ${m.debts.map(d=>`<div class="row"><span class="muted">${esc(d.reason)}</span><span class="v" style="color:var(--bad)">${rub(d.balance)}</span></div>`).join("")}
+    ${m.contract?`<div class="row"><span class="muted">Договор</span><span class="v"><a href="/api/d/contract.pdf" target="_blank" rel="noopener" style="color:inherit">подписан ${d2(m.contract.signed_at)} · PDF</a></span></div>`:""}</section>`;
+  if(!m.preview){
+    const sugg=[];if(debt>0)sugg.push(["Погасить долг",debt]);if(m.daily_rent){sugg.push(["1 день",m.daily_rent]);sugg.push(["7 дней",m.daily_rent*7]);}
+    AMT=sugg.length?sugg[0][1]:0;
+    h+=`<section class="card"><h2>Пополнить баланс</h2>${m.pay_ready?`
+      <div class="chips">${sugg.map(([t,v],i)=>`<button class="chip ${i===0?"on":""}" data-amt="${v}">${t} · ${rub(v)}</button>`).join("")}</div>
+      <label class="lbl" for="amt">Сумма, ₽</label><input class="inp" id="amt" inputmode="numeric" autocomplete="off" value="${AMT?Math.round(AMT/100):""}" style="margin:6px 0 12px">
+      <button class="btn lime wide" id="pay">Оплатить картой или СБП</button><div id="payErr" style="margin-top:10px"></div>`
+      :`<p class="muted" style="margin:0">Оплата прямо из кабинета скоро появится. Пока платите, как обычно.</p>`}</section>`;
+  }
+  h+=`<section class="card"><h2>История</h2>${historyHtml(m.transactions)}</section>`;
+  if(!m.preview)h+=`<div class="foot"><button class="btn" id="out">Выйти</button></div>`;
+  show(h);
+  document.querySelectorAll("[data-amt]").forEach(b=>b.onclick=()=>{document.querySelectorAll("[data-amt]").forEach(x=>x.classList.remove("on"));b.classList.add("on");$("#amt").value=Math.round(b.dataset.amt/100);});
+  if($("#amt"))$("#amt").oninput=()=>document.querySelectorAll("[data-amt]").forEach(x=>x.classList.remove("on"));
+  if($("#pay"))$("#pay").onclick=payNow;
+  if($("#out"))$("#out").onclick=async()=>{await fetch("/api/d/logout",{method:"POST",credentials:"same-origin",headers:{"X-CSRF":ME.csrf}}).catch(()=>{});
+    show(`<div class="card center"><h2>Вы вышли</h2><p class="muted">Чтобы войти снова, попросите у диспетчера новую ссылку.</p></div>`);};
+}
+
+function historyHtml(txs){
+  if(!txs.length)return `<p class="muted" style="margin:0">Записей пока нет.</p>`;
+  let out="",last="";
+  for(const t of txs){const day=t.date.slice(0,10);if(day!==last){out+=`<div class="day">${d2(day)}</div>`;last=day;}
+    out+=`<div class="tx"><div class="w"><div>${esc(TYPES[t.type]||"Операция")}</div>${t.comment?`<div>${esc(t.comment)}</div>`:""}</div><div class="a ${t.amount>0?"p":""}">${t.amount>0?"+":""}${rub(t.amount)}</div></div>`;}
+  return out;
+}
+
+async function payNow(){
+  const b=$("#pay"),v=parseInt(($("#amt").value||"").replace(/\D/g,""),10),max=Math.round(ME.max_payment/100);
+  const err=t=>{$("#payErr").innerHTML=`<div class="note bad" style="margin:0">${esc(t)}</div>`;};
+  if(!v||v<1)return err("Введите сумму.");
+  if(v>max)return err(`Не больше ${max.toLocaleString("ru-RU")} ₽ за раз.`);
+  b.disabled=true;b.textContent="Открываю оплату…";$("#payErr").innerHTML="";
+  try{const r=await fetch("/api/d/pay",{method:"POST",credentials:"same-origin",headers:{"Content-Type":"application/json","X-CSRF":ME.csrf},body:JSON.stringify({amount:v})});
+    const j=await r.json().catch(()=>({}));
+    if(r.ok&&j.ok&&j.payment_url){location.assign(j.payment_url);return;}
+    if(r.status===401)return load();
+    err(j.message||"Не получилось открыть оплату.");}
+  catch(_){err("Нет связи. Проверьте интернет.");}
+  b.disabled=false;b.textContent="Оплатить картой или СБП";
+}
+start();
+</script>
+</body>
+</html>
