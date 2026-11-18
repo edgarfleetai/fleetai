@@ -21,7 +21,7 @@ from urllib.parse import urlsplit
 from flask import Flask, abort, jsonify, redirect, request, send_file, session
 from werkzeug.security import check_password_hash
 
-from . import accrual, actions, assistant, board, contracts, data, finance, history, ops, payfix, rent, service, tasks, wialon
+from . import accrual, actions, assistant, board, contracts, data, finance, history, invreport, ops, payfix, rent, service, tasks, wialon
 
 STATIC = Path(__file__).resolve().parent / "static"
 ACTION_NAMES = {"topup": "Пополнение кошелька водителя", "fine": "Штраф водителю", "assign": "Назначение водителя",
@@ -260,6 +260,18 @@ def create_app(config=None):
         api_owner()
         period = "previous" if request.args.get("period") == "previous" else "current"
         return jsonify(cached("finance:" + period, lambda: finance.fleet_finance(engine, period)))
+
+    @app.get("/api/v4/investors/report")
+    def investor_report_view():
+        api_owner()
+        key = request.args.get("investor", "")
+        if key not in invreport.NAMES:
+            abort(404)
+        try:
+            idx = max(0, min(int(request.args.get("period", 0) or 0), invreport.MAX_PERIODS - 1))
+        except ValueError:
+            idx = 0
+        return jsonify(cached(f"invreport:{key}:{idx}", lambda: invreport.investor_report(engine, key, idx)))
 
     @app.get("/api/v4/journal")
     def journal_view():

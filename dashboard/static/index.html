@@ -97,6 +97,8 @@ h2{font-size:15px;font-weight:700} h3{font-size:14px;font-weight:700}
 .phead .acts{margin-left:auto;display:flex;gap:8px;flex-wrap:wrap}
 .note{font-size:12.5px;color:var(--muted);background:var(--glass-3);border:1px solid var(--stroke);border-radius:12px;padding:9px 12px}
 .note.warn{background:var(--warn-soft);color:var(--warn);border-color:transparent}
+.note.bad-n{background:var(--bad-soft);color:var(--bad);border-color:transparent}.note.ok-n{background:var(--ok-soft);color:var(--ok);border-color:transparent}
+@media print{.rail,.topbar,.cmdbar,.proto,.no-print,#layer{display:none!important}body{background:#fff!important;color:#000}.glass,.panel{background:#fff!important;box-shadow:none!important;backdrop-filter:none!important;border:1px solid #ccc!important;break-inside:avoid}.tbl-wrap{overflow:visible!important}}
 /* panels */
 .panel>header{display:flex;align-items:center;gap:10px;padding:16px 18px 6px;flex-wrap:wrap}
 .panel>header .sub{color:var(--muted);font-size:12px}
@@ -798,7 +800,61 @@ VIEWS.finance=async function(){shell("Финансы");try{await needFin();if(!J
   <section class="panel glass"><div class="pbody" style="padding-top:16px"><div class="note">Доходы, расходы и доли считаются той же функцией, что и в старом FleetAI (расчётный период с 16-го по 15-е), поэтому цифры совпадают. Записи старой машины 119 показаны под 665.</div></div></section>`;
   $("#jcar").addEventListener("change",e=>{jf.car=e.target.value;VIEWS.finance();});};
 
-VIEWS.investors=async function(){shell("Инвесторы");try{await needFin();}catch(e){if(onView("investors"))failed("Инвесторы",e);return;}
+
+/* ===== Инвесторы: отчёт за период с проверками ===== */
+const IRP={on:false,inv:"ilya",p:1,cache:{}};
+const IRL={bad:["note bad-n","Ошибка"],warn:["note warn","Проверить"],ok:["note ok-n","Всё в порядке"],info:["note","Для сведения"]};
+const irSeg=()=>`<div class="seg" role="group" aria-label="Вид">${[[false,"Сводка"],[true,"Отчёт за период"]].map(([k,l])=>`<button class="${IRP.on===k?"on":""}" data-irmode="${k?1:0}">${l}</button>`).join("")}</div>`;
+async function irLoad(){const k=IRP.inv+":"+IRP.p;if(!IRP.cache[k])IRP.cache[k]=await once(`/api/v4/investors/report?investor=${IRP.inv}&period=${IRP.p}`);return IRP.cache[k];}
+async function irView(){shell("Отчёт инвестору",`<div class="acts">${irSeg()}</div>`);let R;try{R=await irLoad();}catch(e){if(onView("investors"))failed("Инвесторы",e);return;}
+  if(!onView("investors")||!IRP.on)return;
+  const T=R.total||{},bal=R.balance||0,L=R.lines;
+  const sel=`<select class="inp" id="irPer" aria-label="Расчётный период" style="width:auto;padding:6px 10px">${(R.periods||[]).map(p=>`<option value="${p.index}" ${p.index===R.period_index?"selected":""}>${d2(p.start)} — ${d2(p.end)}${p.index===0?" (текущий)":""}</option>`).join("")}</select>`;
+  const invs=`<div class="seg" role="group" aria-label="Инвестор">${["ilya","ravshan","mark"].map(k=>`<button class="${IRP.inv===k?"on":""}" data-irinv="${k}">${esc(owners[k][0])}</button>`).join("")}</div>`;
+  const chk=R.checks.map(c=>{const [cls,lab]=IRL[c.level]||IRL.info;return `<div class="${cls}" style="margin-bottom:8px"><div style="display:flex;gap:8px;align-items:baseline;flex-wrap:wrap"><b>${esc(c.title)}</b><span class="tag ${c.level==="bad"?"t-bad":c.level==="warn"?"t-warn":c.level==="ok"?"t-ok":"t-mute"}">${lab}</span>${c.amount?`<span class="num" style="margin-left:auto;font-weight:700">${rub(c.amount)}</span>`:""}</div><div style="margin-top:3px">${esc(c.detail)}</div>${c.items.length?`<ul style="margin:6px 0 0 18px;padding:0">${c.items.map(i=>`<li>${esc(i)}</li>`).join("")}</ul>`:""}</div>`;}).join("");
+  const nBad=R.checks.filter(c=>c.level==="bad").length,nWarn=R.checks.filter(c=>c.level==="warn").length;
+  const box=(l,v,cls)=>`<div class="${cls||"note"}" style="padding:10px 12px"><small style="display:block">${l}</small><b class="num" style="font-size:17px">${rub(v||0)}</b></div>`;
+  $("#page").innerHTML=`<div class="phead"><h1><span>Отчёт инвестору</span></h1><div class="acts no-print">${irSeg()}${invs}${sel}<button class="btn" id="irPrint">Печать / PDF</button><button class="btn" id="irCsv">Скачать для Excel</button></div></div>
+  <section class="panel glass"><header><h2>${oav(R.investor)} ${esc(R.name)}</h2><span class="sub">период ${d2(R.start)} — ${d2(R.end)}${R.closed?"":" · ещё идёт"} · договорённость ${R.agreed_percent||"—"}% · сформирован ${esc(String(R.generated_at||"").replace("T"," "))}</span></header>
+    <div class="pbody"><div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px">
+      ${box("Доход машин",T.income)}${box("Прибыль для раздела",T.profit_for_split)}${box("Доля инвестора",T.share)}${box("Вычеты: расходы инвестора, GPS, гараж",-((T.investor_only_expenses||0)+(T.gps||0)+(T.garage||0)))}${box("Начислено за период",T.earned)}${box("Выплачено в периоде",-(T.payouts||0))}${box("Итог периода",T.due)}
+      ${box(bal<0?"Переплата инвестору на конец периода":"Парк должен инвестору на конец периода",Math.abs(bal),bal<0?"note bad-n":"note ok-n")}
+    </div></div></section>
+  <section class="panel glass"><header><h2>Проверки</h2><span class="sub">${nBad?"ошибок: "+nBad+" · ":""}${nWarn?"проверить: "+nWarn+" · ":""}записи не меняются, это подсказки, что посмотреть</span></header><div class="pbody">${chk}</div></section>
+  <section class="panel glass"><header><h2>По машинам</h2><span class="sub">доля = (доход − общие расходы) × процент из базы</span></header>
+    <div class="tbl-wrap"><table><thead><tr><th>Машина</th><th class="r">Доход</th><th class="r">Общие расходы</th><th class="r">Прибыль</th><th class="r">%</th><th class="r">Доля</th><th class="r">Расходы инвестора</th><th class="r">GPS + гараж</th><th class="r">Начислено</th><th class="r">Выплачено</th><th class="r">Итог</th></tr></thead><tbody>
+    ${R.cars.map(x=>`<tr><td>${carLabel(x.code)}${x.owner_type!=="investor"?` ${tag("своя в базе","t-bad")}`:""}</td><td class="r">${money(x.income,"in")}</td><td class="r">${money(-x.shared_expenses)}</td><td class="r">${money(x.profit_for_split)}</td><td class="r num">${x.percent}</td><td class="r">${money(x.share)}</td><td class="r">${x.investor_only_expenses?money(-x.investor_only_expenses):"—"}</td><td class="r">${x.recurring_booked?tag("в расходах","t-mute"):x.gps+x.garage?money(-(x.gps+x.garage)):"—"}</td><td class="r">${money(x.earned)}</td><td class="r">${x.payouts?money(-x.payouts):"—"}</td><td class="r"><b>${money(x.due)}</b></td></tr>`).join("")}
+    <tr><td><b>Итого</b></td><td class="r"><b>${money(T.income,"in")}</b></td><td class="r"><b>${money(-T.shared_expenses)}</b></td><td class="r"><b>${money(T.profit_for_split)}</b></td><td></td><td class="r"><b>${money(T.share)}</b></td><td class="r"><b>${money(-T.investor_only_expenses)}</b></td><td class="r"><b>${money(-(T.gps+T.garage))}</b></td><td class="r"><b>${money(T.earned)}</b></td><td class="r"><b>${money(-T.payouts)}</b></td><td class="r"><b>${money(T.due)}</b></td></tr></tbody></table></div></section>
+  <section class="panel glass"><header><h2>История: начислено и выплачено</h2><span class="sub">сальдо с первого периода с данными; минус — выплачено больше, чем заработано</span></header>
+    <div class="tbl-wrap"><table><thead><tr><th>Период</th><th class="r">Доход</th><th class="r">Доля</th><th class="r">Расходы инвестора</th><th class="r">GPS + гараж</th><th class="r">Начислено</th><th class="r">Выплачено</th><th class="r">Сальдо</th></tr></thead><tbody>
+    ${R.history.map(h=>`<tr${h.index===R.period_index?' style="font-weight:700"':""}><td class="num">${d2(h.start)} — ${d2(h.end)}</td><td class="r">${money(h.income,"in")}</td><td class="r">${money(h.share)}</td><td class="r">${h.investor_only_expenses?money(-h.investor_only_expenses):"—"}</td><td class="r">${h.fixed?money(-h.fixed):"—"}</td><td class="r">${money(h.earned)}</td><td class="r">${h.paid?money(-h.paid):"—"}</td><td class="r">${money(h.balance,h.balance<0?"out":"in")}</td></tr>`).join("")||`<tr><td colspan="8" style="color:var(--muted)">Нет данных</td></tr>`}</tbody></table></div></section>
+  <section class="panel glass"><header><h2>Выплаты инвестору</h2><span class="sub">${L.payouts.length} записей в периоде</span></header>
+    <div class="tbl-wrap"><table><thead><tr><th>Дата</th><th>Машина</th><th>Кому</th><th>Комментарий</th><th class="r">Сумма</th></tr></thead><tbody>
+    ${L.payouts.map(p=>`<tr><td class="num">${d2(p.date)}</td><td>${esc(p.car||"—")}${p.counted?"":` ${tag("не его машина","t-warn")}`}</td><td>${esc(p.investor)}</td><td style="white-space:normal;color:var(--muted)">${esc(p.text)}</td><td class="r">${money(-p.amount)}</td></tr>`).join("")||`<tr><td colspan="5" style="color:var(--muted)">Выплат в периоде нет</td></tr>`}</tbody></table></div></section>
+  <section class="panel glass"><header><h2>Доходы</h2><span class="sub">${L.income.length} записей · ${rub(sum(L.income,x=>x.amount))}</span></header>
+    <div class="tbl-wrap"><table><thead><tr><th>Дата</th><th>Машина</th><th>Запись</th><th class="r">Сумма</th></tr></thead><tbody>
+    ${L.income.map(x=>`<tr><td class="num">${d2(x.date)} ${esc(x.date.slice(11,16))}</td><td>${esc(x.car)}</td><td style="white-space:normal;color:var(--muted)">${esc(x.text||x.kind)}${x.op?` · #${x.op}`:""}</td><td class="r">${money(x.amount,"in")}</td></tr>`).join("")||`<tr><td colspan="4" style="color:var(--muted)">Доходов нет</td></tr>`}</tbody></table></div></section>
+  <section class="panel glass"><header><h2>Расходы</h2><span class="sub">${L.expenses.length} записей · ${rub(sum(L.expenses,x=>x.amount))}</span></header>
+    <div class="tbl-wrap"><table><thead><tr><th>Дата</th><th>Машина</th><th>Категория</th><th>Кто платит</th><th>Запись</th><th class="r">Сумма</th></tr></thead><tbody>
+    ${L.expenses.map(x=>`<tr><td class="num">${d2(x.date)}</td><td>${esc(x.car)}</td><td>${esc(x.category)}</td><td>${x.share==="investor_only"?tag("инвестор","t-warn"):x.share==="park_only"?tag("парк","t-info"):tag("по долям","t-mute")}</td><td style="white-space:normal;color:var(--muted)">${esc(x.text)}${x.op?` · #${x.op}`:""}</td><td class="r">${money(-x.amount)}</td></tr>`).join("")||`<tr><td colspan="6" style="color:var(--muted)">Расходов нет</td></tr>`}</tbody></table></div></section>
+  <section class="panel glass"><div class="pbody" style="padding-top:16px"><div class="note">Доля считается так же, как в старом FleetAI: (доход − общие расходы) × процент из базы. Из доли вычитаются расходы только инвестора, GPS 500 ₽ за машину и доля гаража 3 000 ₽ в месяц (если эти расходы не внесены в базу). «Сальдо» — всё начисленное минус всё выплаченное с первого периода с данными (не дальше 24 периодов назад); выплаты, записанные на чужую машину, в нём учтены.</div></div></section>`;
+  $("#irPer").addEventListener("change",e=>{IRP.p=+e.target.value;irView();});
+  $("#irPrint").addEventListener("click",()=>window.print());
+  $("#irCsv").addEventListener("click",()=>irCsv(R));}
+function irCsv(R){const n=k=>((k||0)/100).toFixed(2).replace(".",","),q=v=>`"${String(v??"").replace(/"/g,'""')}"`,rows=[];
+  rows.push(["Отчёт инвестору",R.name,"период",d2(R.start)+" — "+d2(R.end)]);rows.push([]);
+  rows.push(["Машина","Доход","Общие расходы","Прибыль","%","Доля","Расходы инвестора","GPS","Гараж","Начислено","Выплачено","Итог"]);
+  R.cars.forEach(x=>rows.push([x.code,n(x.income),n(x.shared_expenses),n(x.profit_for_split),x.percent,n(x.share),n(x.investor_only_expenses),n(x.gps),n(x.garage),n(x.earned),n(x.payouts),n(x.due)]));
+  rows.push([]);rows.push(["Сальдо на конец периода",n(R.balance)]);rows.push([]);
+  rows.push(["Проверки"]);R.checks.forEach(c=>{rows.push([(IRL[c.level]||IRL.info)[1],c.title,c.detail,c.amount?n(c.amount):""]);c.items.forEach(i=>rows.push(["","",i]));});
+  rows.push([]);rows.push(["История","Доход","Доля","Расходы инвестора","GPS+гараж","Начислено","Выплачено","Сальдо"]);
+  R.history.forEach(h=>rows.push([d2(h.start)+" — "+d2(h.end),n(h.income),n(h.share),n(h.investor_only_expenses),n(h.fixed),n(h.earned),n(h.paid),n(h.balance)]));
+  rows.push([]);rows.push(["Выплаты","Дата","Машина","Кому","Комментарий","Сумма"]);R.lines.payouts.forEach(p=>rows.push(["",d2(p.date),p.car,p.investor,p.text,n(p.amount)]));
+  rows.push([]);rows.push(["Доходы","Дата","Машина","Операция","Запись","Сумма"]);R.lines.income.forEach(x=>rows.push(["",d2(x.date),x.car,x.op||"",x.text||x.kind,n(x.amount)]));
+  rows.push([]);rows.push(["Расходы","Дата","Машина","Категория","Кто платит","Запись","Сумма"]);R.lines.expenses.forEach(x=>rows.push(["",d2(x.date),x.car,x.category,x.share==="investor_only"?"инвестор":x.share==="park_only"?"парк":"по долям",x.text,n(x.amount)]));
+  const blob=new Blob(["﻿"+rows.map(r=>r.map(q).join(";")).join("\r\n")],{type:"text/csv;charset=utf-8"});
+  const a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download=`Отчёт ${R.name} ${R.start} — ${R.end}.csv`;document.body.appendChild(a);a.click();setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove();},1000);}
+VIEWS.investors=async function(){if(IRP.on)return irView();shell("Инвесторы");try{await needFin();}catch(e){if(onView("investors"))failed("Инвесторы",e);return;}
   if(!onView("investors"))return;
   const r=FIN.cars;
   const card=key=>{const rows=r.filter(x=>x.owner===key);if(!rows.length)return"";
@@ -815,7 +871,7 @@ VIEWS.investors=async function(){shell("Инвесторы");try{await needFin()
     <tr><td><b>Итого</b></td><td class="r"><b>${money(sumk("income"),"in")}</b></td><td class="r"><b>${money(-sumk("expenses"))}</b></td><td class="r"><b>${money(sumk("profit_for_split"))}</b></td><td class="r"><b>${money(sumk("period_share"))}</b></td><td class="r"><b>${sumk("payouts_in_period")?money(-sumk("payouts_in_period")):"—"}</b></td><td class="r"><b>${money(-dedT)}</b></td><td class="r"><b>${money(due-dedT)}</b></td></tr>
     </tbody></table></div>
     ${old?`<div class="pbody"><div class="note">Взаиморасчёты прошлых периодов (не входят в сумму за период): ${old>0?`парк должен инвестору <b>${rub(old)}</b>`:`инвестор должен парку <b>${rub(-old)}</b>`}. Старый FleetAI прибавляет это к «к выплате».</div></div>`:""}</section>`;};
-  $("#page").innerHTML=`<div class="phead"><h1><span>Инвесторы</span></h1><div class="acts">${perSeg()}</div></div>
+  $("#page").innerHTML=`<div class="phead"><h1><span>Инвесторы</span></h1><div class="acts">${irSeg()}${perSeg()}</div></div>
     ${["ilya","ravshan","mark"].map(card).join("")}
     <section class="panel glass"><div class="pbody" style="padding-top:16px"><div class="note">«Доля инвестора» = (доход − общие расходы за период) × процент из базы FleetAI. «К выплате за период» = доля − расходы только инвестора − уже выплаченное − GPS 500 ₽ за машину − гараж 3 000 ₽ в месяц, поделённый на все машины (если эти расходы ещё не внесены в FleetAI). Долги прошлых периодов показаны отдельно и в сумму за период не входят.</div></div></section>`;};
 
@@ -1402,6 +1458,8 @@ document.addEventListener("click",e=>{const t=e.target;
   const an=t.closest("[data-actn]");if(an){actModal(an.dataset.actn,an.dataset.acar||"");return;}
   const cc=t.closest("[data-cmdcar]");if(cc){closeLayer();cmdFocus(cc.dataset.cmdcar);return;}
   const fp=t.closest("[data-finp]");if(fp){FINP=fp.dataset.finp;route();return;}
+  const irm=t.closest("[data-irmode]");if(irm){IRP.on=irm.dataset.irmode==="1";VIEWS.investors();return;}
+  const iri=t.closest("[data-irinv]");if(iri){IRP.inv=iri.dataset.irinv;VIEWS.investors();return;}
   const jd=t.closest("[data-jdir]");if(jd){jf.dir=jd.dataset.jdir;VIEWS.finance();return;}
   const cf=t.closest("[data-cf]");if(cf){carFilter=cf.dataset.cf;if(cf.dataset.reset)carQuery="";VIEWS.cars();return;}
   const cv=t.closest("[data-cv]");if(cv){carView=cv.dataset.cv;VIEWS.cars();return;}
