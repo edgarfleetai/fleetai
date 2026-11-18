@@ -67,31 +67,59 @@ h2{font:700 17px var(--f-d);margin:0 0 8px}
 @media (prefers-reduced-motion:reduce){.skel{animation:none}}
 </style>
 <style>
-.grid4{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-bottom:12px}
-@media (min-width:620px){.grid4{grid-template-columns:repeat(4,minmax(0,1fr))}}
-.kpi{background:var(--glass);border:1px solid var(--stroke);border-radius:16px;padding:12px 14px}
-.kpi b{display:block;font:700 18px var(--f-d);margin-top:3px;white-space:nowrap}
-.sel{background:var(--glass-2);border:1px solid var(--stroke);color:var(--fg);border-radius:12px;padding:9px 12px;font:600 14px var(--f-ui);max-width:100%}
+.wrap{max-width:600px}
+header .pdf{padding:8px 12px;font-size:13.5px;border-radius:12px}
+.sel{width:100%;appearance:none;background:var(--glass) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8'%3E%3Cpath d='M1 1l5 5 5-5' fill='none' stroke='%23a0aca4' stroke-width='2'/%3E%3C/svg%3E") no-repeat right 14px center;
+  border:1px solid var(--stroke);color:var(--fg);border-radius:14px;padding:11px 38px 11px 14px;font:600 14.5px var(--f-ui);margin-bottom:12px}
 .sel:focus{outline:2px solid var(--lime);outline-offset:2px}
-.bar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:12px}
-.bar .sp{flex:1}
-.why{font-style:italic;color:var(--muted);font-size:13.5px;margin-top:8px;white-space:pre-wrap;overflow-wrap:anywhere}
-.car{padding:12px 0;border-top:1px solid var(--stroke)}
-.car:first-of-type{border-top:0;padding-top:0}
-.car-h{display:flex;justify-content:space-between;gap:10px;align-items:baseline}
-.car-h b{font:700 16px var(--f-d)}
-.car-h small{font:500 13.5px var(--f-ui);color:var(--muted)}
-.tag{display:inline-block;font-size:12px;border-radius:999px;padding:2px 8px;background:var(--glass-2);color:var(--muted);white-space:nowrap}
-.tag.inv{background:var(--warn-soft);color:var(--warn)}
-.parts{color:var(--muted);font-size:12.5px;margin-top:2px}
-.grp{font-weight:700;margin:16px 0 2px}
-.grp:first-of-type{margin-top:0}
-.tot{display:flex;justify-content:space-between;padding:9px 0;border-top:1px solid var(--stroke);font-weight:700}
+.sel option{background:var(--bg);color:var(--fg)}
+.hero{background:linear-gradient(160deg,var(--lime-soft),transparent 70%),var(--glass)}
+.hero .state{display:inline-block;font-size:12px;border-radius:999px;padding:3px 9px;background:var(--glass-2);color:var(--muted);margin-left:6px;vertical-align:2px;text-transform:none;letter-spacing:0}
+.calc{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:1px;background:var(--stroke);border-radius:14px;overflow:hidden;margin-top:14px}
+.calc div{background:var(--bg);padding:10px 12px;min-width:0}
+.calc div:first-child{background:color-mix(in srgb,var(--bg) 88%,var(--lime))}
+.calc small{display:block;color:var(--muted);font-size:12px}
+.calc b{display:block;font:700 15.5px var(--f-d);white-space:nowrap;margin-top:2px}
+.hint{color:var(--muted);font-size:13px;margin-top:10px}
+.sec{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:4px}
+.sec h2{margin:0}
+.sec span{color:var(--muted);font-size:13px}
+details.car{border-top:1px solid var(--stroke)}
+details.car:first-of-type{border-top:0}
+details.car summary{list-style:none;cursor:pointer;display:flex;gap:12px;align-items:center;padding:12px 0}
+details.car summary::-webkit-details-marker{display:none}
+details.car summary:focus-visible{outline:2px solid var(--lime);outline-offset:2px;border-radius:8px}
+.car .nm{flex:1;min-width:0}
+.car .nm b{font:700 15.5px var(--f-d)}
+.car .nm small{display:block;color:var(--muted);font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.car .sh{text-align:right;white-space:nowrap}
+.car .sh b{display:block;font:700 15.5px var(--f-d)}
+.car .sh small{color:var(--muted);font-size:12px}
+.car .chev{color:var(--faint);transition:transform .15s;flex:none}
+.car[open] .chev{transform:rotate(90deg)}
+.body{padding:0 0 14px}
+.mini{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-bottom:10px}
+.mini div{background:var(--glass-2);border-radius:12px;padding:8px 10px}
+.mini small{display:block;color:var(--muted);font-size:11.5px}
+.mini b{font-weight:700;font-size:14px;white-space:nowrap}
+.why{font-style:italic;color:var(--muted);font-size:13.5px;margin:0 0 10px;padding-left:10px;border-left:2px solid var(--lime);white-space:pre-wrap;overflow-wrap:anywhere}
+.ex{display:flex;gap:10px;padding:8px 0;border-top:1px dashed var(--stroke);font-size:14px}
+.ex .w{flex:1;min-width:0}
+.ex .w small{display:block;color:var(--muted);font-size:12.5px;overflow-wrap:anywhere}
+.ex .a{white-space:nowrap;font-weight:600}
+.tag{display:inline-block;font-size:11.5px;border-radius:999px;padding:1px 7px;background:var(--warn-soft);color:var(--warn);white-space:nowrap;font-style:normal}
+.tag.park{background:var(--glass-2);color:var(--muted)}
+.idle{color:var(--muted);font-size:13px;padding-top:10px;border-top:1px solid var(--stroke)}
+.pay{display:flex;justify-content:space-between;padding:8px 0;border-top:1px solid var(--stroke);font-size:14.5px}
+.pay:first-of-type{border-top:0}
+.pay.t{font-weight:700}
+.foot{gap:8px}
+@media (max-width:380px){.calc b,.car .sh b{font-size:14px}.big{font-size:34px}}
 </style>
 </head>
 <body>
 <div class="wrap">
-  <header><div class="logo">КП</div><div class="t"><b>Клевер Парк</b><span id="hsub">Кабинет инвестора</span></div></header>
+  <header><div class="logo">КП</div><div class="t"><b>Клевер Парк</b><span id="hsub">Кабинет инвестора</span></div><a class="btn pdf" id="pdf" hidden download>PDF ↓</a></header>
   <main id="app"><div class="skel"></div><div class="skel"></div></main>
 </div>
 <script>
@@ -133,49 +161,45 @@ async function load(){
 
 function render(){
   const m=ME,T=m.total||{};
-  $("#hsub").textContent="Кабинет инвестора · "+m.name;
+  $("#hsub").textContent=m.name+" · кабинет инвестора";
   let h="";
-  if(m.preview)h+=`<div class="note warn">Вы смотрите кабинет инвестора ${esc(m.name)} так, как его видит он.</div>`;
+  if(m.preview)h+=`<div class="note warn">Так кабинет видит ${esc(m.name)}.</div>`;
   if(!m.cars.length){show(h+`<div class="card center"><h2>Машин пока нет</h2><p class="muted">Когда за вами будут закреплены машины, здесь появятся их результаты.</p></div>`+foot());bindFoot();return;}
-  h+=`<div class="bar"><label for="per" class="muted">Период</label>
-    <select class="sel" id="per">${m.periods.map(p=>`<option value="${p.index}" ${p.index===m.period_index?"selected":""}>${d2(p.start)} — ${d2(p.end)}${p.index===0?" (текущий)":""}</option>`).join("")}</select>
-    <span class="sp"></span><a class="btn" href="/api/i/report.pdf${q()}" download>Скачать PDF</a></div>`;
-  if(!m.closed)h+=`<div class="note">Период ещё идёт: цифры меняются по мере поступлений и расходов. Итог — после ${d2(m.end)}.</div>`;
-  const parts=[`ваша доля ${rub(T.investor_part)}`];if(m.fixed)parts.push(`GPS и гараж ${rub(m.fixed)}`);if(T.payouts)parts.push(`уже выплачено ${rub(T.payouts)}`);
-  h+=`<section class="card"><div class="lbl">${m.closed?"К выплате за период":"К выплате на сегодня"}</div><div class="big ${m.to_pay<0?"neg":""}">${rub(m.to_pay)}</div>
-    <div class="sub">${esc(parts.join(" − "))}</div>${m.to_pay<0?`<div class="sub" style="margin-top:6px">Минус — вам уже выплатили больше, чем доля за этот период. Разница учтётся в следующих.</div>`:""}</section>`;
-  const k=(l,v)=>`<div class="kpi"><div class="lbl">${l}</div><b>${rub(v)}</b></div>`;
-  h+=`<div class="grid4">${k("Получено",T.income)}${k("Расходы",-T.expenses)}${k("Прибыль",T.profit)}${k("Ваша доля",T.investor_part)}</div>`;
-  h+=`<section class="card"><h2>По машинам</h2>${m.cars.map(c=>`<div class="car">
-      <div class="car-h"><b>${esc(c.code)}${c.label?` <small>${esc(c.label)}</small>`:""}</b><span class="tag">ваши ${c.percent}%</span></div>
-      <div class="row"><span class="muted">Получено</span><span class="v">${rub(c.income)}</span></div>
-      <div class="row"><span class="muted">Расходы</span><span class="v">${rub(-c.expenses)}</span></div>
-      <div class="row"><span class="muted">Прибыль</span><span class="v">${rub(c.profit)}</span></div>
-      <div class="row"><span class="muted">Ваша доля</span><span class="v">${rub(c.investor_part)}</span></div>
-      ${c.note?`<div class="why">${esc(c.note)}</div>`:""}</div>`).join("")}</section>`;
-  h+=`<section class="card"><h2>На что потрачены деньги</h2>${expensesHtml(m.expenses)}</section>`;
-  h+=`<section class="card"><h2>Выплаты вам</h2>${m.payouts.length?m.payouts.map(p=>`<div class="tx"><div class="w"><div>${d2(p.date)}</div></div><div class="a">${rub(p.amount)}</div></div>`).join("")
-     +`<div class="tot"><span>Всего</span><span>${rub(T.payouts)}</span></div>`:`<p class="muted" style="margin:0">В этом периоде выплат не было.</p>`}</section>`;
+  $("#pdf").hidden=false;$("#pdf").href="/api/i/report.pdf"+q();
+  h+=`<select class="sel" id="per" aria-label="Период">${m.periods.map(p=>`<option value="${p.index}" ${p.index===m.period_index?"selected":""}>${d2(p.start).slice(0,5)} — ${d2(p.end)}${p.index===0?" · текущий период":""}</option>`).join("")}</select>`;
+
+  // 1. the main number and how it is made
+  h+=`<section class="card hero"><div class="lbl">К выплате${m.closed?"":`<span class="state">период идёт</span>`}</div>
+    <div class="big ${m.to_pay<0?"neg":""}">${rub(m.to_pay)}</div>
+    <div class="calc"><div><small>Ваша доля</small><b>${rub(T.investor_part)}</b></div><div><small>GPS и гараж</small><b>${rub(-m.fixed)}</b></div><div><small>Выплачено</small><b>${rub(-T.payouts)}</b></div></div>
+    <div class="hint">${m.to_pay<0?"Минус — выплачено больше доли за этот период, разница учтётся в следующих. ":""}${m.closed?"":`Цифры обновляются по мере поступлений, итог — после ${d2(m.end)}.`}</div></section>`;
+
+  // 2. cars: one line each, details on tap
+  const busy=m.cars.filter(c=>c.income||c.expenses),idle=m.cars.filter(c=>!c.income&&!c.expenses);
+  h+=`<section class="card"><div class="sec"><h2>Машины</h2><span>нажмите, чтобы раскрыть</span></div>`;
+  h+=busy.map(c=>{const ex=m.expenses.filter(e=>e.car===c.code);
+    return `<details class="car"><summary><div class="nm"><b>${esc(c.code)}</b> <span class="muted">${esc((c.label||"").split(" · ")[0])}</span><small>прибыль ${rub(c.profit)} · ваши ${c.percent}%</small></div>
+      <div class="sh"><b>${rub(c.investor_part)}</b><small>ваша доля</small></div><svg class="chev" width="8" height="12" viewBox="0 0 8 12" aria-hidden="true"><path d="M1.5 1l5 5-5 5" fill="none" stroke="currentColor" stroke-width="2"/></svg></summary>
+      <div class="body"><div class="mini"><div><small>Получено</small><b>${rub(c.income)}</b></div><div><small>Расходы</small><b>${rub(-c.expenses)}</b></div><div><small>Прибыль</small><b>${rub(c.profit)}</b></div></div>
+      ${c.note?`<div class="why">${esc(c.note)}</div>`:""}
+      ${ex.length?ex.map(exHtml).join(""):`<div class="muted" style="font-size:13.5px">Расходов не было.</div>`}</div></details>`;}).join("");
+  if(idle.length)h+=`<div class="idle">Без движения в периоде: ${idle.map(c=>esc(c.code)).join(", ")}</div>`;
+  h+=`</section>`;
+
+  // 3. payouts
+  h+=`<section class="card"><div class="sec"><h2>Выплаты вам</h2><span>${m.payouts.length?rub(T.payouts):""}</span></div>${m.payouts.length?m.payouts.map(p=>`<div class="pay"><span>${d2(p.date)}</span><b>${rub(p.amount)}</b></div>`).join("")
+     :`<p class="muted" style="margin:4px 0 0">В этом периоде выплат не было.</p>`}</section>`;
   show(h+foot());
   $("#per").onchange=e=>{PER=+e.target.value;show(`<div class="skel"></div><div class="skel"></div>`);load();};
   bindFoot();
 }
 
-function expensesHtml(ex){
-  if(!ex.length)return `<p class="muted" style="margin:0">Расходов за период не было.</p>`;
-  let out="";
-  for(const code of [...new Set(ex.map(e=>e.car))]){
-    const lst=ex.filter(e=>e.car===code),c=ME.cars.find(x=>x.code===code)||{};
-    out+=`<div class="grp">${esc(code)}${c.label?` <span class="muted" style="font-weight:500">${esc(c.label)}</span>`:""}</div>`;
-    for(const e of lst){
-      const what=e.what||e.category||"Расход";
-      const cat=e.category&&!what.toLowerCase().includes(e.category.toLowerCase())?` <span class="muted">(${esc(e.category.toLowerCase())})</span>`:"";
-      const who=e.share==="investor_only"?` <span class="tag inv">за ваш счёт</span>`:e.share==="park_only"?` <span class="tag">за счёт парка</span>`:"";
-      const pt=e.parts.map(p=>[p.name,p.brand,p.position].filter(Boolean).join(" ")+(p.price?` — ${rub(p.price)}`:"")+(p.labor?`, работа ${rub(p.labor)}`:"")).join("; ");
-      out+=`<div class="tx"><div class="w"><div>${esc(what)}${cat}${who}</div><div>${d2(e.date)}</div>${pt?`<div class="parts">${esc(pt)}</div>`:""}</div><div class="a">${rub(-e.amount)}</div></div>`;}
-    out+=`<div class="tot"><span>Всего по ${esc(code)}</span><span>${rub(-lst.reduce((a,e)=>a+e.amount,0))}</span></div>`;
-  }
-  return out;
+function exHtml(e){
+  const what=e.what||e.category||"Расход";
+  const cat=e.category&&!what.toLowerCase().includes(e.category.toLowerCase())?` <span class="muted">· ${esc(e.category.toLowerCase())}</span>`:"";
+  const who=e.share==="investor_only"?` <span class="tag">за ваш счёт</span>`:e.share==="park_only"?` <span class="tag park">за счёт парка</span>`:"";
+  const pt=e.parts.map(p=>[p.name,p.brand,p.position].filter(Boolean).join(" ")+(p.price?` — ${rub(p.price)}`:"")+(p.labor?`, работа ${rub(p.labor)}`:"")).join("; ");
+  return `<div class="ex"><div class="w">${esc(what)}${cat}${who}<small>${d2(e.date)}${pt?" · "+esc(pt):""}</small></div><div class="a">${rub(-e.amount)}</div></div>`;
 }
 
 function foot(){return ME.preview?"":`<div class="foot"><button class="btn" id="out">Выйти</button></div>`;}
