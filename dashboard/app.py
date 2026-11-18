@@ -21,7 +21,7 @@ from urllib.parse import urlsplit
 from flask import Flask, abort, jsonify, redirect, request, send_file, session
 from werkzeug.security import check_password_hash
 
-from . import accrual, actions, assistant, board, cabinet, contracts, data, finance, history, invnotes, invpdf, invreport, ops, payfix, rent, service, tasks, wialon
+from . import accrual, actions, assistant, board, cabinet, contracts, data, finance, history, invcab, invnotes, invpdf, invreport, ops, payfix, rent, service, tasks, wialon
 
 STATIC = Path(__file__).resolve().parent / "static"
 ACTION_NAMES = {"topup": "Пополнение кошелька водителя", "fine": "Штраф водителю", "assign": "Назначение водителя",
@@ -247,6 +247,26 @@ def create_app(config=None):
                                        writes_enabled=writes_enabled and not ops_save, static_dir=STATIC,
                                        current_owner=current_owner)
 
+    def investor_report_bundle(key, idx):
+        """(report, owner's notes, {code: "model · plate"}) for one period, or None if he has no cars."""
+        idx = max(0, min(int(idx or 0), invreport.MAX_PERIODS - 1))
+        report = cached(f"invreport:{key}:{idx}", lambda: invreport.investor_report(engine, key, idx))
+        if not report.get("cars"):
+            return None
+        notes = invnotes.load(engine, key, report["start"])
+        from sqlalchemy.orm import Session as _S
+        from fleetai.models import Car
+        with _S(engine) as s:
+            info = {invreport._code(c.code): " · ".join(x for x in (c.model, c.plate) if x)
+                    for c in s.query(Car).all()}
+        return report, notes, info
+
+    # investor cabinet: read-only results by a personal link (dashboard/invcab.py)
+    investor_link_url = invcab.register(app, same_origin=same_origin, public_url=app.config["PUBLIC_URL"],
+                                        writes_enabled=writes_enabled and not ops_save, static_dir=STATIC,
+                                        current_owner=current_owner, names=invreport.NAMES,
+                                        load_report=investor_report_bundle)
+
     def api_owner():
         owner = current_owner()
         if not owner:
@@ -315,15 +335,10 @@ def create_app(config=None):
             idx = max(0, min(int(request.args.get("period", 0) or 0), invreport.MAX_PERIODS - 1))
         except ValueError:
             idx = 0
-        report = cached(f"invreport:{key}:{idx}", lambda: invreport.investor_report(engine, key, idx))
-        if not report.get("cars"):
+        got = investor_report_bundle(key, idx)
+        if got is None:
             abort(404)
-        notes = invnotes.load(engine, key, report["start"])
-        from sqlalchemy.orm import Session as _S
-        from fleetai.models import Car
-        with _S(engine) as s:
-            info = {invreport._code(c.code): " · ".join(x for x in (c.model, c.plate) if x)
-                    for c in s.query(Car).all()}
+        report, notes, info = got
         try:
             pdf = invpdf.build(report, notes, info)
         except RuntimeError as e:
@@ -331,6 +346,28 @@ def create_app(config=None):
         import io as _io
         return send_file(_io.BytesIO(pdf), mimetype="application/pdf", as_attachment=True,
                          download_name=f"Отчёт {report['name']} {report['start']} — {report['end']}.pdf")
+
+    @app.get("/api/v4/investors/<key>/link")
+    @app.post("/api/v4/investors/<key>/link")
+    @app.post("/api/v4/investors/<key>/link/<what>")
+    def investor_link(key, what=None):
+        """Personal link into the investor's read-only cabinet (/i): single use, 7 days; session 180 days."""
+        if key not in invreport.NAMES:
+            abort(404)
+        if request.method == "GET":
+            api_owner()
+            return jsonify(ok=True, **invcab.status(key))
+        write_guard()
+        if what not in (None, "revoke"):
+            return jsonify(ok=False, message="Неверный запрос"), 400
+        if what == "revoke":
+            n = invcab.revoke_all(key)
+            audit("investor_link", f"Закрыт доступ в кабинет инвестора {invreport.NAMES[key]}")
+            return jsonify(ok=True, message="Доступ закрыт" if n else "Открытых входов не было")
+        raw = invcab.issue_link(key)
+        audit("investor_link", f"Выдана ссылка в кабинет инвестора {invreport.NAMES[key]}")
+        return jsonify(ok=True, url=investor_link_url(raw),
+                       message="Ссылка действует 7 дней и открывается один раз")
 
     @app.get("/api/v4/journal")
     def journal_view():

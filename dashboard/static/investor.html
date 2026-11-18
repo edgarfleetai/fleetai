@@ -1,0 +1,187 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="robots" content="noindex">
+<title>Кабинет инвестора — Клевер Парк</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Manrope:wght@600;700;800&display=swap">
+<style>
+:root{
+  --bg:#080c0a; --glass:rgba(255,255,255,.05); --glass-2:rgba(255,255,255,.09); --stroke:rgba(255,255,255,.09);
+  --fg:#eef3ee; --muted:#a0aca4; --faint:#6e7a72; --lime:#c6f24e; --lime-fg:#121808; --lime-soft:rgba(198,242,78,.14);
+  --ok:#7fe0a4; --bad:#ff8f84; --bad-soft:rgba(255,143,132,.14); --warn:#f5c26b; --warn-soft:rgba(245,194,107,.14);
+  --f-ui:"Inter",system-ui,-apple-system,"Segoe UI",sans-serif; --f-d:"Manrope","Inter",system-ui,sans-serif; color-scheme:dark;
+}
+@media (prefers-color-scheme:light){:root:not([data-theme="dark"]){
+  --bg:#eef1ec; --glass:rgba(255,255,255,.7); --glass-2:rgba(255,255,255,.95); --stroke:rgba(20,40,20,.10);
+  --fg:#141a16; --muted:#55615a; --faint:#7d8a82; --lime:#bfee45; --lime-soft:rgba(140,200,20,.16);
+  --ok:#1f8a4c; --bad:#c23b32; --bad-soft:rgba(194,59,50,.10); --warn:#9a6400; --warn-soft:rgba(220,150,20,.14); color-scheme:light;
+}}
+:root[data-theme="dark"]{color-scheme:dark}
+*{box-sizing:border-box}
+body{margin:0;min-height:100vh;background:radial-gradient(900px 500px at 10% -10%,rgba(170,230,70,.12),transparent 60%),radial-gradient(700px 500px at 110% 10%,rgba(60,130,100,.18),transparent 60%),var(--bg);
+  color:var(--fg);font:15px/1.45 var(--f-ui);-webkit-font-smoothing:antialiased}
+.wrap{max-width:720px;margin:0 auto;padding:16px 16px 40px}
+header{display:flex;align-items:center;gap:10px;margin:4px 0 16px}
+.logo{width:34px;height:34px;border-radius:10px;background:var(--lime);color:var(--lime-fg);display:grid;place-items:center;font:800 14px var(--f-d)}
+header .t{flex:1;min-width:0}
+header b{display:block;font:700 16px var(--f-d)}
+header span{color:var(--muted);font-size:12.5px}
+.card{background:var(--glass);border:1px solid var(--stroke);border-radius:20px;padding:18px;margin-bottom:12px;backdrop-filter:blur(14px)}
+.lbl{color:var(--muted);font-size:12.5px;text-transform:uppercase;letter-spacing:.04em}
+.big{font:800 40px/1.1 var(--f-d);margin:6px 0 4px;letter-spacing:-.02em}
+.big.neg{color:var(--bad)}
+.sub{color:var(--muted);font-size:14px}
+.row{display:flex;justify-content:space-between;gap:12px;padding:9px 0;border-top:1px solid var(--stroke)}
+.row:first-of-type{border-top:0}
+.row .v{font-weight:600;white-space:nowrap}
+.btn{appearance:none;border:1px solid var(--stroke);background:var(--glass-2);color:var(--fg);border-radius:14px;padding:12px 16px;font:600 15px var(--f-ui);cursor:pointer;text-decoration:none;display:inline-flex;align-items:center;justify-content:center;gap:6px}
+.btn.lime{background:var(--lime);color:var(--lime-fg);border-color:transparent}
+.btn.wide{width:100%;padding:15px;font-size:16px}
+.btn:disabled{opacity:.55;cursor:default}
+.chips{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0}
+.chip{border:1px solid var(--stroke);background:transparent;color:var(--fg);border-radius:999px;padding:7px 12px;font:500 13.5px var(--f-ui);cursor:pointer}
+.chip.on{background:var(--lime-soft);border-color:var(--lime)}
+.inp{width:100%;background:var(--glass-2);border:1px solid var(--stroke);color:var(--fg);border-radius:14px;padding:13px 14px;font:600 18px var(--f-ui)}
+.inp:focus,.btn:focus-visible,.chip:focus-visible{outline:2px solid var(--lime);outline-offset:2px}
+.note{border-radius:14px;padding:11px 13px;font-size:14px;margin-bottom:12px;background:var(--glass-2);border:1px solid var(--stroke)}
+.note.bad{background:var(--bad-soft);border-color:transparent}
+.note.warn{background:var(--warn-soft);border-color:transparent}
+.note.ok{background:var(--lime-soft);border-color:transparent}
+h2{font:700 17px var(--f-d);margin:0 0 8px}
+.tx{display:flex;gap:12px;padding:10px 0;border-top:1px solid var(--stroke)}
+.tx:first-child{border-top:0}
+.tx .w{flex:1;min-width:0}
+.tx .w div:first-child{font-weight:600}
+.tx .w div+div{color:var(--muted);font-size:13px;overflow-wrap:anywhere}
+.tx .a{font-weight:700;white-space:nowrap}
+.tx .a.p{color:var(--ok)}
+.day{color:var(--faint);font-size:12px;margin:12px 0 2px;text-transform:uppercase;letter-spacing:.04em}
+.center{text-align:center;padding:40px 18px}
+.muted{color:var(--muted)}
+.foot{display:flex;justify-content:center;margin-top:18px}
+.skel{height:120px;border-radius:20px;background:var(--glass);margin-bottom:12px;animation:p 1.2s infinite alternate}
+@keyframes p{to{opacity:.5}}
+@media (prefers-reduced-motion:reduce){.skel{animation:none}}
+</style>
+<style>
+.grid4{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-bottom:12px}
+@media (min-width:620px){.grid4{grid-template-columns:repeat(4,minmax(0,1fr))}}
+.kpi{background:var(--glass);border:1px solid var(--stroke);border-radius:16px;padding:12px 14px}
+.kpi b{display:block;font:700 18px var(--f-d);margin-top:3px;white-space:nowrap}
+.sel{background:var(--glass-2);border:1px solid var(--stroke);color:var(--fg);border-radius:12px;padding:9px 12px;font:600 14px var(--f-ui);max-width:100%}
+.sel:focus{outline:2px solid var(--lime);outline-offset:2px}
+.bar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:12px}
+.bar .sp{flex:1}
+.why{font-style:italic;color:var(--muted);font-size:13.5px;margin-top:8px;white-space:pre-wrap;overflow-wrap:anywhere}
+.car{padding:12px 0;border-top:1px solid var(--stroke)}
+.car:first-of-type{border-top:0;padding-top:0}
+.car-h{display:flex;justify-content:space-between;gap:10px;align-items:baseline}
+.car-h b{font:700 16px var(--f-d)}
+.car-h small{font:500 13.5px var(--f-ui);color:var(--muted)}
+.tag{display:inline-block;font-size:12px;border-radius:999px;padding:2px 8px;background:var(--glass-2);color:var(--muted);white-space:nowrap}
+.tag.inv{background:var(--warn-soft);color:var(--warn)}
+.parts{color:var(--muted);font-size:12.5px;margin-top:2px}
+.grp{font-weight:700;margin:16px 0 2px}
+.grp:first-of-type{margin-top:0}
+.tot{display:flex;justify-content:space-between;padding:9px 0;border-top:1px solid var(--stroke);font-weight:700}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header><div class="logo">КП</div><div class="t"><b>Клевер Парк</b><span id="hsub">Кабинет инвестора</span></div></header>
+  <main id="app"><div class="skel"></div><div class="skel"></div></main>
+</div>
+<script>
+const $=s=>document.querySelector(s);
+const esc=v=>String(v??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const rub=k=>{const v=Math.round((k||0)/100);return (v<0?"−":"")+Math.abs(v).toLocaleString("ru-RU")+" ₽";};
+const d2=s=>s?`${s.slice(8,10)}.${s.slice(5,7)}.${s.slice(0,4)}`:"";
+const PREVIEW=new URLSearchParams(location.search).get("investor");
+let ME=null,PER=0;
+function show(html){$("#app").innerHTML=html;}
+function q(){const p=new URLSearchParams();if(PREVIEW)p.set("investor",PREVIEW);if(PER)p.set("period",PER);const s=p.toString();return s?"?"+s:"";}
+
+async function start(){
+  const frag=new URLSearchParams(location.hash.slice(1)).get("token");
+  if(frag){
+    history.replaceState(null,"","/i");      // the one-time token never stays in the address bar
+    show(`<div class="card center"><h2>Вход в кабинет инвестора</h2><p class="muted">Ссылка открывается один раз. После входа кабинет будет открываться на этом устройстве сам.</p><button class="btn lime wide" id="go">Войти</button><p id="err" class="muted"></p></div>`);
+    $("#go").onclick=async()=>{const b=$("#go");b.disabled=true;b.textContent="Вхожу…";
+      try{const r=await fetch("/i/login",{method:"POST",credentials:"same-origin",headers:{"Content-Type":"application/json"},body:JSON.stringify({ticket:frag})});
+        const j=await r.json().catch(()=>({}));
+        if(r.ok&&j.ok)return load();
+        $("#err").textContent=j.message||"Не получилось войти. Попросите новую ссылку.";}
+      catch(_){$("#err").textContent="Нет связи. Проверьте интернет и нажмите ещё раз.";}
+      b.disabled=false;b.textContent="Войти";};
+    return;
+  }
+  load();
+}
+
+async function load(){
+  let r;
+  try{r=await fetch("/api/i/me"+q(),{credentials:"same-origin"});}
+  catch(_){return show(`<div class="card center"><h2>Нет связи</h2><p class="muted">Проверьте интернет.</p><button class="btn" onclick="load()">Повторить</button></div>`);}
+  if(r.status===401)return show(`<div class="card center"><h2>Нужна ссылка для входа</h2><p class="muted">Попросите у владельца парка личную ссылку. Она откроется один раз, после этого кабинет будет открываться сам.</p></div>`);
+  const j=await r.json().catch(()=>null);
+  if(!r.ok||!j||!j.ok)return show(`<div class="card center"><h2>Не получилось открыть кабинет</h2><p class="muted">${esc(j&&j.message||"Попробуйте через минуту.")}</p><button class="btn" onclick="load()">Повторить</button></div>`);
+  ME=j;render();
+}
+
+function render(){
+  const m=ME,T=m.total||{};
+  $("#hsub").textContent="Кабинет инвестора · "+m.name;
+  let h="";
+  if(m.preview)h+=`<div class="note warn">Вы смотрите кабинет инвестора ${esc(m.name)} так, как его видит он.</div>`;
+  if(!m.cars.length){show(h+`<div class="card center"><h2>Машин пока нет</h2><p class="muted">Когда за вами будут закреплены машины, здесь появятся их результаты.</p></div>`+foot());bindFoot();return;}
+  h+=`<div class="bar"><label for="per" class="muted">Период</label>
+    <select class="sel" id="per">${m.periods.map(p=>`<option value="${p.index}" ${p.index===m.period_index?"selected":""}>${d2(p.start)} — ${d2(p.end)}${p.index===0?" (текущий)":""}</option>`).join("")}</select>
+    <span class="sp"></span><a class="btn" href="/api/i/report.pdf${q()}" download>Скачать PDF</a></div>`;
+  if(!m.closed)h+=`<div class="note">Период ещё идёт: цифры меняются по мере поступлений и расходов. Итог — после ${d2(m.end)}.</div>`;
+  const parts=[`ваша доля ${rub(T.investor_part)}`];if(m.fixed)parts.push(`GPS и гараж ${rub(m.fixed)}`);if(T.payouts)parts.push(`уже выплачено ${rub(T.payouts)}`);
+  h+=`<section class="card"><div class="lbl">${m.closed?"К выплате за период":"К выплате на сегодня"}</div><div class="big ${m.to_pay<0?"neg":""}">${rub(m.to_pay)}</div>
+    <div class="sub">${esc(parts.join(" − "))}</div>${m.to_pay<0?`<div class="sub" style="margin-top:6px">Минус — вам уже выплатили больше, чем доля за этот период. Разница учтётся в следующих.</div>`:""}</section>`;
+  const k=(l,v)=>`<div class="kpi"><div class="lbl">${l}</div><b>${rub(v)}</b></div>`;
+  h+=`<div class="grid4">${k("Получено",T.income)}${k("Расходы",-T.expenses)}${k("Прибыль",T.profit)}${k("Ваша доля",T.investor_part)}</div>`;
+  h+=`<section class="card"><h2>По машинам</h2>${m.cars.map(c=>`<div class="car">
+      <div class="car-h"><b>${esc(c.code)}${c.label?` <small>${esc(c.label)}</small>`:""}</b><span class="tag">ваши ${c.percent}%</span></div>
+      <div class="row"><span class="muted">Получено</span><span class="v">${rub(c.income)}</span></div>
+      <div class="row"><span class="muted">Расходы</span><span class="v">${rub(-c.expenses)}</span></div>
+      <div class="row"><span class="muted">Прибыль</span><span class="v">${rub(c.profit)}</span></div>
+      <div class="row"><span class="muted">Ваша доля</span><span class="v">${rub(c.investor_part)}</span></div>
+      ${c.note?`<div class="why">${esc(c.note)}</div>`:""}</div>`).join("")}</section>`;
+  h+=`<section class="card"><h2>На что потрачены деньги</h2>${expensesHtml(m.expenses)}</section>`;
+  h+=`<section class="card"><h2>Выплаты вам</h2>${m.payouts.length?m.payouts.map(p=>`<div class="tx"><div class="w"><div>${d2(p.date)}</div></div><div class="a">${rub(p.amount)}</div></div>`).join("")
+     +`<div class="tot"><span>Всего</span><span>${rub(T.payouts)}</span></div>`:`<p class="muted" style="margin:0">В этом периоде выплат не было.</p>`}</section>`;
+  show(h+foot());
+  $("#per").onchange=e=>{PER=+e.target.value;show(`<div class="skel"></div><div class="skel"></div>`);load();};
+  bindFoot();
+}
+
+function expensesHtml(ex){
+  if(!ex.length)return `<p class="muted" style="margin:0">Расходов за период не было.</p>`;
+  let out="";
+  for(const code of [...new Set(ex.map(e=>e.car))]){
+    const lst=ex.filter(e=>e.car===code),c=ME.cars.find(x=>x.code===code)||{};
+    out+=`<div class="grp">${esc(code)}${c.label?` <span class="muted" style="font-weight:500">${esc(c.label)}</span>`:""}</div>`;
+    for(const e of lst){
+      const what=e.what||e.category||"Расход";
+      const cat=e.category&&!what.toLowerCase().includes(e.category.toLowerCase())?` <span class="muted">(${esc(e.category.toLowerCase())})</span>`:"";
+      const who=e.share==="investor_only"?` <span class="tag inv">за ваш счёт</span>`:e.share==="park_only"?` <span class="tag">за счёт парка</span>`:"";
+      const pt=e.parts.map(p=>[p.name,p.brand,p.position].filter(Boolean).join(" ")+(p.price?` — ${rub(p.price)}`:"")+(p.labor?`, работа ${rub(p.labor)}`:"")).join("; ");
+      out+=`<div class="tx"><div class="w"><div>${esc(what)}${cat}${who}</div><div>${d2(e.date)}</div>${pt?`<div class="parts">${esc(pt)}</div>`:""}</div><div class="a">${rub(-e.amount)}</div></div>`;}
+    out+=`<div class="tot"><span>Всего по ${esc(code)}</span><span>${rub(-lst.reduce((a,e)=>a+e.amount,0))}</span></div>`;
+  }
+  return out;
+}
+
+function foot(){return ME.preview?"":`<div class="foot"><button class="btn" id="out">Выйти</button></div>`;}
+function bindFoot(){if($("#out"))$("#out").onclick=async()=>{await fetch("/api/i/logout",{method:"POST",credentials:"same-origin",headers:{"X-CSRF":ME.csrf}}).catch(()=>{});
+  show(`<div class="card center"><h2>Вы вышли</h2><p class="muted">Чтобы войти снова, попросите у владельца парка новую ссылку.</p></div>`);};}
+start();
+</script>
+</body>
+</html>
